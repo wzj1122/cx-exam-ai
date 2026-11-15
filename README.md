@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。
 
-[![version](https://img.shields.io/badge/version-1.7.0-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.7.1-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -30,7 +30,7 @@
 | :--- | :--- | :--- |
 | **Cloudflare** | 国内高速 CDN，推荐国内用户使用 | [Cloudflare 安装](https://cx-exam-ai.pages.dev/dist/cx-exam-ai.user.js) |
 | **GitHub** | 国际同步，获取最新源码和提交记录 | [GitHub 安装](https://github.com/wzj1122/cx-exam-ai/raw/main/dist/cx-exam-ai.user.js) |
-| **Greasy Fork** | 全球最大油猴脚本库，支持自动更新 | [Greasy Fork 安装](https://greasyfork.org/zh-CN/scripts/SCRIPT_ID) |
+| **Greasy Fork** | 全球最大油猴脚本库，支持自动更新 | [Greasy Fork 安装](https://update.greasyfork.org/scripts/605687/CX%20%E8%80%83%E8%AF%95%20AI%20%E5%A4%A7%E8%84%91%20%C2%B7%20%E5%AD%A6%E4%B9%A0%E9%80%9A%E8%80%83%E8%AF%95%E8%87%AA%E5%8A%A8%E7%AD%94%E9%A2%98.user.js) |
 
 ### 手动安装
 
@@ -41,7 +41,7 @@
 ### 项目主页与源码
 
 - **GitHub 主页**：[https://github.com/wzj1122/cx-exam-ai](https://github.com/wzj1122/cx-exam-ai)
-- **Greasy Fork 主页**：[https://greasyfork.org/zh-CN/scripts/SCRIPT_ID](https://greasyfork.org/zh-CN/scripts/SCRIPT_ID)
+- **Greasy Fork 主页**：[https://greasyfork.org/zh-CN/scripts/605687](https://greasyfork.org/zh-CN/scripts/605687)
 - **Cloudflare Pages 主页**：[https://cx-exam-ai.pages.dev](https://cx-exam-ai.pages.dev)
 
 ## 使用方法
@@ -162,6 +162,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.7.1（2026-11-16）接入 Greasy Fork 自动更新
+
+- 头部新增 `@updateURL` / `@downloadURL`，指向 Greasy Fork 脚本 `605687`；装过一次之后每次发版自动更新。
+- 仓库已配置 Greasy Fork Webhook（push 事件），推送即触发同步，无需手动上传。
+- 三处安装链接全部实际可用：Cloudflare（`cx-exam-ai.pages.dev`）/ GitHub raw / Greasy Fork。
 
 ### v1.7.0（2026-11-16）首个公开发布版
 

@@ -50,5 +50,5 @@
 - 不要删除 `dist/` 目录（三处一键安装链接都指向它）
 - 不要删除 `index.html` 或 `images/`（Pages 落地页依赖）
 - 不要修改 `LICENSE`
-- Greasy Fork 建档拿到 `SCRIPT_ID` 后，必须在 `src/00-header.js` 补上 `@updateURL` / `@downloadURL`（自动更新依赖）；在此之前不要写占位 ID
+- `src/00-header.js` 里的 `@updateURL` / `@downloadURL`（Greasy Fork ID `605687`）不得删除或改错 ID，自动更新全靠它们；改脚本名会变文件名段，但 ID 段不能动
 - 不要把 `.cdp-profile/` 等浏览器用户数据目录推到远端（含登录态 Cookie）

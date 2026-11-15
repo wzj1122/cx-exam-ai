@@ -1,4 +1,4 @@
-> 最后更新：2026-11-16 ｜ 当前版本：1.7.0（`package.json`）
+> 最后更新：2026-11-16 ｜ 当前版本：1.7.1（`package.json`）
 
 # MAINTENANCE
 
@@ -202,6 +202,16 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.7.1（2026-11-16）Greasy Fork 上线 + Webhook 自动同步
+
+- **Greasy Fork 建档完成**：脚本 ID **`605687`**，标题 `CX 考试 AI 大脑 · 学习通考试自动答题`，导入源 `https://raw.githubusercontent.com/wzj1122/cx-exam-ai/main/dist/cx-exam-ai.user.js`。服务器已回源到 1.7.0 版本内容（`update.greasyfork.org` 返回 200 `text/javascript`）。
+- **头部补 `@updateURL` / `@downloadURL`**（占位风险解除）：两者都指向 Greasy Fork 自动更新地址
+  `https://update.greasyfork.org/scripts/605687/CX%20%E8%80%83%E8%AF%95%20AI%20%E5%A4%A7%E8%84%91%20%C2%B7%20%E5%AD%A6%E4%B9%A0%E9%80%9A%E8%80%83%E8%AF%95%E8%87%AA%E5%8A%A8%E7%AD%94%E9%A2%98.user.js`
+  （该地址的文件名段只是展示用，`.../605687/任意名.user.js` 都 200，但**别改数字 ID**）。
+- **Webhook 建好**：GitHub `POST /repos/wzj1122/cx-exam-ai/hooks` → hook id `712319329`，`events=["push"]`、`content_type=json`、`insecure_ssl=0`、secret 为 Greasy Fork 生成的那串（存在 GitHub 仓库设置里，不在本仓库）。以后 push 到 `main` 即触发 Greasy Fork 同步，无需手动上传。
+- 版本 1.7.0 → **1.7.1**（`00-header.js` + `package.json` 双写）。Greasy Fork 只接受更高版本号的更新，所以回填链接必须伴随版本递增。
+- `README.md`：badge 版本、Greasy Fork 安装链接（改成 `update.greasyfork.org` 直链）、脚本主页、更新日志全部同步。`index.html`：第三张卡片从“审核中”占位改回真实链接。
 
 ### v1.7.0（2026-11-16）Cloudflare Pages 上线（workers.dev 在国内不可达）
 
