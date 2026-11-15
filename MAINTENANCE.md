@@ -69,7 +69,7 @@ cx-exam-ai/
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
 | `LICENSE` | — | MIT，版权人 `wzj1122` | 无 |
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
-| `wrangler.jsonc` | — | Cloudflare Workers（静态资源）部署配置：`name: cx-exam-ai`、`assets.directory: "./.site"`。**不能改成 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，本地 `wrangler deploy` 会把登录态 Cookie 当静态资源上传；实测 `assets.ignore` 在 wrangler 4.162 会报 unexpected field 且不生效。配合构建命令 `node tools/build-site.js` + 部署命令 `npx wrangler deploy` | `tools/build-site.js` |
+| `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main` | `tools/build-site.js` |
 | `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
@@ -202,6 +202,15 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.7.0（2026-11-16）Cloudflare Pages 上线（workers.dev 在国内不可达）
+
+- **实测结论**：`cx-exam-ai.18293592881.workers.dev` 在国内解析到 `157.240.10.32`（Facebook 段）、`2a03:2880:...:face:b00c` —— DNS 污染，`curl` 12 s 超时（http 000）；对照组 `jxufe-auto-evaluate.pages.dev` 200。**所以对外链接一律走 `pages.dev`，不要写 `workers.dev`。**
+- **Pages 项目已建**：`cx-exam-ai`（`wrangler pages project create cx-exam-ai --production-branch=main`，OAuth 方式 `wrangler login` 授权），首次直接上传发布 4 个文件。
+- **线上校验**：`/` 200 `text/html` 7511 B；`/dist/cx-exam-ai.user.js` 200 `application/javascript` 290189 B（`@version 1.7.0`）；`/images/*.png` 200 `image/png`。
+- **`wrangler.jsonc` 改为 Pages 配置**：去掉 `assets.directory`（Workers 静态资源写法），改 `pages_build_output_dir: "./.site"`。两套字段并存时 `wrangler deploy` 会报 "It seems that you have run `wrangler deploy` on a Pages project" 并要求确认，ov 容易半步走错；现在只有一种写法。
+- **发布命令**：`npm run site && npx wrangler pages deploy --project-name=cx-exam-ai --branch=main`（`--commit-dirty=true` 可忽略脏工作区）。控制台若后续接入 Git，构建命令填 `npm run site`、输出目录填 `.site`。
+- 遗留：GitHub 上那个 Workers 项目（`workers.dev`）已无用途，建议在控制台删掉，否则每次 push 都会跑一次 `wrangler deploy` 且随配置改动可能失败。
 
 ### v1.7.0（2026-11-16）补 Cloudflare Workers 部署配置
 

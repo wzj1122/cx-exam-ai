@@ -131,6 +131,7 @@ node build.js --watch  # 监听重建
 node tools/check.js    # 语法 + 模块契约自检
 node tools/test-dom.js # 离线集成测试（自建 DOM 垫片 + 模拟模型端点）
 node tools/build-site.js # 生成 Cloudflare 发布目录 .site/（只含 index.html + dist/ + images/）
+npx wrangler pages deploy --project-name=cx-exam-ai --branch=main   # 发布到 Cloudflare Pages
 ```
 
 零依赖，不需要 `npm install`。测试夹具覆盖：整卷抓题、单选/多选/判断/填空点选、答案映射、分歧→复核→仲裁全链路，当前 111 项断言全绿。
@@ -154,7 +155,7 @@ cx-exam-ai/
 │   ├── 07-ui.js          Shadow DOM 控制台
 │   └── 08-main.js        主编排引擎
 ├── tools/{check,test-dom,build-site}.js
-├── wrangler.jsonc        Cloudflare Workers 静态资源部署配置（发布 .site/）
+├── wrangler.jsonc        Cloudflare Pages 部署配置（pages_build_output_dir: ./.site）
 ├── dist/cx-exam-ai.user.js   构建产物（唯一交付物）
 ├── index.html            落地页（Cloudflare Pages 一键安装）
 └── MAINTENANCE.md        维护手册

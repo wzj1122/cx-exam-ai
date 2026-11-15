@@ -1,14 +1,12 @@
 {
-  // Cloudflare Workers（静态资源）部署配置。
-  // 只发布 tools/build-site.js 生成的 .site/，绝不把仓库根目录整站直出
-  //（根目录含 logs/、.cdp-profile/ 等本地产物，本地跑 deploy 会把登录态一起传上去）。
-  // Cloudflare 控制台：创建应用 → 连接 wzj1122/cx-exam-ai
-  //   构建命令：node tools/build-site.js
-  //   部署命令：npx wrangler deploy
+  // Cloudflare **Pages** 部署配置（主通道：https://cx-exam-ai.pages.dev）。
+  // 只发布 tools/build-site.js 生成的 .site/ —— 绝不把仓库根目录整站直出，
+  // 根目录含 logs/、.cdp-profile/、.chrome-profile/ 等本地产物，浏览器 profile 里是登录态 Cookie。
+  //
+  // 本地发布：  npm run site && npx wrangler pages deploy .site --project-name=cx-exam-ai --branch=main
+  // 控制台 Git 部署（可选）：构建命令 npm run site ／ 构建输出目录 .site
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cx-exam-ai",
   "compatibility_date": "2026-11-16",
-  "assets": {
-    "directory": "./.site"
-  }
+  "pages_build_output_dir": "./.site"
 }

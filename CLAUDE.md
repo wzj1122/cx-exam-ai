@@ -15,7 +15,7 @@
 | `MAINTENANCE.md` | 维护手册（文件用途清单 / 数据流 / 变更记录） | 可修改，不可删除 |
 | `index.html` | Cloudflare Pages 落地页与一键安装入口 | 可修改，不可删除 |
 | `images/alipay.png` `images/wechat_pay.png` | 收款码 | 不可修改/删除 |
-| `wrangler.jsonc` | Cloudflare Workers 静态资源部署配置（`assets.directory: "./.site"`，**不可改成 "./"**） | 可修改（改部署方式时），不可删除 |
+| `wrangler.jsonc` | Cloudflare Pages 部署配置（`pages_build_output_dir: "./.site"`，**不可指向 "./"**） | 可修改（改部署方式时），不可删除 |
 | `LICENSE` | MIT 许可证 | 不可修改/删除 |
 | `tools/*.js` | 自检、离线测试、CDP 调试工具 | 可修改，不可删除 |
 | `CLAUDE.md` | 本规则文件 | 可修改，不可删除 |
