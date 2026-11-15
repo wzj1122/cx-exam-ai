@@ -210,7 +210,7 @@ Engine.start()
 - **`README.md` 重写**：补一键安装表（Cloudflare / GitHub / Greasy Fork）、前置要求（`chrome://extensions/` 开发者模式 + 「允许运行用户脚本」）、项目主页、开发命令、更新日志；技术章节（判定模式/读图/自定义模型/安全边界）内容保留。断言数按实测更正为 111 项。
 - **`package.json`**：版本 1.7.0，补 `keywords` / `author` / `homepage` / `repository` / `bugs`。
 - **构建**：`dist/cx-exam-ai.user.js` 283.4 KB / 7133 行；`tools/check.js` 10 模块契约通过；`tools/test-dom.js` 111 通过 / 0 失败（AI 请求 13 次）。
-- **发布三通道**（前两项在本仓库完成，后两项需在网页控制台手动开通）：GitHub raw；Cloudflare Pages（项目名 `cx-exam-ai`，根目录 `.`，无构建命令，产物即静态文件）；Greasy Fork（首次手动建脚本，之后从 `main` 分支同步）。Greasy Fork 建档后拿到 `SCRIPT_ID`，需回填三处：`src/00-header.js` 的 `@updateURL`/`@downloadURL`、`README.md` 两张表、`index.html` 两处链接。
+- **发布三通道**（前两项在本仓库完成，后两项需在网页控制台手动开通）：GitHub raw；Cloudflare Pages（项目名 `cx-exam-ai`，根目录 `.`，无构建命令，产物即静态文件）；Greasy Fork（首次手动建脚本，之后从 `main` 分支同步）。Greasy Fork 建档后拿到 `SCRIPT_ID`，需回填四处：`src/00-header.js` 新增 `@updateURL`/`@downloadURL`（这两行**先不写**——占位 ID 会让油猴每次启动去拉一个 404 更新地址）、`README.md` 两张表、`index.html` 两处链接；回填后 `node build.js` 重建并升 patch 版本，否则已装用户收不到更新。
 - **注意**：Greasy Fork 审核可能因"考试类"标签要求补充说明，码表里不要写学校名与考试科目。
 
 ### v1.6.4（2026-11-16）小球手势：长按左滑=答一题模式，长按上滑=自动连答模式

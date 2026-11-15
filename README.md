@@ -162,7 +162,7 @@ cx-exam-ai/
 
 ### v1.7.0（2026-11-16）首个公开发布版
 
-- 补全 UserScript 发布元数据：`@namespace` / `@author` / `@homepageURL` / `@supportURL`，为 Greasy Fork 自动更新预留 `@updateURL` / `@downloadURL`。
+- 补全 UserScript 发布元数据：`@namespace` / `@author` / `@homepageURL` / `@supportURL`。`@updateURL` / `@downloadURL` 待在 Greasy Fork 建档拿到 `SCRIPT_ID` 后回填（占位 ID 会让油猴每次启动都去拉起一个 404 的更新地址，故先不写入）。
 - 新增 `index.html` 一键安装落地页（Cloudflare Pages）、`LICENSE`（MIT）、`CLAUDE.md`（仓库规则）、`.gitignore`、`images/`。
 - README 补齐一键安装表、使用方法、判定模式、读图模型、本地网关与支持作者。
 - 其余功能与 v1.6.4 一致，详见 [MAINTENANCE.md](MAINTENANCE.md) 的变更记录。
