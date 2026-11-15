@@ -30,6 +30,7 @@ cx-exam-ai/
 ├── LICENSE                   MIT 许可证
 ├── index.html                落地页（Cloudflare Pages 一键安装入口）
 ├── .gitignore                运行期产物与浏览器 profile 的排除清单
+├── wrangler.jsonc            Cloudflare Workers 静态资源部署配置（可选通道）
 ├── images/                   收款码（alipay.png / wechat_pay.png）
 ├── src/                      源码（按编号顺序拼接，禁止乱序）
 │   ├── 00-header.js          UserScript 元数据块
@@ -44,7 +45,8 @@ cx-exam-ai/
 │   └── 08-main.js            主编排引擎 + boot
 ├── tools/
 │   ├── check.js              语法与模块契约自检
-│   └── test-dom.js           离线集成测试（自建 DOM 垫片 + fetch 模拟）
+│   ├── test-dom.js           离线集成测试（自建 DOM 垫片 + fetch 模拟）
+│   └── build-site.js         生成 Cloudflare 发布目录 .site/（只含 index.html + dist/ + images/）
 └── dist/
     └── cx-exam-ai.user.js    构建产物（唯一交付物）
 ```
@@ -67,6 +69,8 @@ cx-exam-ai/
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
 | `LICENSE` | — | MIT，版权人 `wzj1122` | 无 |
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
+| `wrangler.jsonc` | — | Cloudflare Workers（静态资源）部署配置：`name: cx-exam-ai`、`assets.directory: "./.site"`。**不能改成 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，本地 `wrangler deploy` 会把登录态 Cookie 当静态资源上传；实测 `assets.ignore` 在 wrangler 4.162 会报 unexpected field 且不生效。配合构建命令 `node tools/build-site.js` + 部署命令 `npx wrangler deploy` | `tools/build-site.js` |
+| `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
 
@@ -198,6 +202,14 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.7.0（2026-11-16）补 Cloudflare Workers 部署配置
+
+- 新增 `wrangler.jsonc`（`name=cx-exam-ai`、`compatibility_date=2026-11-16`）与 `tools/build-site.js`，发布目录定为 `.site/`：先 `node tools/build-site.js` 生成只含 `index.html` + `dist/` + `images/` 的 4 个文件，再 `npx wrangler deploy`。
+- 动机：Cloudflare 新版控制台"创建应用"默认给的是 **Workers** 流程（构建命令/部署命令/预览命令三栏），没有构建输出目录的概念；要么退回 Pages 流程（`pages.dev` 域名），要么给它一份 `wrangler.jsonc` 走 Workers 静态资源（`<name>.<account>.workers.dev` 域名）。两条路现在都能用。
+- 坑一：`assets.directory` 一度设成 `"./"`，`wrangler deploy --dry-run` 直接“Read 4631 files”，把 `.cdp-profile/`、`.chrome-profile/`、`logs/` 全算进站点——浏览器 profile 里是登录态 Cookie，等于公开泄露。改 `".site"` 后降到 6 个文件。
+- 坑二：`assets.ignore` 在 wrangler 4.162 报 `Unexpected fields found in assets field: "ignore"`，配置被忽略且不报错——不要把安全边界押在这个字段上，只能靠“发布目录本身就干净”。
+- 注意：Workers 通道下域名不是 `*.pages.dev`，README/index.html 里若改用 Workers，需要把 `cx-exam-ai.pages.dev` 换成实际 `workers.dev` 地址。
 
 ### v1.7.0（2026-11-16）首个公开发布版：仓库化 + 三处一键安装
 

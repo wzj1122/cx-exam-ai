@@ -32,3 +32,6 @@ Thumbs.db
 *.swp
 *.bak
 *~
+
+# Cloudflare 发布目录（由 tools/build-site.js 生成）
+.site/

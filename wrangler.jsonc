@@ -1,0 +1,14 @@
+{
+  // Cloudflare Workers（静态资源）部署配置。
+  // 只发布 tools/build-site.js 生成的 .site/，绝不把仓库根目录整站直出
+  //（根目录含 logs/、.cdp-profile/ 等本地产物，本地跑 deploy 会把登录态一起传上去）。
+  // Cloudflare 控制台：创建应用 → 连接 wzj1122/cx-exam-ai
+  //   构建命令：node tools/build-site.js
+  //   部署命令：npx wrangler deploy
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "cx-exam-ai",
+  "compatibility_date": "2026-11-16",
+  "assets": {
+    "directory": "./.site"
+  }
+}
