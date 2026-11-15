@@ -1,0 +1,34 @@
+# ===== 运行期 / 本地调试产物（一律不进仓库）=====
+logs/
+.watch.log
+.watch.out
+.chrome.log
+.shot-*.png
+.shot*.png
+
+# Chrome / CDP 用户数据目录（含登录态 Cookie，绝对不能提交）
+.cdp-profile/
+.chrome-profile/
+.chrome-*/
+
+# 抓取 ocsjs 上游源码的临时缓存
+.tmp-ocsjs/
+
+# 依赖与本地环境
+node_modules/
+.npm/
+package-lock.json
+
+# 部署工具缓存
+.vercel/
+.wrangler/
+.pages/
+
+# 编辑器 / 系统垃圾
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.bak
+*~

@@ -1,0 +1,708 @@
+/* ---------------- 配置 / 存储 / 工具 ---------------- */
+
+CXAI.CONFIG_KEY = 'cxai.config.v3';
+
+/**
+ * 默认配置。
+ * providers 里每一项都是一个 OpenAI 兼容端点，可自由增删。
+ * 判定流水线参数见 judge。
+ */
+/**
+ * 模型预设：设置面板里"添加模型"直接选一个，字段自动填好。
+ * 任何一家都能改成本地地址；magpie / Ollama / LM Studio 是本地网关，允许无 Key。
+ */
+CXAI.PRESETS = [
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '文本模型，便宜，适合做判题主力'
+  },
+  {
+    id: 'custom',
+    label: '自定义',
+    baseURL: '',
+    model: '',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '默认按 OpenAI 兼容接口（/chat/completions）发请求；要走 Anthropic 协议（/v1/messages）就在下面「接口协议」里切一下。'
+  },
+  {
+    id: 'magpie',
+    label: 'magpie',
+    baseURL: 'http://127.0.0.1:3425/v1',
+    apiKey: 'magpie',
+    model: 'deepseek/deepseek-chat',
+    apiStyle: 'openai',
+    vision: true,
+    keyOptional: true,
+    hint: '本地网关 127.0.0.1:3425，同一端口兼容 OpenAI / Anthropic；模型名写 provider/model，Key 随便填 magpie'
+  }
+];
+
+CXAI.DEFAULT_CONFIG = {
+  ai: {
+    // 参与判定的模型面板（第一轮各自独立作答）
+    // 字段说明：apiStyle=openai|anthropic|gemini，role=judge|vision|both
+    providers: [
+      {
+        id: 'deepseek',
+        label: 'DeepSeek Chat',
+        baseURL: 'https://api.deepseek.com/v1',
+        apiKey: '',
+        model: 'deepseek-chat',
+        apiStyle: 'openai',
+        role: 'judge',
+        weight: 1,
+        temperature: 0.2,
+        enabled: true,
+        vision: false,
+        keyOptional: false
+      },
+      {
+        id: 'qwen-vl',
+        label: '通义千问 VL',
+        baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiKey: '',
+        model: 'qwen-vl-max',
+        apiStyle: 'openai',
+        role: 'vision',
+        weight: 1,
+        temperature: 0.2,
+        enabled: true,
+        vision: true,
+        keyOptional: false
+      },
+      {
+        id: 'glm',
+        label: '智谱 GLM-4-Plus',
+        baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: '',
+        model: 'glm-4-plus',
+        apiStyle: 'openai',
+        role: 'judge',
+        weight: 1,
+        temperature: 0.2,
+        enabled: true,
+        vision: false,
+        keyOptional: false
+      }
+    ],
+    /** 读图（多模态）流水线 */
+    vision: {
+      /** 总开关：关闭后题目图片一律忽略 */
+      enabled: true,
+      /**
+       * auto    面板里有视觉模型就直传图片，否则先用读图模型转写成文字
+       * inline  一律把图片直传给支持视觉的模型
+       * ocr     一律先转写文字，再给所有模型判题（最省 token，纯文本模型也能答图题）
+       * off     忽略图片
+       */
+      strategy: 'ocr',
+      /** 单题最多送几张图 */
+      maxImages: 3,
+      /** 缩放后最长边（px），越小越省 token */
+      maxEdge: 1400,
+      /** JPEG 质量 0.1~1 */
+      quality: 0.82,
+      /** 单题图片总大小上限（字节），超出后丢弃多余图片 */
+      maxTotalBytes: 4194304,
+      /** 拉图超时 */
+      fetchTimeoutMs: 15000,
+      /** 指定读图模型（provider.id），空=自动挑 */
+      ocrProviderId: '',
+      /** 读图模型是否同时参与判题投票（只配一个模型时打开） */
+      judgeToo: false,
+      /** 图片 / 转写结果的本地缓存条数 */
+      cacheSize: 60
+    },
+    judge: {
+      /** council=多模型议会(默认) | single=单模型直答 | fast=单模型+高温度自一致 */
+      mode: 'council',
+      /** 第一轮参与作答的模型数量（从 enabled 的 provider 里取，按权重排序） */
+      panelSize: 3,
+      /** 交叉复核：让别的模型审阅答案 */
+      enableCritique: true,
+      /** 仲裁：分歧时由权重最高模型做最终裁决 */
+      enableArbiter: true,
+      /** 加权一致率达到该值即直接采纳，跳过仲裁 */
+      voteThreshold: 0.7,
+      /** 低于该置信度的题目标记为"存疑"，仍然作答但高亮 */
+      minConfidence: 0.55,
+      /** 单题并发请求数 */
+      concurrency: 3,
+      /** 单次请求超时(ms) */
+      timeoutMs: 90000,
+      /** 失败重试次数 */
+      retries: 1,
+      /** 同一题最多复议轮数 */
+      maxRounds: 2
+    }
+  },
+  answer: {
+    /** 打开页面后自动开始 */
+    autoStart: false,
+    /** 每道题之间的间隔(ms) */
+    intervalMs: 900,
+    /** 拟人化点选（完整指针事件序列 + 随机坐标/延迟） */
+    humanize: true,
+    /** 自动填写填空/简答 */
+    fillText: true,
+    /** 跳过页面上已经作答的题目 */
+    skipAnswered: true,
+    /** auto=自动识别 | single=逐题翻页模式 | whole=整卷模式 */
+    pageMode: 'auto',
+    /** 全部答完后自动点击"下一题"翻页（单题模式） */
+    autoNext: true,
+    /** 全部答完后自动交卷（危险，默认关闭） */
+    autoSubmit: false
+  },
+  /** 节奏控制与人机伪装（CXAI.Guard 读取；延时单位 ms） */
+  guard: {
+    /** 总开关：保持前台 + 自动确认弹窗 + 节奏控制 */
+    enabled: true,
+    /** 题间最短间隔，实际值在 min~max 间随机 */
+    minDelay: 1400,
+    /** 题间最长间隔 */
+    maxDelay: 4200,
+    /** 每做多少题插入一次长停顿 */
+    longBreakEvery: 6,
+    /** 自动点掉"确定/继续/保存"类确认弹窗 */
+    autoConfirm: true,
+    /**
+     * 弹窗出现后等多少秒再自动关（0 = 只手动关，永不自动点）。
+     * 有些弹窗里是"提交确认""分数提示""是否继续作答"这种可能要看的信息，
+     * 立刻点掉容易把有用的东西一起带走，所以默认给 10 秒缓冲；
+     * 期间你自己关掉了就什么都不会发生。
+     */
+    dialogDelaySec: 10,
+    /** 拦截 F12 / 右键 / 调试快捷键 */
+    blockDevtools: false
+  },
+  /** 落盘与提交行为 */
+  apply: {
+    /** 重做页面上已经作答的题 */
+    overwriteAnswered: false,
+    /** 每题操作后立即点该题的"保存" */
+    saveEach: false,
+    /** 全部答完后自动交卷（危险，默认关闭） */
+    autoSubmit: false,
+    /** 清掉与目标答案不一致的已选选项 */
+    clearExtra: true,
+    /** 输入框走键盘序列而非直接赋值（兼容富文本） */
+    instantType: false,
+    /** 点击后等待选中态生效的毫秒数 */
+    verifyMs: 1100,
+    /** 落盘失败时的重试次数（页面重绘后元素引用会失效） */
+    retries: 2,
+    /** 重试仍失败就停下来等人工处理，不要带着空题往下翻 */
+    stopOnFail: true
+  },
+  /** 主循环 */
+  engine: {
+    /** 单次运行最多处理多少题（防死循环） */
+    maxIterations: 200,
+    /** 页面刷新/脚本重载后自动接着答（上次没跑完才会触发） */
+    autoResume: true,
+    /** 断点续跑的有效期（分钟），超过就当是新的一场 */
+    resumeWindowMin: 20,
+    /**
+     * 无刷新翻页：用页面自己的 submitForm 走 ajax 保存，再 fetch 下一页 HTML
+     * 原地替换题块，不再整页重载（超星默认 getTheNextQuestion → location.href 会整页刷新）。
+     * 任何一步失败都自动回退到原生"下一题"。
+     */
+    softNext: true,
+    /** 等待 submitForm 回调 / fetch 下一页的上限，超时就回退原生翻页 */
+    softNextTimeoutMs: 6000,
+    /** 启动后等题目渲染出来的最长时间（超星题块经常晚于 DOMContentLoaded 才出现） */
+    bootstrapPollMs: 15000,
+    /**
+     * 进考试页后后台"预取答案"：每道题先跑一次判定并把结果缓存下来，
+     * 这样点小球"答一题"时是直接落盘、几乎不用等模型。
+     */
+    prefetch: true,
+    /** 预取并发（别开太大，省 token 也少见异常） */
+    prefetchConcurrency: 2,
+    /** 预取开始前的等待，等题块稳定 */
+    prefetchDelayMs: 2000
+  },
+  antiDetect: {
+    /** 屏蔽切屏/失焦监控（visibilitychange、blur、mouseleave 等） */
+    blockVisibility: true,
+    blockBlur: true,
+    blockFocusLoss: true,
+    /** 解除复制/粘贴/右键/选择限制 */
+    unblockCopy: true,
+    /** 页面持续保持"已聚焦"状态 */
+    keepFocus: true,
+    /** 空闲时模拟真人鼠标微动 */
+    mouseJitter: true,
+    /** 摄像头抓拍时输出静态占位画面（避免被拍到） */
+    fakeCamera: false,
+    /** 屏蔽键盘监听（防按键行为分析） */
+    blockKeyboardSpy: false
+  },
+  ui: {
+    x: 24,
+    y: 96,
+    collapsed: false
+  }
+};
+
+/* ---------------- 通用工具 ---------------- */
+
+CXAI.U = {
+  sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  },
+  rand(min, max) {
+    return min + Math.random() * (max - min);
+  },
+  randInt(min, max) {
+    return Math.floor(min + Math.random() * (max - min + 1));
+  },
+  uid(prefix) {
+    return (prefix || 'id') + '_' + Math.random().toString(36).slice(2, 9);
+  },
+  clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  },
+  /** 深合并（数组直接替换） */
+  mergeDeep(base, patch) {
+    const out = Array.isArray(base) ? base.slice() : Object.assign({}, base);
+    if (!patch || typeof patch !== 'object') return out;
+    for (const k of Object.keys(patch)) {
+      const bv = out[k];
+      const pv = patch[k];
+      if (pv && typeof pv === 'object' && !Array.isArray(pv) && bv && typeof bv === 'object' && !Array.isArray(bv)) {
+        out[k] = CXAI.U.mergeDeep(bv, pv);
+      } else if (pv !== undefined) {
+        out[k] = pv;
+      }
+    }
+    return out;
+  },
+  deepGet(obj, path, fallback) {
+    const parts = String(path).split('.');
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return fallback;
+      cur = cur[p];
+    }
+    return cur === undefined ? fallback : cur;
+  },
+  /** 容错 JSON 解析：剥离 ```json 围栏、截取首个 {} 块、修复尾随逗号 */
+  safeJson(text) {
+    if (text == null) return null;
+    if (typeof text === 'object') return text;
+    let s = String(text).trim();
+    s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const first = s.indexOf('{');
+    const last = s.lastIndexOf('}');
+    if (first >= 0 && last > first) s = s.slice(first, last + 1);
+    try {
+      return JSON.parse(s);
+    } catch (e) {
+      try {
+        return JSON.parse(s.replace(/,\s*([}\]])/g, '$1'));
+      } catch (e2) {
+        return null;
+      }
+    }
+  },
+  /** 文本归一化：全角转半角、去空白、去标点、小写 */
+  normText(s) {
+    if (!s) return '';
+    let t = String(s);
+    // 全角 -> 半角
+    t = t.replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+    t = t.replace(/\u3000/g, ' ');
+    return t
+      .toLowerCase()
+      .replace(/[\s\r\n\t]+/g, '')
+      .replace(/[，。、；：？！,.;:?!"'“”‘’（）()\[\]【】<>《》~\-—_/\\|]/g, '');
+  },
+  /** 字符二元组 Jaccard 相似度，用于选项文本兜底匹配 */
+  similarity(a, b) {
+    const x = CXAI.U.normText(a);
+    const y = CXAI.U.normText(b);
+    if (!x || !y) return 0;
+    if (x === y) return 1;
+    const grams = (s) => {
+      const m = new Map();
+      for (let i = 0; i < s.length - 1; i++) {
+        const g = s.slice(i, i + 2);
+        m.set(g, (m.get(g) || 0) + 1);
+      }
+      if (s.length === 1) m.set(s, 1);
+      return m;
+    };
+    const ga = grams(x);
+    const gb = grams(y);
+    let inter = 0;
+    let union = 0;
+    for (const [g, c] of ga) {
+      const d = gb.get(g) || 0;
+      inter += Math.min(c, d);
+      union += Math.max(c, d);
+    }
+    for (const [g, c] of gb) {
+      if (!ga.has(g)) union += c;
+    }
+    return union === 0 ? 0 : inter / union;
+  },
+  escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  },
+  /** 截断显示 */
+  truncate(s, n) {
+    const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  },
+  /** 带超时的 Promise */
+  withTimeout(promise, ms, label) {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error((label || '请求') + ' 超时 ' + ms + 'ms')), ms);
+      })
+    ]).finally(() => clearTimeout(timer));
+  }
+};
+
+/* ---------------- 持久化 ----------------
+ * 学习通的考试页散落在很多域名上（mooc1 / mooc2-ans / i.chaoxing / 各校 *.edu.cn），
+ * 而 localStorage 是按「源」隔离的 —— 在一个站配好的 Key，换个站就看不见。
+ * 所以这里三层落地：
+ *   1) GM_getValue / GM_setValue：油猴存储，同一脚本在所有 @match 域名间共享（首选）
+ *   2) localStorage：始终镜像写一份，既做本域兜底，也做「没装油猴时的旧数据」迁移源
+ *   3) 内存：两者都写不进去时，至少本次会话不丢
+ */
+
+CXAI.Store = (function () {
+  const mem = Object.create(null);
+  let backend = '';
+
+  function pick(name, win) {
+    if (typeof globalThis !== 'undefined' && typeof globalThis[name] === 'function') return globalThis[name];
+    if (win && typeof win[name] === 'function') return win[name];
+    return null;
+  }
+
+  function gmApi() {
+    try {
+      const win = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : null;
+      const get = pick('GM_getValue', win);
+      const set = pick('GM_setValue', win);
+      return get && set ? { get: get, set: set, del: pick('GM_deleteValue', win) } : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const api = gmApi();
+
+  function lsGet(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw == null ? undefined : JSON.parse(raw);
+    } catch (e) {
+      return undefined;
+    }
+  }
+  function lsSet(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  /** 有的管理器把对象存成 JSON 字符串再还回来，这里兜一层 */
+  function unwrap(v) {
+    if (typeof v !== 'string') return v;
+    const t = v.trim();
+    if (!t || (t.charAt(0) !== '{' && t.charAt(0) !== '[')) return v;
+    try {
+      return JSON.parse(t);
+    } catch (e) {
+      return v;
+    }
+  }
+
+  return {
+    /** 'gm' = 跨域名共享；'local' = 只在本源有效；'mem' = 仅本次会话 */
+    get backend() {
+      return backend || (api ? 'gm' : 'local');
+    },
+    scope() {
+      return api ? 'cross-origin' : 'per-origin';
+    },
+    info(key) {
+      const fromGm = api ? (function () {
+        try {
+          return api.get(key, undefined);
+        } catch (e) {
+          return undefined;
+        }
+      })() : undefined;
+      const fromLocal = lsGet(key);
+      return {
+        backend: this.backend,
+        scope: this.scope(),
+        key: key,
+        gmApi: !!api,
+        hasGm: fromGm !== undefined && fromGm !== null,
+        hasLocal: fromLocal !== undefined,
+        bytes: fromGm !== undefined && fromGm !== null ? JSON.stringify(fromGm).length : fromLocal !== undefined ? JSON.stringify(fromLocal).length : 0
+      };
+    },
+    get(key, fallback) {
+      if (Object.prototype.hasOwnProperty.call(mem, key)) return mem[key];
+      let v;
+      if (api) {
+        try {
+          v = unwrap(api.get(key, undefined));
+        } catch (e) {
+          v = undefined;
+        }
+      }
+      if (v === undefined || v === null) {
+        // GM 里没有、但本源 localStorage 有（以前没装油猴时写的）→ 迁移上去
+        const lv = lsGet(key);
+        if (lv !== undefined && lv !== null) {
+          if (api) {
+            try {
+              api.set(key, lv);
+            } catch (e) {}
+          }
+          backend = api ? 'gm' : 'local';
+          return lv;
+        }
+        backend = api ? 'gm' : 'local';
+        return fallback;
+      }
+      backend = 'gm';
+      return v;
+    },
+    set(key, value) {
+      let okGm = false;
+      let okLs = false;
+      if (api) {
+        try {
+          api.set(key, value);
+          okGm = true;
+        } catch (e) {}
+      }
+      okLs = lsSet(key, value);
+      if (!okGm && !okLs) {
+        mem[key] = value;
+        backend = 'mem';
+        return false;
+      }
+      backend = okGm ? 'gm' : 'local';
+      return true;
+    },
+    remove(key) {
+      delete mem[key];
+      if (api && api.del) {
+        try {
+          api.del(key);
+        } catch (e) {}
+      }
+      try {
+        localStorage.removeItem(key);
+      } catch (e) {}
+    }
+  };
+})();
+
+/** 本地/内网地址判定：这类端点通常不需要 API Key */
+CXAI.isLocalURL = function (url) {
+  const u = String(url || '');
+  return /^(https?:\/\/)?(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|host\.docker\.internal)(:\d+)?(\/|$)/i.test(u) ||
+    /^(https?:\/\/)?(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(u) ||
+    /\.local(:\d+)?(\/|$)/i.test(u);
+};
+
+/** 补齐 provider 缺失字段（兼容老配置 / 手写 JSON） */
+CXAI.normalizeProvider = function (p, i) {
+  const out = Object.assign({}, p || {});
+  out.id = out.id || CXAI.U.uid('p');
+  out.label = out.label || '模型' + ((i || 0) + 1);
+  out.baseURL = String(out.baseURL || '').trim();
+  out.apiKey = out.apiKey == null ? '' : String(out.apiKey);
+  out.model = String(out.model || '').trim();
+  out.apiStyle = out.apiStyle === 'anthropic' || out.apiStyle === 'gemini' ? out.apiStyle : 'openai';
+  out.role = out.role === 'vision' || out.role === 'both' ? out.role : 'judge';
+  // role=vision 天然带视觉能力
+  out.vision = out.role === 'vision' || out.role === 'both' ? true : !!out.vision;
+  out.weight = Number(out.weight) > 0 ? Number(out.weight) : 1;
+  out.temperature = out.temperature == null || out.temperature === '' ? 0.2 : Number(out.temperature);
+  out.enabled = out.enabled !== false;
+  out.jsonMode = !!out.jsonMode;
+  out.maxTokens = Number(out.maxTokens) > 0 ? Number(out.maxTokens) : 700;
+  out.maxTokensField = out.maxTokensField || 'max_tokens';
+  out.timeoutMs = Number(out.timeoutMs) > 0 ? Number(out.timeoutMs) : 0;
+  out.keyOptional = out.keyOptional != null ? !!out.keyOptional : CXAI.isLocalURL(out.baseURL);
+  if (typeof out.extraBody === 'string') out.extraBody = CXAI.U.safeJson(out.extraBody) || {};
+  if (typeof out.extraHeaders === 'string') out.extraHeaders = CXAI.U.safeJson(out.extraHeaders) || {};
+  if (!out.extraBody || typeof out.extraBody !== 'object') out.extraBody = {};
+  if (!out.extraHeaders || typeof out.extraHeaders !== 'object') out.extraHeaders = {};
+  return out;
+};
+
+CXAI.Cfg = {
+  data: null,
+  load() {
+    const saved = CXAI.Store.get(CXAI.CONFIG_KEY, null);
+    const data = CXAI.U.mergeDeep(
+      JSON.parse(JSON.stringify(CXAI.DEFAULT_CONFIG)),
+      saved && typeof saved === 'object' ? saved : {}
+    );
+    // 老版本 ai.vision 是布尔值 -> 迁移成对象，保留用户原来的开关状态
+    if (typeof data.ai.vision === 'boolean') {
+      data.ai.vision = Object.assign({}, CXAI.DEFAULT_CONFIG.ai.vision, { enabled: data.ai.vision });
+    }
+    if (!data.ai.vision || typeof data.ai.vision !== 'object') {
+      data.ai.vision = JSON.parse(JSON.stringify(CXAI.DEFAULT_CONFIG.ai.vision));
+    }
+    data.ai.providers = (data.ai.providers || []).map((p, i) => CXAI.normalizeProvider(p, i));
+    this.data = data;
+    return this.data;
+  },
+  get(path, fallback) {
+    if (!this.data) this.load();
+    return CXAI.U.deepGet(this.data, path, fallback);
+  },
+  set(path, value) {
+    if (!this.data) this.load();
+    const parts = String(path).split('.');
+    let cur = this.data;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+    this.save();
+  },
+  save() {
+    const ok = CXAI.Store.set(CXAI.CONFIG_KEY, this.data);
+    if (!ok) CXAI.Log && CXAI.Log.error('配置写入失败：存储被禁用或空间不足，本次改动只在这个页面有效');
+    return ok;
+  },
+  /** 导出成可粘贴的 JSON（换浏览器 / 换域名时搬运用） */
+  json() {
+    if (!this.data) this.load();
+    return JSON.stringify(this.data, null, 2);
+  },
+  /** 从 JSON 文本导入，脏数据一律拒绝而不是写进配置 */
+  importJSON(text) {
+    let obj = null;
+    try {
+      obj = typeof text === 'string' ? JSON.parse(text) : text;
+    } catch (e) {
+      throw new Error('JSON 解析失败：' + e.message);
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('配置必须是一个 JSON 对象');
+    if (!obj.ai && !obj.guard && !obj.apply) throw new Error('这不像本脚本的配置（缺少 ai / guard / apply 段）');
+    CXAI.Store.set(CXAI.CONFIG_KEY, obj);
+    this.load();
+    return true;
+  },
+  /** 所有可用的端点（含无鉴权的本地服务 / magpie / Ollama） */
+  allProviders() {
+    return (this.get('ai.providers', []) || [])
+      .map((p) => CXAI.normalizeProvider(p, 0))
+      .filter((p) => p && p.enabled && p.baseURL && p.model && (p.apiKey || p.keyOptional || CXAI.isLocalURL(p.baseURL)));
+  },
+  /** 取可用的模型面板（按权重降序）；role=vision 的读图专模型默认不进判题面板 */
+  activeProviders() {
+    const all = this.allProviders();
+    const judges = all.filter((p) => p.role !== 'vision');
+    const list = judges.length ? judges : all;
+    return list.sort((a, b) => (b.weight || 1) - (a.weight || 1));
+  },
+  /** 可用的读图模型（role=vision|both 或勾了 vision） */
+  visionProviders() {
+    return this.allProviders()
+      .filter((p) => p.vision)
+      .sort((a, b) => (b.weight || 1) - (a.weight || 1));
+  }
+};
+
+/* ---------------- 日志 ---------------- */
+
+CXAI.Log = {
+  entries: [],
+  listeners: [],
+  max: 500,
+  push(level, msg, data) {
+    const entry = { t: Date.now(), level: level || 'info', msg: String(msg), data: data || null };
+    this.entries.push(entry);
+    if (this.entries.length > this.max) this.entries.shift();
+    const tag = '[CX-AI][' + entry.level + ']';
+    const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    fn.call(console, tag, msg, data || '');
+    this.listeners.forEach((fn2) => {
+      try {
+        fn2(entry);
+      } catch (e) {}
+    });
+  },
+  info(m, d) {
+    this.push('info', m, d);
+  },
+  warn(m, d) {
+    this.push('warn', m, d);
+  },
+  error(m, d) {
+    this.push('error', m, d);
+  },
+  ok(m, d) {
+    this.push('ok', m, d);
+  },
+  on(fn) {
+    this.listeners.push(fn);
+    return () => {
+      const i = this.listeners.indexOf(fn);
+      if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+};
+
+/** 自检：控制台执行 CXAI.diag() 就能看到存储后端、配置体量、模型清单 */
+CXAI.diag = function () {
+  let origin = '';
+  try {
+    origin = location.origin;
+  } catch (e) {}
+  const info = CXAI.Store.info(CXAI.CONFIG_KEY);
+  const providers = (CXAI.Cfg.get('ai.providers', []) || []).map(function (p) {
+    return { id: p.id, role: p.role, model: p.model, host: (function () {
+      try {
+        return new URL(p.baseURL).host;
+      } catch (e) {
+        return p.baseURL;
+      }
+    })(), enabled: p.enabled !== false };
+  });
+  const out = {
+    version: CXAI.__version,
+    origin: origin,
+    store: info,
+    providers: providers,
+    vision: CXAI.Cfg.get('ai.vision', {}),
+    judge: CXAI.Cfg.get('ai.judge', {})
+  };
+  CXAI.Log.info(
+    '存储后端 ' + (info.backend === 'gm' ? 'GM（跨域名共享）' : info.backend === 'local' ? '仅本源 localStorage' : '内存') +
+      ' · ' + info.bytes + ' 字节 · 模型 ' + providers.length + ' 个',
+    out
+  );
+  return out;
+};

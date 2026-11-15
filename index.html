@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CX 考试 AI 大脑 · 学习通考试自动答题脚本</title>
+<meta name="description" content="超星学习通考试页油猴脚本：不用题库，多模型议会交叉判定 + 加密字体解密 + 拟人化点选。">
+<style>
+  :root{
+    --bg:#0b1020; --card:#151c33; --card2:#1b2444; --line:#2a3559;
+    --txt:#e8ecf8; --dim:#9aa7c7; --acc:#6d8bff; --acc2:#9d6bff; --ok:#3ddc97;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:56px 20px 72px; background:
+      radial-gradient(900px 500px at 15% -10%, #1d2a5c 0%, transparent 60%),
+      radial-gradient(800px 480px at 90% 0%, #3a1f63 0%, transparent 55%),
+      var(--bg);
+    color:var(--txt); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.65; text-align:center;
+  }
+  .wrap{max-width:840px; margin:0 auto}
+  h1{font-size:clamp(26px,4vw,38px); margin:0 0 10px; letter-spacing:.5px}
+  h1 .spark{background:linear-gradient(135deg,var(--acc),var(--acc2)); -webkit-background-clip:text; background-clip:text; color:transparent}
+  .sub{color:var(--dim); font-size:15px; margin:0 auto 32px; max-width:640px}
+  .card{
+    background:linear-gradient(180deg,var(--card),var(--card2)); border:1px solid var(--line);
+    border-radius:16px; padding:26px; margin:0 auto 20px; text-align:left;
+    box-shadow:0 18px 40px rgba(0,0,0,.35);
+  }
+  .card h2{font-size:16px; margin:0 0 14px; color:var(--dim); font-weight:600; letter-spacing:.4px; text-transform:uppercase}
+  .installs{display:grid; grid-template-columns:1fr; gap:12px}
+  @media(min-width:620px){.installs{grid-template-columns:1fr 1fr 1fr}}
+  .inst{
+    display:flex; flex-direction:column; gap:6px; text-decoration:none; color:var(--txt);
+    background:#101736; border:1px solid var(--line); border-radius:12px; padding:16px 16px 14px;
+    transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  }
+  .inst:hover{transform:translateY(-3px); border-color:var(--acc); box-shadow:0 10px 24px rgba(109,139,255,.25)}
+  .inst .tag{font-size:12px; color:var(--acc); letter-spacing:.6px}
+  .inst .name{font-size:16px; font-weight:700}
+  .inst .desc{font-size:12.5px; color:var(--dim); line-height:1.5}
+  .inst.primary{background:linear-gradient(135deg,rgba(109,139,255,.22),rgba(157,107,255,.18)); border-color:#4a5fae}
+  .inst .arrow{font-size:12px; color:var(--ok); margin-top:2px}
+  ol,ul{margin:0; padding-left:20px}
+  li{margin:7px 0; font-size:14.5px; color:#cfd8f2}
+  code{background:#0d1430; border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:13px; color:#c9d6ff}
+  a{color:var(--acc)}
+  .warn{border-left:3px solid #ffb454; padding:10px 14px; background:rgba(255,180,84,.08); border-radius:8px; font-size:13.5px; color:#ffd9a8; margin-top:14px}
+  .grid2{display:grid; grid-template-columns:1fr; gap:10px}
+  @media(min-width:620px){.grid2{grid-template-columns:1fr 1fr}}
+  .feat{font-size:14px; color:#cfd8f2; background:#101736; border:1px solid var(--line); border-radius:10px; padding:12px 14px}
+  .feat b{color:#fff}
+  footer{margin-top:34px; font-size:12.5px; color:#7b88a8; line-height:1.8}
+  .qr{display:flex; gap:18px; justify-content:center; margin-top:12px; flex-wrap:wrap}
+  .qr figure{margin:0; font-size:12px; color:var(--dim)}
+  .qr img{width:180px; border-radius:10px; border:1px solid var(--line); display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧠 CX 考试 AI 大脑 <span class="spark">·</span> 学习通考试自动答题</h1>
+  <p class="sub">不用题库。每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后拟人化地点到页面上。</p>
+
+  <div class="card">
+    <h2>一键安装</h2>
+    <div class="installs">
+      <a class="inst primary" href="/dist/cx-exam-ai.user.js">
+        <span class="tag">CLOUDFLARE</span>
+        <span class="name">Cloudflare 安装</span>
+        <span class="desc">国内高速 CDN，推荐国内用户使用</span>
+        <span class="arrow">→ 点此安装（本站）</span>
+      </a>
+      <a class="inst" href="https://github.com/wzj1122/cx-exam-ai/raw/main/dist/cx-exam-ai.user.js">
+        <span class="tag">GITHUB</span>
+        <span class="name">GitHub 安装</span>
+        <span class="desc">国际同步，随时取最新源码与提交记录</span>
+        <span class="arrow">→ raw 直链</span>
+      </a>
+      <a class="inst" href="https://greasyfork.org/zh-CN/scripts/SCRIPT_ID">
+        <span class="tag">GREASY FORK</span>
+        <span class="name">Greasy Fork 安装</span>
+        <span class="desc">全球最大油猴脚本库，支持自动更新</span>
+        <span class="arrow">→ 脚本主页</span>
+      </a>
+    </div>
+    <div class="warn">
+      前置：浏览器已装 <a href="https://www.tampermonkey.net/" target="_blank" rel="noopener">Tampermonkey</a>；
+      并在 <code>chrome://extensions/</code> 打开右上角「开发者模式」，进 Tampermonkey 详情页开启「允许运行用户脚本」。
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>它解决的四件事</h2>
+    <div class="grid2">
+      <div class="feat"><b>抓题不准</b><br>按考试页真实 DOM 层级解析，兼容整卷 <code>.questionLi</code> 与章节 <code>.TiMu</code> 两套结构，嵌套元素去重。</div>
+      <div class="feat"><b>字形加密</b><br>识别 <code>font-cxsecret</code> 内联 base64 字体 → 360px 渲染 → 积分图降采样 → FRB2 汉明距离匹配还原。</div>
+      <div class="feat"><b>答案不准</b><br>多模型议会：独立作答 → 交叉复核 → 仲裁，加权一致率达标才采纳，低置信度标黄留给人工。</div>
+      <div class="feat"><b>被判定非人类</b><br>完整指针事件序列 + 随机落点 + 随机间隔 + 概率长停顿，点完必复核选中态。</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>三步用起来</h2>
+    <ol>
+      <li>装好脚本后打开考试页，右下角出现 <code>CX</code> 悬浮球，<code>Ctrl+Shift+X</code> 呼出面板。</li>
+      <li>点 ⚙ 配置模型：至少一个<b>判题模型</b>（DeepSeek / 自定义 / magpie 本地网关），题目带图再加一个<b>读图模型</b>。</li>
+      <li>点「测试连接」看到 <code>连通 (xxx ms)</code>，回到面板点「开始」。</li>
+    </ol>
+    <p style="font-size:13px;color:#9aa7c7;margin:14px 0 0">
+      交卷<b>永不自动点</b>，除非显式勾选「自动交卷」（勾了也会先停 10 秒等你反悔）；含「交卷/提交试卷」的按钮脚本一律不碰。
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>支持作者</h2>
+    <div class="qr">
+      <figure><img src="/images/alipay.png" alt="支付宝收款码"><figcaption>支付宝</figcaption></figure>
+      <figure><img src="/images/wechat_pay.png" alt="微信收款码"><figcaption>微信支付</figcaption></figure>
+    </div>
+  </div>
+
+  <footer>
+    开源地址：<a href="https://github.com/wzj1122/cx-exam-ai" target="_blank" rel="noopener">github.com/wzj1122/cx-exam-ai</a>
+    ｜ Greasy Fork：<a href="https://greasyfork.org/zh-CN/scripts/SCRIPT_ID" target="_blank" rel="noopener">脚本主页</a><br>
+    MIT License ｜ 仅供学习交流与技术研究，请遵守所在学校的考试与课堂规定 ｜ 联系作者：18293592881@163.com
+  </footer>
+</div>
+</body>
+</html>

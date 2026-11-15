@@ -1,0 +1,7132 @@
+// ==UserScript==
+// @name         CX 考试 AI 大脑 · 学习通考试自动答题
+// @namespace    https://github.com/wzj1122/cx-exam-ai
+// @version      1.7.0
+// @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
+// @author       wzj1122
+// @license      MIT
+// @homepageURL  https://github.com/wzj1122/cx-exam-ai
+// @supportURL   https://github.com/wzj1122/cx-exam-ai/issues
+// @match        *://*.chaoxing.com/*
+// @match        *://*.edu.cn/*
+// @grant        GM_xmlhttpRequest
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_addStyle
+// @grant        GM_registerMenuCommand
+// @grant        unsafeWindow
+// @connect      *
+// @run-at       document-start
+// ==/UserScript==
+(function () {
+'use strict';
+
+/* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
+var CXAI = {};
+CXAI.__version = "1.7.0";
+CXAI.__builtAt = "2026-11-15T19:31:26.605Z";
+
+/* ==================== 01-core.js ==================== */
+/* ---------------- 配置 / 存储 / 工具 ---------------- */
+
+CXAI.CONFIG_KEY = 'cxai.config.v3';
+
+/**
+ * 默认配置。
+ * providers 里每一项都是一个 OpenAI 兼容端点，可自由增删。
+ * 判定流水线参数见 judge。
+ */
+/**
+ * 模型预设：设置面板里"添加模型"直接选一个，字段自动填好。
+ * 任何一家都能改成本地地址；magpie / Ollama / LM Studio 是本地网关，允许无 Key。
+ */
+CXAI.PRESETS = [
+  {
+    id: 'deepseek',
+    label: 'DeepSeek',
+    baseURL: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '文本模型，便宜，适合做判题主力'
+  },
+  {
+    id: 'custom',
+    label: '自定义',
+    baseURL: '',
+    model: '',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '默认按 OpenAI 兼容接口（/chat/completions）发请求；要走 Anthropic 协议（/v1/messages）就在下面「接口协议」里切一下。'
+  },
+  {
+    id: 'magpie',
+    label: 'magpie',
+    baseURL: 'http://127.0.0.1:3425/v1',
+    apiKey: 'magpie',
+    model: 'deepseek/deepseek-chat',
+    apiStyle: 'openai',
+    vision: true,
+    keyOptional: true,
+    hint: '本地网关 127.0.0.1:3425，同一端口兼容 OpenAI / Anthropic；模型名写 provider/model，Key 随便填 magpie'
+  }
+];
+
+CXAI.DEFAULT_CONFIG = {
+  ai: {
+    // 参与判定的模型面板（第一轮各自独立作答）
+    // 字段说明：apiStyle=openai|anthropic|gemini，role=judge|vision|both
+    providers: [
+      {
+        id: 'deepseek',
+        label: 'DeepSeek Chat',
+        baseURL: 'https://api.deepseek.com/v1',
+        apiKey: '',
+        model: 'deepseek-chat',
+        apiStyle: 'openai',
+        role: 'judge',
+        weight: 1,
+        temperature: 0.2,
+        enabled: true,
+        vision: false,
+        keyOptional: false
+      },
+      {
+        id: 'qwen-vl',
+        label: '通义千问 VL',
+        baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        apiKey: '',
+        model: 'qwen-vl-max',
+        apiStyle: 'openai',
+        role: 'vision',
+        weight: 1,
+        temperature: 0.2,
+        enabled: true,
+        vision: true,
+        keyOptional: false
+      },
+      {
+        id: 'glm',
+        label: '智谱 GLM-4-Plus',
+        baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+        apiKey: '',
+        model: 'glm-4-plus',
+        apiStyle: 'openai',
+        role: 'judge',
+        weight: 1,
+        temperature: 0.2,
+        enabled: true,
+        vision: false,
+        keyOptional: false
+      }
+    ],
+    /** 读图（多模态）流水线 */
+    vision: {
+      /** 总开关：关闭后题目图片一律忽略 */
+      enabled: true,
+      /**
+       * auto    面板里有视觉模型就直传图片，否则先用读图模型转写成文字
+       * inline  一律把图片直传给支持视觉的模型
+       * ocr     一律先转写文字，再给所有模型判题（最省 token，纯文本模型也能答图题）
+       * off     忽略图片
+       */
+      strategy: 'ocr',
+      /** 单题最多送几张图 */
+      maxImages: 3,
+      /** 缩放后最长边（px），越小越省 token */
+      maxEdge: 1400,
+      /** JPEG 质量 0.1~1 */
+      quality: 0.82,
+      /** 单题图片总大小上限（字节），超出后丢弃多余图片 */
+      maxTotalBytes: 4194304,
+      /** 拉图超时 */
+      fetchTimeoutMs: 15000,
+      /** 指定读图模型（provider.id），空=自动挑 */
+      ocrProviderId: '',
+      /** 读图模型是否同时参与判题投票（只配一个模型时打开） */
+      judgeToo: false,
+      /** 图片 / 转写结果的本地缓存条数 */
+      cacheSize: 60
+    },
+    judge: {
+      /** council=多模型议会(默认) | single=单模型直答 | fast=单模型+高温度自一致 */
+      mode: 'council',
+      /** 第一轮参与作答的模型数量（从 enabled 的 provider 里取，按权重排序） */
+      panelSize: 3,
+      /** 交叉复核：让别的模型审阅答案 */
+      enableCritique: true,
+      /** 仲裁：分歧时由权重最高模型做最终裁决 */
+      enableArbiter: true,
+      /** 加权一致率达到该值即直接采纳，跳过仲裁 */
+      voteThreshold: 0.7,
+      /** 低于该置信度的题目标记为"存疑"，仍然作答但高亮 */
+      minConfidence: 0.55,
+      /** 单题并发请求数 */
+      concurrency: 3,
+      /** 单次请求超时(ms) */
+      timeoutMs: 90000,
+      /** 失败重试次数 */
+      retries: 1,
+      /** 同一题最多复议轮数 */
+      maxRounds: 2
+    }
+  },
+  answer: {
+    /** 打开页面后自动开始 */
+    autoStart: false,
+    /** 每道题之间的间隔(ms) */
+    intervalMs: 900,
+    /** 拟人化点选（完整指针事件序列 + 随机坐标/延迟） */
+    humanize: true,
+    /** 自动填写填空/简答 */
+    fillText: true,
+    /** 跳过页面上已经作答的题目 */
+    skipAnswered: true,
+    /** auto=自动识别 | single=逐题翻页模式 | whole=整卷模式 */
+    pageMode: 'auto',
+    /** 全部答完后自动点击"下一题"翻页（单题模式） */
+    autoNext: true,
+    /** 全部答完后自动交卷（危险，默认关闭） */
+    autoSubmit: false
+  },
+  /** 节奏控制与人机伪装（CXAI.Guard 读取；延时单位 ms） */
+  guard: {
+    /** 总开关：保持前台 + 自动确认弹窗 + 节奏控制 */
+    enabled: true,
+    /** 题间最短间隔，实际值在 min~max 间随机 */
+    minDelay: 1400,
+    /** 题间最长间隔 */
+    maxDelay: 4200,
+    /** 每做多少题插入一次长停顿 */
+    longBreakEvery: 6,
+    /** 自动点掉"确定/继续/保存"类确认弹窗 */
+    autoConfirm: true,
+    /**
+     * 弹窗出现后等多少秒再自动关（0 = 只手动关，永不自动点）。
+     * 有些弹窗里是"提交确认""分数提示""是否继续作答"这种可能要看的信息，
+     * 立刻点掉容易把有用的东西一起带走，所以默认给 10 秒缓冲；
+     * 期间你自己关掉了就什么都不会发生。
+     */
+    dialogDelaySec: 10,
+    /** 拦截 F12 / 右键 / 调试快捷键 */
+    blockDevtools: false
+  },
+  /** 落盘与提交行为 */
+  apply: {
+    /** 重做页面上已经作答的题 */
+    overwriteAnswered: false,
+    /** 每题操作后立即点该题的"保存" */
+    saveEach: false,
+    /** 全部答完后自动交卷（危险，默认关闭） */
+    autoSubmit: false,
+    /** 清掉与目标答案不一致的已选选项 */
+    clearExtra: true,
+    /** 输入框走键盘序列而非直接赋值（兼容富文本） */
+    instantType: false,
+    /** 点击后等待选中态生效的毫秒数 */
+    verifyMs: 1100,
+    /** 落盘失败时的重试次数（页面重绘后元素引用会失效） */
+    retries: 2,
+    /** 重试仍失败就停下来等人工处理，不要带着空题往下翻 */
+    stopOnFail: true
+  },
+  /** 主循环 */
+  engine: {
+    /** 单次运行最多处理多少题（防死循环） */
+    maxIterations: 200,
+    /** 页面刷新/脚本重载后自动接着答（上次没跑完才会触发） */
+    autoResume: true,
+    /** 断点续跑的有效期（分钟），超过就当是新的一场 */
+    resumeWindowMin: 20,
+    /**
+     * 无刷新翻页：用页面自己的 submitForm 走 ajax 保存，再 fetch 下一页 HTML
+     * 原地替换题块，不再整页重载（超星默认 getTheNextQuestion → location.href 会整页刷新）。
+     * 任何一步失败都自动回退到原生"下一题"。
+     */
+    softNext: true,
+    /** 等待 submitForm 回调 / fetch 下一页的上限，超时就回退原生翻页 */
+    softNextTimeoutMs: 6000,
+    /** 启动后等题目渲染出来的最长时间（超星题块经常晚于 DOMContentLoaded 才出现） */
+    bootstrapPollMs: 15000,
+    /**
+     * 进考试页后后台"预取答案"：每道题先跑一次判定并把结果缓存下来，
+     * 这样点小球"答一题"时是直接落盘、几乎不用等模型。
+     */
+    prefetch: true,
+    /** 预取并发（别开太大，省 token 也少见异常） */
+    prefetchConcurrency: 2,
+    /** 预取开始前的等待，等题块稳定 */
+    prefetchDelayMs: 2000
+  },
+  antiDetect: {
+    /** 屏蔽切屏/失焦监控（visibilitychange、blur、mouseleave 等） */
+    blockVisibility: true,
+    blockBlur: true,
+    blockFocusLoss: true,
+    /** 解除复制/粘贴/右键/选择限制 */
+    unblockCopy: true,
+    /** 页面持续保持"已聚焦"状态 */
+    keepFocus: true,
+    /** 空闲时模拟真人鼠标微动 */
+    mouseJitter: true,
+    /** 摄像头抓拍时输出静态占位画面（避免被拍到） */
+    fakeCamera: false,
+    /** 屏蔽键盘监听（防按键行为分析） */
+    blockKeyboardSpy: false
+  },
+  ui: {
+    x: 24,
+    y: 96,
+    collapsed: false
+  }
+};
+
+/* ---------------- 通用工具 ---------------- */
+
+CXAI.U = {
+  sleep(ms) {
+    return new Promise((r) => setTimeout(r, ms));
+  },
+  rand(min, max) {
+    return min + Math.random() * (max - min);
+  },
+  randInt(min, max) {
+    return Math.floor(min + Math.random() * (max - min + 1));
+  },
+  uid(prefix) {
+    return (prefix || 'id') + '_' + Math.random().toString(36).slice(2, 9);
+  },
+  clamp(v, a, b) {
+    return Math.max(a, Math.min(b, v));
+  },
+  /** 深合并（数组直接替换） */
+  mergeDeep(base, patch) {
+    const out = Array.isArray(base) ? base.slice() : Object.assign({}, base);
+    if (!patch || typeof patch !== 'object') return out;
+    for (const k of Object.keys(patch)) {
+      const bv = out[k];
+      const pv = patch[k];
+      if (pv && typeof pv === 'object' && !Array.isArray(pv) && bv && typeof bv === 'object' && !Array.isArray(bv)) {
+        out[k] = CXAI.U.mergeDeep(bv, pv);
+      } else if (pv !== undefined) {
+        out[k] = pv;
+      }
+    }
+    return out;
+  },
+  deepGet(obj, path, fallback) {
+    const parts = String(path).split('.');
+    let cur = obj;
+    for (const p of parts) {
+      if (cur == null) return fallback;
+      cur = cur[p];
+    }
+    return cur === undefined ? fallback : cur;
+  },
+  /** 容错 JSON 解析：剥离 ```json 围栏、截取首个 {} 块、修复尾随逗号 */
+  safeJson(text) {
+    if (text == null) return null;
+    if (typeof text === 'object') return text;
+    let s = String(text).trim();
+    s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+    const first = s.indexOf('{');
+    const last = s.lastIndexOf('}');
+    if (first >= 0 && last > first) s = s.slice(first, last + 1);
+    try {
+      return JSON.parse(s);
+    } catch (e) {
+      try {
+        return JSON.parse(s.replace(/,\s*([}\]])/g, '$1'));
+      } catch (e2) {
+        return null;
+      }
+    }
+  },
+  /** 文本归一化：全角转半角、去空白、去标点、小写 */
+  normText(s) {
+    if (!s) return '';
+    let t = String(s);
+    // 全角 -> 半角
+    t = t.replace(/[\uFF01-\uFF5E]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+    t = t.replace(/\u3000/g, ' ');
+    return t
+      .toLowerCase()
+      .replace(/[\s\r\n\t]+/g, '')
+      .replace(/[，。、；：？！,.;:?!"'“”‘’（）()\[\]【】<>《》~\-—_/\\|]/g, '');
+  },
+  /** 字符二元组 Jaccard 相似度，用于选项文本兜底匹配 */
+  similarity(a, b) {
+    const x = CXAI.U.normText(a);
+    const y = CXAI.U.normText(b);
+    if (!x || !y) return 0;
+    if (x === y) return 1;
+    const grams = (s) => {
+      const m = new Map();
+      for (let i = 0; i < s.length - 1; i++) {
+        const g = s.slice(i, i + 2);
+        m.set(g, (m.get(g) || 0) + 1);
+      }
+      if (s.length === 1) m.set(s, 1);
+      return m;
+    };
+    const ga = grams(x);
+    const gb = grams(y);
+    let inter = 0;
+    let union = 0;
+    for (const [g, c] of ga) {
+      const d = gb.get(g) || 0;
+      inter += Math.min(c, d);
+      union += Math.max(c, d);
+    }
+    for (const [g, c] of gb) {
+      if (!ga.has(g)) union += c;
+    }
+    return union === 0 ? 0 : inter / union;
+  },
+  escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  },
+  /** 截断显示 */
+  truncate(s, n) {
+    const t = String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+    return t.length > n ? t.slice(0, n) + '…' : t;
+  },
+  /** 带超时的 Promise */
+  withTimeout(promise, ms, label) {
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error((label || '请求') + ' 超时 ' + ms + 'ms')), ms);
+      })
+    ]).finally(() => clearTimeout(timer));
+  }
+};
+
+/* ---------------- 持久化 ----------------
+ * 学习通的考试页散落在很多域名上（mooc1 / mooc2-ans / i.chaoxing / 各校 *.edu.cn），
+ * 而 localStorage 是按「源」隔离的 —— 在一个站配好的 Key，换个站就看不见。
+ * 所以这里三层落地：
+ *   1) GM_getValue / GM_setValue：油猴存储，同一脚本在所有 @match 域名间共享（首选）
+ *   2) localStorage：始终镜像写一份，既做本域兜底，也做「没装油猴时的旧数据」迁移源
+ *   3) 内存：两者都写不进去时，至少本次会话不丢
+ */
+
+CXAI.Store = (function () {
+  const mem = Object.create(null);
+  let backend = '';
+
+  function pick(name, win) {
+    if (typeof globalThis !== 'undefined' && typeof globalThis[name] === 'function') return globalThis[name];
+    if (win && typeof win[name] === 'function') return win[name];
+    return null;
+  }
+
+  function gmApi() {
+    try {
+      const win = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : null;
+      const get = pick('GM_getValue', win);
+      const set = pick('GM_setValue', win);
+      return get && set ? { get: get, set: set, del: pick('GM_deleteValue', win) } : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const api = gmApi();
+
+  function lsGet(key) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw == null ? undefined : JSON.parse(raw);
+    } catch (e) {
+      return undefined;
+    }
+  }
+  function lsSet(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  /** 有的管理器把对象存成 JSON 字符串再还回来，这里兜一层 */
+  function unwrap(v) {
+    if (typeof v !== 'string') return v;
+    const t = v.trim();
+    if (!t || (t.charAt(0) !== '{' && t.charAt(0) !== '[')) return v;
+    try {
+      return JSON.parse(t);
+    } catch (e) {
+      return v;
+    }
+  }
+
+  return {
+    /** 'gm' = 跨域名共享；'local' = 只在本源有效；'mem' = 仅本次会话 */
+    get backend() {
+      return backend || (api ? 'gm' : 'local');
+    },
+    scope() {
+      return api ? 'cross-origin' : 'per-origin';
+    },
+    info(key) {
+      const fromGm = api ? (function () {
+        try {
+          return api.get(key, undefined);
+        } catch (e) {
+          return undefined;
+        }
+      })() : undefined;
+      const fromLocal = lsGet(key);
+      return {
+        backend: this.backend,
+        scope: this.scope(),
+        key: key,
+        gmApi: !!api,
+        hasGm: fromGm !== undefined && fromGm !== null,
+        hasLocal: fromLocal !== undefined,
+        bytes: fromGm !== undefined && fromGm !== null ? JSON.stringify(fromGm).length : fromLocal !== undefined ? JSON.stringify(fromLocal).length : 0
+      };
+    },
+    get(key, fallback) {
+      if (Object.prototype.hasOwnProperty.call(mem, key)) return mem[key];
+      let v;
+      if (api) {
+        try {
+          v = unwrap(api.get(key, undefined));
+        } catch (e) {
+          v = undefined;
+        }
+      }
+      if (v === undefined || v === null) {
+        // GM 里没有、但本源 localStorage 有（以前没装油猴时写的）→ 迁移上去
+        const lv = lsGet(key);
+        if (lv !== undefined && lv !== null) {
+          if (api) {
+            try {
+              api.set(key, lv);
+            } catch (e) {}
+          }
+          backend = api ? 'gm' : 'local';
+          return lv;
+        }
+        backend = api ? 'gm' : 'local';
+        return fallback;
+      }
+      backend = 'gm';
+      return v;
+    },
+    set(key, value) {
+      let okGm = false;
+      let okLs = false;
+      if (api) {
+        try {
+          api.set(key, value);
+          okGm = true;
+        } catch (e) {}
+      }
+      okLs = lsSet(key, value);
+      if (!okGm && !okLs) {
+        mem[key] = value;
+        backend = 'mem';
+        return false;
+      }
+      backend = okGm ? 'gm' : 'local';
+      return true;
+    },
+    remove(key) {
+      delete mem[key];
+      if (api && api.del) {
+        try {
+          api.del(key);
+        } catch (e) {}
+      }
+      try {
+        localStorage.removeItem(key);
+      } catch (e) {}
+    }
+  };
+})();
+
+/** 本地/内网地址判定：这类端点通常不需要 API Key */
+CXAI.isLocalURL = function (url) {
+  const u = String(url || '');
+  return /^(https?:\/\/)?(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\]|host\.docker\.internal)(:\d+)?(\/|$)/i.test(u) ||
+    /^(https?:\/\/)?(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(u) ||
+    /\.local(:\d+)?(\/|$)/i.test(u);
+};
+
+/** 补齐 provider 缺失字段（兼容老配置 / 手写 JSON） */
+CXAI.normalizeProvider = function (p, i) {
+  const out = Object.assign({}, p || {});
+  out.id = out.id || CXAI.U.uid('p');
+  out.label = out.label || '模型' + ((i || 0) + 1);
+  out.baseURL = String(out.baseURL || '').trim();
+  out.apiKey = out.apiKey == null ? '' : String(out.apiKey);
+  out.model = String(out.model || '').trim();
+  out.apiStyle = out.apiStyle === 'anthropic' || out.apiStyle === 'gemini' ? out.apiStyle : 'openai';
+  out.role = out.role === 'vision' || out.role === 'both' ? out.role : 'judge';
+  // role=vision 天然带视觉能力
+  out.vision = out.role === 'vision' || out.role === 'both' ? true : !!out.vision;
+  out.weight = Number(out.weight) > 0 ? Number(out.weight) : 1;
+  out.temperature = out.temperature == null || out.temperature === '' ? 0.2 : Number(out.temperature);
+  out.enabled = out.enabled !== false;
+  out.jsonMode = !!out.jsonMode;
+  out.maxTokens = Number(out.maxTokens) > 0 ? Number(out.maxTokens) : 700;
+  out.maxTokensField = out.maxTokensField || 'max_tokens';
+  out.timeoutMs = Number(out.timeoutMs) > 0 ? Number(out.timeoutMs) : 0;
+  out.keyOptional = out.keyOptional != null ? !!out.keyOptional : CXAI.isLocalURL(out.baseURL);
+  if (typeof out.extraBody === 'string') out.extraBody = CXAI.U.safeJson(out.extraBody) || {};
+  if (typeof out.extraHeaders === 'string') out.extraHeaders = CXAI.U.safeJson(out.extraHeaders) || {};
+  if (!out.extraBody || typeof out.extraBody !== 'object') out.extraBody = {};
+  if (!out.extraHeaders || typeof out.extraHeaders !== 'object') out.extraHeaders = {};
+  return out;
+};
+
+CXAI.Cfg = {
+  data: null,
+  load() {
+    const saved = CXAI.Store.get(CXAI.CONFIG_KEY, null);
+    const data = CXAI.U.mergeDeep(
+      JSON.parse(JSON.stringify(CXAI.DEFAULT_CONFIG)),
+      saved && typeof saved === 'object' ? saved : {}
+    );
+    // 老版本 ai.vision 是布尔值 -> 迁移成对象，保留用户原来的开关状态
+    if (typeof data.ai.vision === 'boolean') {
+      data.ai.vision = Object.assign({}, CXAI.DEFAULT_CONFIG.ai.vision, { enabled: data.ai.vision });
+    }
+    if (!data.ai.vision || typeof data.ai.vision !== 'object') {
+      data.ai.vision = JSON.parse(JSON.stringify(CXAI.DEFAULT_CONFIG.ai.vision));
+    }
+    data.ai.providers = (data.ai.providers || []).map((p, i) => CXAI.normalizeProvider(p, i));
+    this.data = data;
+    return this.data;
+  },
+  get(path, fallback) {
+    if (!this.data) this.load();
+    return CXAI.U.deepGet(this.data, path, fallback);
+  },
+  set(path, value) {
+    if (!this.data) this.load();
+    const parts = String(path).split('.');
+    let cur = this.data;
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+    this.save();
+  },
+  save() {
+    const ok = CXAI.Store.set(CXAI.CONFIG_KEY, this.data);
+    if (!ok) CXAI.Log && CXAI.Log.error('配置写入失败：存储被禁用或空间不足，本次改动只在这个页面有效');
+    return ok;
+  },
+  /** 导出成可粘贴的 JSON（换浏览器 / 换域名时搬运用） */
+  json() {
+    if (!this.data) this.load();
+    return JSON.stringify(this.data, null, 2);
+  },
+  /** 从 JSON 文本导入，脏数据一律拒绝而不是写进配置 */
+  importJSON(text) {
+    let obj = null;
+    try {
+      obj = typeof text === 'string' ? JSON.parse(text) : text;
+    } catch (e) {
+      throw new Error('JSON 解析失败：' + e.message);
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('配置必须是一个 JSON 对象');
+    if (!obj.ai && !obj.guard && !obj.apply) throw new Error('这不像本脚本的配置（缺少 ai / guard / apply 段）');
+    CXAI.Store.set(CXAI.CONFIG_KEY, obj);
+    this.load();
+    return true;
+  },
+  /** 所有可用的端点（含无鉴权的本地服务 / magpie / Ollama） */
+  allProviders() {
+    return (this.get('ai.providers', []) || [])
+      .map((p) => CXAI.normalizeProvider(p, 0))
+      .filter((p) => p && p.enabled && p.baseURL && p.model && (p.apiKey || p.keyOptional || CXAI.isLocalURL(p.baseURL)));
+  },
+  /** 取可用的模型面板（按权重降序）；role=vision 的读图专模型默认不进判题面板 */
+  activeProviders() {
+    const all = this.allProviders();
+    const judges = all.filter((p) => p.role !== 'vision');
+    const list = judges.length ? judges : all;
+    return list.sort((a, b) => (b.weight || 1) - (a.weight || 1));
+  },
+  /** 可用的读图模型（role=vision|both 或勾了 vision） */
+  visionProviders() {
+    return this.allProviders()
+      .filter((p) => p.vision)
+      .sort((a, b) => (b.weight || 1) - (a.weight || 1));
+  }
+};
+
+/* ---------------- 日志 ---------------- */
+
+CXAI.Log = {
+  entries: [],
+  listeners: [],
+  max: 500,
+  push(level, msg, data) {
+    const entry = { t: Date.now(), level: level || 'info', msg: String(msg), data: data || null };
+    this.entries.push(entry);
+    if (this.entries.length > this.max) this.entries.shift();
+    const tag = '[CX-AI][' + entry.level + ']';
+    const fn = level === 'error' ? console.error : level === 'warn' ? console.warn : console.log;
+    fn.call(console, tag, msg, data || '');
+    this.listeners.forEach((fn2) => {
+      try {
+        fn2(entry);
+      } catch (e) {}
+    });
+  },
+  info(m, d) {
+    this.push('info', m, d);
+  },
+  warn(m, d) {
+    this.push('warn', m, d);
+  },
+  error(m, d) {
+    this.push('error', m, d);
+  },
+  ok(m, d) {
+    this.push('ok', m, d);
+  },
+  on(fn) {
+    this.listeners.push(fn);
+    return () => {
+      const i = this.listeners.indexOf(fn);
+      if (i >= 0) this.listeners.splice(i, 1);
+    };
+  }
+};
+
+/** 自检：控制台执行 CXAI.diag() 就能看到存储后端、配置体量、模型清单 */
+CXAI.diag = function () {
+  let origin = '';
+  try {
+    origin = location.origin;
+  } catch (e) {}
+  const info = CXAI.Store.info(CXAI.CONFIG_KEY);
+  const providers = (CXAI.Cfg.get('ai.providers', []) || []).map(function (p) {
+    return { id: p.id, role: p.role, model: p.model, host: (function () {
+      try {
+        return new URL(p.baseURL).host;
+      } catch (e) {
+        return p.baseURL;
+      }
+    })(), enabled: p.enabled !== false };
+  });
+  const out = {
+    version: CXAI.__version,
+    origin: origin,
+    store: info,
+    providers: providers,
+    vision: CXAI.Cfg.get('ai.vision', {}),
+    judge: CXAI.Cfg.get('ai.judge', {})
+  };
+  CXAI.Log.info(
+    '存储后端 ' + (info.backend === 'gm' ? 'GM（跨域名共享）' : info.backend === 'local' ? '仅本源 localStorage' : '内存') +
+      ' · ' + info.bytes + ' 字节 · 模型 ' + providers.length + ' 个',
+    out
+  );
+  return out;
+};
+
+/* ==================== 02-font.js ==================== */
+/* ---------------- 加密字体解密（字形置换） ----------------
+ * 学习通考试会把题干/选项替换成私用区乱码字符，再下发一份"字形错位"的字体：
+ * 码点 X 的字形实际画的是另一个字。肉眼正常，读文本是乱码。
+ *
+ * 解法：把密文字用加密字体渲染成位图 -> 网格二值化 -> 与参考特征表做两级最近邻匹配。
+ * 算法与参数严格对齐 ocsjs 的离线特征表生成端（MIT License, Copyright (c) 2022 enncy）。
+ */
+
+CXAI.Font = (function () {
+  /* 渲染参数：必须与特征表生成端一致，改动会导致匹配全线失败 */
+  const RENDER = 360;
+  const SQ = 480;
+  const BASELINE = 384;
+  const SHORTLIST = 40;
+  const INK_THRESHOLD = 40;
+
+  /** 超星加密字体族标记 & 加密元素 class */
+  const CX_MARKER = 'font-cxsecret';
+  const CX_SELECTOR = '.' + CX_MARKER;
+  /** 特征表地址（FRB2 位打包，约 0.76MB，本地缓存 7 天） */
+  const REF_TABLE_URL = 'https://cdn.ocsjs.com/resources/font/font_ref_cx.bin';
+  const REF_CACHE_KEY = '{{SECRET_mf3hgc5b}}';
+  const REF_CACHE_TTL = 7 * 24 * 3600 * 1000;
+
+  let renderCv = null;
+  let refTablePromise = null;
+  /** 密文字 -> 真实字，进程内终身复用 */
+  const map = Object.create(null);
+  let crackJob = null;
+  let crackFailed = false;
+
+  function getCanvas() {
+    if (!renderCv) {
+      const cv = document.createElement('canvas');
+      cv.width = SQ;
+      cv.height = SQ;
+      renderCv = { cv, ctx: cv.getContext('2d', { willReadFrequently: true }) };
+    }
+    return renderCv;
+  }
+
+  /* ---------- FRB2 解析 ---------- */
+
+  function unpackBits(packed, offset, count, dims) {
+    const bytesPerGlyph = dims / 8;
+    const out = new Uint8Array(count * dims);
+    for (let i = 0; i < count; i++) {
+      const pBase = offset + i * bytesPerGlyph;
+      const oBase = i * dims;
+      for (let b = 0; b < bytesPerGlyph; b++) {
+        const byte = packed[pBase + b];
+        for (let k = 0; k < 8; k++) {
+          out[oBase + b * 8 + k] = (byte >> (7 - k)) & 1;
+        }
+      }
+    }
+    return out;
+  }
+
+  function parseRefTable(buf) {
+    const dv = new DataView(buf);
+    const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
+    if (magic !== 'FRB2') throw new Error('特征表格式无效: ' + magic);
+    const count = dv.getUint32(4, true);
+    const threshold = dv.getUint32(8, true);
+    const gc = dv.getUint32(12, true);
+    const gf = dv.getUint32(16, true);
+    const cps = new Uint32Array(count);
+    let off = 20;
+    for (let i = 0; i < count; i++, off += 4) cps[i] = dv.getUint32(off, true);
+    const packed = new Uint8Array(buf);
+    const coarse = unpackBits(packed, off, count, gc * gc);
+    off += (count * gc * gc) / 8;
+    const fine = unpackBits(packed, off, count, gf * gf);
+    return { count, cps, coarse, fine, gc, gf, threshold };
+  }
+
+  /* ---------- 加载特征表（内存 -> IndexedDB 缓存 -> 网络） ---------- */
+
+  function idbGet(key) {
+    return new Promise((resolve) => {
+      try {
+        const req = indexedDB.open('cx-ai-font', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('t');
+        req.onerror = () => resolve(null);
+        req.onsuccess = () => {
+          try {
+            const db = req.result;
+            const tx = db.transaction('t', 'readonly');
+            const g = tx.objectStore('t').get(key);
+            g.onsuccess = () => resolve(g.result || null);
+            g.onerror = () => resolve(null);
+          } catch (e) {
+            resolve(null);
+          }
+        };
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  function idbSet(key, value) {
+    return new Promise((resolve) => {
+      try {
+        const req = indexedDB.open('cx-ai-font', 1);
+        req.onupgradeneeded = () => req.result.createObjectStore('t');
+        req.onerror = () => resolve(false);
+        req.onsuccess = () => {
+          try {
+            const db = req.result;
+            const tx = db.transaction('t', 'readwrite');
+            tx.objectStore('t').put(value, key);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+          } catch (e) {
+            resolve(false);
+          }
+        };
+      } catch (e) {
+        resolve(false);
+      }
+    });
+  }
+
+  function httpGetBuffer(url) {
+    return new Promise((resolve, reject) => {
+      // 优先 GM_xmlhttpRequest（绕过 CORS，且可指定 arraybuffer）
+      if (typeof GM_xmlhttpRequest === 'function') {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url,
+          responseType: 'arraybuffer',
+          timeout: 60000,
+          onload: (res) => {
+            if (res.status >= 200 && res.status < 300 && res.response) resolve(res.response);
+            else reject(new Error('HTTP ' + res.status));
+          },
+          onerror: () => reject(new Error('网络错误')),
+          ontimeout: () => reject(new Error('请求超时'))
+        });
+        return;
+      }
+      fetch(url)
+        .then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error('HTTP ' + r.status))))
+        .then(resolve, reject);
+    });
+  }
+
+  function loadRefTable() {
+    if (refTablePromise) return refTablePromise;
+    refTablePromise = (async () => {
+      const cached = await idbGet(REF_CACHE_KEY);
+      if (cached && cached.buf && Date.now() - cached.at < REF_CACHE_TTL) {
+        try {
+          return parseRefTable(cached.buf);
+        } catch (e) {
+          /* 缓存损坏，走网络 */
+        }
+      }
+      CXAI.Log.info('下载字形特征表（首次约 0.76MB）…');
+      const buf = await httpGetBuffer(REF_TABLE_URL);
+      const table = parseRefTable(buf);
+      idbSet(REF_CACHE_KEY, { at: Date.now(), buf }).catch(() => {});
+      CXAI.Log.ok(`特征表就绪：${table.count} 个候选字，粗网格 ${table.gc}，精网格 ${table.gf}`);
+      return table;
+    })();
+    refTablePromise.catch(() => {
+      refTablePromise = null;
+    });
+    return refTablePromise;
+  }
+
+  /* ---------- 字形渲染与匹配 ---------- */
+
+  function renderGlyph(family, ch, table) {
+    const { ctx } = getCanvas();
+    ctx.clearRect(0, 0, SQ, SQ);
+    ctx.fillStyle = '#fff';
+    ctx.font = `${RENDER}px "${family}"`;
+    ctx.textBaseline = 'alphabetic';
+    const advance = ctx.measureText(ch).width;
+    ctx.fillText(ch, (SQ - advance) / 2, BASELINE);
+    const px = ctx.getImageData(0, 0, SQ, SQ).data;
+
+    let hasInk = false;
+    for (let i = 3; i < px.length; i += 4) {
+      if (px[i] > INK_THRESHOLD) {
+        hasInk = true;
+        break;
+      }
+    }
+    if (!hasInk) return null;
+
+    // 积分图：一次构建，网格求和 O(1)
+    const W = SQ + 1;
+    const ii = new Uint32Array(W * W);
+    for (let y = 0; y < SQ; y++) {
+      let rowSum = 0;
+      const srcRow = y * SQ * 4;
+      const dstRow = (y + 1) * W;
+      const upRow = y * W;
+      for (let x = 0; x < SQ; x++) {
+        rowSum += px[srcRow + x * 4 + 3];
+        ii[dstRow + x + 1] = ii[upRow + x + 1] + rowSum;
+      }
+    }
+    const box = (n) => {
+      const b = SQ / n;
+      const area = b * b;
+      const out = new Uint8Array(n * n);
+      for (let gy = 0; gy < n; gy++) {
+        for (let gx = 0; gx < n; gx++) {
+          const y0 = gy * b;
+          const x0 = gx * b;
+          const sum = ii[(y0 + b) * W + x0 + b] - ii[y0 * W + x0 + b] - ii[(y0 + b) * W + x0] + ii[y0 * W + x0];
+          out[gy * n + gx] = sum / area > table.threshold ? 1 : 0;
+        }
+      }
+      return out;
+    };
+    return { coarse: box(table.gc), fine: box(table.gf) };
+  }
+
+  const coverCache = {};
+
+  /** 双回退对比法：判断加密字体是否真的覆盖该字符（不覆盖的说明是明文，跳过） */
+  function isCoveredByFont(family, ch) {
+    const render = (fallback) => {
+      const key = family + '|' + fallback;
+      let cv = coverCache[key];
+      if (!cv) {
+        cv = document.createElement('canvas');
+        cv.width = 200;
+        cv.height = 200;
+        coverCache[key] = cv;
+      }
+      const ctx = cv.getContext('2d', { willReadFrequently: true });
+      ctx.clearRect(0, 0, 200, 200);
+      ctx.fillStyle = '#fff';
+      ctx.font = `120px "${family}", ${fallback}`;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(ch, 10, 100);
+      return ctx.getImageData(0, 0, 200, 200).data;
+    };
+    const a = render('serif');
+    const b = render('sans-serif');
+    let diff = 0;
+    for (let i = 3; i < a.length; i += 4) diff += Math.abs(a[i] - b[i]);
+    return diff < 1000;
+  }
+
+  function bitDistance(arr, idx, dims, q) {
+    let s = 0;
+    const base = idx * dims;
+    for (let i = 0; i < dims; i++) {
+      if (arr[base + i] !== q[i]) s++;
+    }
+    return s;
+  }
+
+  function crackChar(table, feat) {
+    const { count, cps, coarse, fine, gc, gf } = table;
+    const dists = new Float64Array(count);
+    for (let i = 0; i < count; i++) dists[i] = bitDistance(coarse, i, gc * gc, feat.coarse);
+    const sorted = Float64Array.from(dists);
+    sorted.sort();
+    const threshold = sorted[Math.min(SHORTLIST, count) - 1];
+    let bestI = -1;
+    let best = Infinity;
+    let second = Infinity;
+    for (let i = 0; i < count; i++) {
+      if (dists[i] > threshold) continue;
+      const d = bitDistance(fine, i, gf * gf, feat.fine);
+      if (d < best) {
+        second = best;
+        best = d;
+        bestI = i;
+      } else if (d < second) {
+        second = d;
+      }
+    }
+    if (bestI < 0) return null;
+    return {
+      ch: String.fromCodePoint(cps[bestI]),
+      best,
+      second,
+      margin: second > 0 ? 1 - best / second : 1
+    };
+  }
+
+  /* ---------- 字体来源提取 ---------- */
+
+  /** 从 head 的 <style> 里找 base64 内联字体 */
+  function extractFontFromStyle(doc, marker) {
+    const styles = Array.from(doc.head ? doc.head.querySelectorAll('style') : []);
+    const styleEl = styles.find((s) => s.textContent && s.textContent.indexOf(marker) >= 0);
+    if (!styleEl) return null;
+    const m = styleEl.textContent.match(/base64,([\w\W]+?)['")]/);
+    if (!m) return null;
+    const raw = window.atob(m[1].replace(/\s/g, ''));
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+    return bytes.buffer;
+  }
+
+  /** 列出页面所有 @font-face（族名 + 源），用于 URL 形式的加密字体 */
+  function listFontFaces(doc) {
+    const faces = [];
+    for (const sheet of Array.from(doc.styleSheets || [])) {
+      let rules;
+      try {
+        rules = Array.from(sheet.cssRules || []);
+      } catch (e) {
+        continue; // 跨域样式表
+      }
+      for (const rule of rules) {
+        if (!(rule instanceof CSSFontFaceRule)) continue;
+        const family = (rule.style.getPropertyValue('font-family') || '').replace(/["']/g, '').trim();
+        const srcRaw = rule.style.getPropertyValue('src') || '';
+        const m = /url\(["']?([^"')]+)["']?\)/.exec(srcRaw);
+        if (!family || !m) continue;
+        const base = (doc.location && doc.location.href) || location.href;
+        faces.push({ family, src: m[1].startsWith('data:') ? m[1] : new URL(m[1], base).href });
+      }
+    }
+    return faces;
+  }
+
+  /* ---------- 解密主流程 ---------- */
+
+  function collectText(doc) {
+    const els = Array.from(doc.querySelectorAll(CX_SELECTOR));
+    return els.map((el) => el.textContent || '').join('');
+  }
+
+  async function crackOnce(doc) {
+    let source = extractFontFromStyle(doc, CX_MARKER);
+    if (!source) {
+      // 回退：找族名含 cxsecret 的 @font-face
+      const face = listFontFaces(doc).find((f) => /cxsecret/i.test(f.family));
+      if (face) source = face.src;
+    }
+    if (!source) {
+      CXAI.Log.info('未检测到加密字体（此页面题目为明文）');
+      return null;
+    }
+    const table = await loadRefTable();
+    const chars = Array.from(new Set(collectText(doc).split(''))).filter((c) => c.trim() !== '');
+    if (chars.length === 0) return null;
+
+    const family = 'cx-decrypt-' + Math.random().toString(36).slice(2, 8);
+    const face = new FontFace(family, typeof source === 'string' ? `url("${source}")` : source);
+    await CXAI.U.withTimeout(face.load(), 20000, '字体加载');
+    document.fonts.add(face);
+
+    const t0 = Date.now();
+    const result = Object.create(null);
+    const low = [];
+    for (let i = 0; i < chars.length; i++) {
+      const ch = chars[i];
+      if (!isCoveredByFont(family, ch)) {
+        result[ch] = ch;
+        continue;
+      }
+      const feat = renderGlyph(family, ch, table);
+      if (!feat) {
+        result[ch] = ch;
+        continue;
+      }
+      const r = crackChar(table, feat);
+      if (!r) {
+        result[ch] = ch;
+        continue;
+      }
+      result[ch] = r.ch;
+      if (r.margin < 0.3) low.push({ from: ch, to: r.ch, margin: +r.margin.toFixed(3) });
+      if (i % 10 === 9) await CXAI.U.sleep(0);
+    }
+    CXAI.Log.ok(`字形解密完成：${chars.length} 字 / ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    if (low.length) CXAI.Log.warn(`${low.length} 个字符置信度偏低（可能为形近字）`, low);
+    return result;
+  }
+
+  function decryptText(text) {
+    if (!text) return text;
+    return Array.from(text)
+      .map((c) => (map[c] !== undefined ? map[c] : c))
+      .join('');
+  }
+
+  /** 原地改写文本节点（不动 HTML 结构，避免破坏事件绑定） */
+  function decryptElements(els) {
+    for (const root of els) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      const nodes = [];
+      while (walker.nextNode()) nodes.push(walker.currentNode);
+      for (const node of nodes) {
+        const v = node.nodeValue;
+        if (v && /[\uE000-\uF8FF]/.test(v)) node.nodeValue = decryptText(v);
+        else if (v) node.nodeValue = decryptText(v);
+      }
+    }
+  }
+
+  /**
+   * 幂等增量解密：页面每次渲染新题后调用即可。
+   * 无加密元素 -> 立即返回；有映射表 -> 毫秒级增量；首次 -> 完整破解。
+   */
+  async function ensure(doc) {
+    doc = doc || document;
+    if (crackFailed) return;
+    const els = Array.from(doc.querySelectorAll(CX_SELECTOR));
+    if (els.length === 0) return;
+
+    if (Object.keys(map).length === 0) {
+      if (!crackJob) crackJob = crackOnce(doc).catch((e) => {
+        crackFailed = true;
+        CXAI.Log.error('字形解密失败：' + e.message);
+        return null;
+      });
+      const res = await crackJob;
+      if (!res) {
+        crackJob = null;
+        return;
+      }
+      Object.assign(map, res);
+    }
+    decryptElements(els);
+    // 移除标记，保证 getSecret 不再命中（天然幂等）
+    els.forEach((el) => el.classList.remove(CX_MARKER));
+  }
+
+  /** 同步版：已有映射表时立即解密（供抓题前快速调用） */
+  function ensureSync(doc) {
+    doc = doc || document;
+    if (Object.keys(map).length === 0) return false;
+    const els = Array.from(doc.querySelectorAll(CX_SELECTOR));
+    if (els.length === 0) return true;
+    decryptElements(els);
+    els.forEach((el) => el.classList.remove(CX_MARKER));
+    return true;
+  }
+
+  return {
+    ensure,
+    ensureSync,
+    decryptText,
+    hasSecret(doc) {
+      return (doc || document).querySelectorAll(CX_SELECTOR).length > 0;
+    },
+    mapSize() {
+      return Object.keys(map).length;
+    },
+    /** 供调试：暴露原始映射表 */
+    rawMap() {
+      return map;
+    }
+  };
+})();
+
+/* ==================== 03-scraper.js ==================== */
+/* ---------------- 页面识别与题目抓取 ----------------
+ * 选择器对齐学习通现网结构（考试答题页 / 整卷预览 / 作业页 / 章节测验）。
+ */
+
+CXAI.Scraper = (function () {
+  /** 学习通题号 -> 题型值映射 */
+  const TYPE_MAP = {
+    0: 'single',
+    1: 'multiple',
+    2: 'completion',
+    3: 'judgement',
+    4: 'completion',
+    5: 'completion',
+    6: 'completion',
+    7: 'completion',
+    8: 'completion',
+    9: 'completion',
+    10: 'completion',
+    11: 'line',
+    14: 'fill',
+    15: 'reader'
+  };
+
+  const TYPE_LABEL = {
+    single: '单选题',
+    multiple: '多选题',
+    judgement: '判断题',
+    completion: '填空题',
+    line: '连线题',
+    fill: '完形填空',
+    reader: '阅读理解',
+    unknown: '未知题型'
+  };
+
+  const JUDGE_WORDS = ['正确', '错误', '对', '错', '是', '否', '√', '×', 'true', 'false', 't', 'f', 'yes', 'no'];
+
+  /* ---------- 页面类型 ---------- */
+
+  function detectPage() {
+    const href = location.href;
+    const hasQuestion = document.querySelectorAll('.questionLi').length > 0;
+    const hasTiMu = document.querySelectorAll('.TiMu').length > 0;
+    const nextBtn = document.querySelector('[onclick*="getTheNextQuestion"]');
+
+    let kind = 'unknown';
+    if (/\/exam\/preview/.test(href)) kind = 'exam-preview';
+    else if (/\/exam\/test|\/exam-ans\//.test(href)) kind = 'exam-test';
+    else if (/\/work\/dowork/.test(href)) kind = 'work';
+    else if (hasTiMu) kind = 'chapter';
+    else if (hasQuestion) kind = 'work';
+
+    /**
+     * 只读页面：点击有视觉反馈，但页面不会把作答提交给超星。
+     *   reVersionTestStartNew-browse  组卷预览 / 试卷浏览
+     *   mooc2-ans/exam/lookpaper      查看试卷
+     *   /exam-ans/exam/test/look      回看已交试卷
+     * 在这些页面上"选了但系统记录 0 题"是页面本身的设计，不是落盘失败，必须提示清楚。
+     */
+    // 真正的"点了不落库"页面只有几种：教师端试卷浏览 / 回看已交试卷。
+    // 学生自己的「整卷预览」(`/exam-ans/mooc2/exam/preview`) 不在此列 —— 真机验证：
+    // 它的选项是 `saveSingleSelect(this,qid)`，点一下就走 ajax 保存到 reVersionSubmitTestNew，
+    // 而且 answerMode=1（逐题保存），正是"一页答完整卷、不用翻页"的形态。
+    const readonly =
+      /-browse|lookpaper|preview-browse|\/exam\/test\/look|\/exam-ans\/exam\/test\/look/i.test(href);
+
+    /**
+     * 已交卷 / 回看页：`/exam/test/look`、`lookpaper`、成绩单、报告页都算。
+     * 这类页面上脚本不该出现（用户明确要求：交卷成功后界面自动消失）。
+     */
+    let finished =
+      /\/exam\/test\/look|lookpaper|reportCard|examResult|exam-analysis|\/exam\/test\/score/i.test(href);
+    if (!finished) {
+      try {
+        const head = String((document.body && document.body.innerText) || '').slice(0, 600);
+        finished = /交卷成功|已交卷|考试已结束|提交成功|试卷已提交|成绩单/.test(head);
+      } catch (e) {}
+    }
+
+    let mode = CXAI.Cfg.get('answer.pageMode', 'auto');
+    if (mode === 'auto') {
+      if (kind === 'chapter') mode = 'whole';
+      else if (nextBtn && document.querySelectorAll('.questionLi').length <= 2) mode = 'single';
+      else mode = 'whole';
+    }
+    // answerable = 真正能作答的考试/作业页。只有它为真才挂界面，
+    // 别在课程首页、讨论区、已交卷回看页上挂一堆面板（用户明确要求）。
+    const answerable = !finished && !/preview-browse|-browse/i.test(href) && (hasQuestion || hasTiMu);
+    return {
+      kind,
+      mode,
+      readonly,
+      finished,
+      answerable,
+      hasQuestion: hasQuestion || hasTiMu,
+      nextBtn,
+      title: (document.title || '').trim()
+    };
+  }
+
+  /* ---------- 文本清理 ---------- */
+
+  function cleanStem(text) {
+    return String(text || '')
+      .replace(/[\t\r]+/g, ' ')
+      .replace(/\u00a0/g, ' ')
+      .replace(/^\s*\d+\s*[、.．]\s*/, '')
+      .replace(
+        /^\s*(单项选择题|多项选择题|不定项选择题|判断题|填空题|简答题|论述题|计算题|名词解释题?|案例分析题?|材料分析题?|阅读理解|完形填空|连线题|排序题|其他题)\s*[（(][^）)]*[）)]?\s*/,
+        ''
+      )
+      .replace(/[（(]\s*\d+(?:\.\d+)?\s*分\s*[）)]/g, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
+  function cleanOption(text, idx) {
+    let t = String(text || '')
+      .replace(/[\t\r\n]+/g, ' ')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    // 剥离 "A、" "A." "A)" "A：" 这类前缀；仅当剥离后仍有内容
+    const m = /^[A-Ha-h]\s*[、.．)）:：]\s*/.exec(t);
+    if (m && t.length > m[0].length) return t.slice(m[0].length).trim();
+    const m2 = /^[A-Ha-h]\s+/.exec(t);
+    if (m2 && t.length > m2[0].length && /[A-Za-z\u4e00-\u9fa5]/.test(t.charAt(m2[0].length))) {
+      // 只有后接非字母时才剥，避免把英文单词首字母吃掉
+      return t.slice(m2[0].length).trim();
+    }
+    return t;
+  }
+
+  function extractScore(root) {
+    const m = (root.textContent || '').match(/[（(]\s*(\d+(?:\.\d+)?)\s*分\s*[）)]/);
+    return m ? parseFloat(m[1]) : null;
+  }
+
+  /* ---------- 题型判定 ---------- */
+
+  function typeFromValue(v) {
+    const n = parseInt(v, 10);
+    return TYPE_MAP[n] || 'unknown';
+  }
+
+  function guessType(stem, options) {
+    const texts = options.map((o) => CXAI.U.normText(o.text));
+    if (options.length === 0) return 'completion';
+    if (options.length === 2 && texts.every((t) => JUDGE_WORDS.indexOf(t) >= 0)) return 'judgement';
+    if (/多选|多项选择|不定项/.test(stem)) return 'multiple';
+    if (/判断/.test(stem) && options.length <= 2) return 'judgement';
+    if (/填空|简答|论述|名词解释|计算|案例/.test(stem) && options.length === 0) return 'completion';
+    return 'single';
+  }
+
+  /* ---------- 单题解析 ---------- */
+
+  function readTypeInput(root, pageKind) {
+    // 考试页 type 在 input[name^="type"]，作业页在 input[id^="answertype"]
+    const candidates = Array.from(root.querySelectorAll('input[name^="type"], input[id^="answertype"], input[answertype]'));
+    for (const el of candidates) {
+      const name = el.getAttribute('name') || '';
+      const id = el.getAttribute('id') || '';
+      // 非预览模式会有干扰项，只有 name=type\d+ 才是真题型
+      if (/^type\d+$/.test(name)) return typeFromValue(el.value);
+      if (/^answertype/.test(id) || el.hasAttribute('answertype')) return typeFromValue(el.value || el.getAttribute('answertype'));
+    }
+    // 回退：整个页面找一次
+    const any = document.querySelector('input[name^="type"], input[answertype]');
+    if (any) return typeFromValue(any.value || any.getAttribute('answertype'));
+    return null;
+  }
+
+  function readStem(root) {
+    // 优先 .mark_name（题目标题），其次 h3，再次整块文本
+    const selectors = ['.mark_name', 'h3', '.Zy_TItle .clearfix', '.Cy_TItle'];
+    for (const sel of selectors) {
+      const el = root.querySelector(sel);
+      if (el && (el.textContent || '').trim()) return el.textContent;
+    }
+    // 整卷预览：h3 + div 分片
+    const parts = Array.from(root.children)
+      .filter((c) => !c.classList.contains('stem_answer') && !c.classList.contains('mark_answer'))
+      .map((c) => c.textContent || '')
+      .join(' ');
+    if (parts.trim()) return parts;
+    return root.textContent || '';
+  }
+
+  function readOptionElements(root) {
+    // 选择/判断选项；填空的输入区也在同一批选择器里
+    let els = Array.from(root.querySelectorAll('.answerBg .answer_p, .textDIV, .eidtDiv'));
+    if (els.length === 0) els = Array.from(root.querySelectorAll('.answerBg, .textDIV, .eidtDiv, .Cy_ulTop li'));
+    els = els.filter((el) => {
+      if (!el) return false;
+      if (el.closest('.mark_answer')) return false; // 答案解析区
+      // 富文本编辑器（填空/简答）的容器也叫 .textDIV，里面是工具栏 + iframe。
+      // 不排除的话它会被当成一个"选项"，读数变成 "A:段落格式 字体 字号" 这种垃圾。
+      if (el.closest('.subEditor, .edui-editor, .edui-default')) return false;
+      if (el.querySelector && el.querySelector('textarea[id], iframe[id^="ueditor"]')) return false;
+      if (/subEditor|edui/.test(String(el.className || ''))) return false;
+      return true;
+    });
+    // 关键去重：`.answerBg .answer_p` 与它内部的 `.textDIV` 会同时命中，
+    // 不去重的话一道 4 选项的单选会读成 8 个选项，答案字母全错位。
+    els = els.filter((el) => !els.some((other) => other !== el && other.contains && other.contains(el)));
+    return els;
+  }
+
+  /** 选中态类名：check_answer / check_answer_dx / checkAnswer / checked / selected …（排除 un* 反向前缀） */
+  const SEL_TOKEN = /^(check_?answer\w*|checked|selected|active|chosed|chosen|curSelected)$/i;
+
+  function markHit(node) {
+    if (!node) return false;
+    if (node.getAttribute && node.getAttribute('aria-checked') === 'true') return true;
+    if (node.hasAttribute && node.hasAttribute('checked')) return true;
+    const tokens = String(node.className || '').split(/\s+/);
+    return tokens.some((t) => !!t && !/^un/i.test(t) && SEL_TOKEN.test(t));
+  }
+
+  /**
+   * 选项的"作用域"：从选项往上走，直到再上一层就会把别的选项也包进来为止。
+   *
+   * 这一步是必须的。超星考试页的结构是
+   *   .stem_answer
+   *     > .answerBg(选项A) > .answer_p
+   *     > .answerBg(选项B) > .answer_p
+   * v1.4.6 把判定往上找到 .stem_answer 的 `[class*="check_answer"]`，
+   * 而 .stem_answer 同时包住 A/B/C/D —— 只要选中任意一个，四个选项就全被当成"已选"，
+   * 于是多选的"取消多余勾选"一次都不执行（真机留下 answers{qid}=ACD 而正确答案是 AB），
+   * 判断题/单选也会被误判为已答而跳过。
+   */
+  const OPTISH = '.answer_p, .textDIV, .eidtDiv, .answerBg, .Cy_ulTop li, .stem_answer > *';
+
+  function optionScope(el, siblings) {
+    if (!el) return null;
+    const sibs = (siblings || []).filter(Boolean);
+    let scope = el;
+    let cur = el.parentElement;
+    let guard = 0;
+    while (cur && guard++ < 8) {
+      if (sibs.length) {
+        if (sibs.some((o) => o !== el && o !== scope && cur.contains(o))) break;
+      } else {
+        // 没给兄弟列表时（外部直接调 isChecked），用"这层包着几个可选项"判断越界：
+        // 包了 2 个以上就说明再往上已经不是单个选项的容器了。
+        let count = 0;
+        try {
+          count = cur.querySelectorAll(OPTISH).length;
+        } catch (e) {
+          count = 0;
+        }
+        if (count > 1) break;
+      }
+      scope = cur;
+      cur = cur.parentElement;
+    }
+    return scope;
+  }
+
+  function isOptionAnswered(el, type, siblings) {
+    if (type === 'completion') {
+      const ta = el.querySelector('textarea');
+      if (ta && ta.value && ta.value.trim()) return true;
+      const frame = el.querySelector('iframe');
+      if (frame) {
+        try {
+          const body = frame.contentDocument && frame.contentDocument.body;
+          if (body && (body.innerText || '').trim()) return true;
+        } catch (e) {}
+      }
+      const inp = el.querySelector('input[type="text"]');
+      if (inp && inp.value && inp.value.trim()) return true;
+      return false;
+    }
+    // 只在"仅含这一个选项"的容器里找选中标记
+    const scope = optionScope(el, siblings) || el;
+    if (markHit(scope)) return true;
+    try {
+      const inner = scope.querySelectorAll ? Array.from(scope.querySelectorAll('*')).slice(0, 30) : [];
+      if (inner.some(markHit)) return true;
+    } catch (e) {}
+    const inp =
+      (scope.querySelector && scope.querySelector('input[type="radio"], input[type="checkbox"]')) ||
+      (el.querySelector && el.querySelector('input[type="radio"], input[type="checkbox"]'));
+    if (inp && (inp.checked || (inp.hasAttribute && inp.hasAttribute('checked')))) return true;
+    return false;
+  }
+
+  function readTextInputs(root) {
+    const list = [];
+    root.querySelectorAll('textarea, input[type="text"]').forEach((el) => {
+      if (el.closest('.mark_answer')) return;
+      list.push(el);
+    });
+    root.querySelectorAll('iframe').forEach((el) => {
+      if (el.closest('.mark_answer')) return;
+      list.push(el);
+    });
+    return list;
+  }
+
+  function readImages(root) {
+    const urls = [];
+    root.querySelectorAll('img').forEach((img) => {
+      const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
+      if (!src) return;
+      if (/\/static\/|icon|logo|blank\.gif/i.test(src)) return;
+      urls.push(new URL(src, location.href).href);
+    });
+    return urls;
+  }
+
+  function parseOne(root, index, pageKind) {
+    const typeFromInput = readTypeInput(root, pageKind);
+    const optionEls = readOptionElements(root);
+    const stemRaw = readStem(root);
+    const stem = cleanStem(stemRaw);
+
+    const options = optionEls.map((el, i) => {
+      const raw = (el.innerText || el.textContent || '').trim();
+      return {
+        key: String.fromCharCode(65 + i),
+        text: cleanOption(raw, i),
+        raw,
+        el,
+        answered: false
+      };
+    });
+
+    let type = typeFromInput;
+    if (!type || type === 'unknown') type = guessType(stem, options);
+    // 选择题但无法匹配选项 -> 视为填空
+    if ((type === 'single' || type === 'multiple' || type === 'judgement') && options.length === 0) {
+      type = 'completion';
+    }
+
+    const optEls = options.map((o) => o.el);
+    options.forEach((o) => {
+      o.answered = isOptionAnswered(o.el, type, optEls);
+    });
+
+    const q = {
+      index,
+      key: CXAI.U.normText(stem).slice(0, 120) || 'q' + index,
+      qid: qidOf(root),
+      type,
+      typeLabel: TYPE_LABEL[type] || '未知题型',
+      stem,
+      stemRaw: String(stemRaw || '').replace(/\s+/g, ' ').trim(),
+      options,
+      inputs: type === 'completion' ? readTextInputs(root) : [],
+      images: readImages(root),
+      score: extractScore(root),
+      root,
+      answered: false
+    };
+    q.answered = isAnsweredNow(q);
+    return q;
+  }
+
+  /**
+   * 这题在页面上是不是已经答了。
+   * 选择题以"页面自己的答案隐藏域"为准（#answer{qid} / answers{qid}），
+   * 拿不到再退回看选项选中标记；填空/简答看 UEditor / 文本框里有没有内容。
+   */
+  function isAnsweredNow(q) {
+    if (!q) return false;
+    const v = pageValue(q);
+    if (v && v.value) return true;
+    if (q.type === 'completion') return false;
+    return (q.options || []).some((o) => o.answered);
+  }
+
+  /* ---------------- 页面真实答案 / 题库无关的确定性线索 ---------------- */
+
+  /** 超星的题号：.questionLi[data] 或表单里的 #questionId */
+  function qidOf(root) {
+    try {
+      const li = root && root.closest ? root.closest('.questionLi') : null;
+      const d = (li || root) && (li || root).getAttribute && (li || root).getAttribute('data');
+      if (d && /^\d+$/.test(String(d).trim())) return String(d).trim();
+    } catch (e) {}
+    const inp = document.querySelector('#questionId') || document.querySelector('input[name="questionId"]');
+    return inp ? String(inp.value || '').trim() : '';
+  }
+
+  /**
+   * 判断题在页面隐藏域里存的不是 A/B，而是 `true` / `false`（真机实测 #5 判断题
+   * `answer{qid}=true`）。拿它去和 AI 的 `A` 比对必然对不上，于是：
+   *   ① 已答对的判断题被判成"答错了"→ 反复重做；
+   *   ② 落盘验收用 A 比 true → 永远 ok:false → 自动暂停。
+   * 这里统一折算成选项字母：按选项文字找出"正确/错误"分别是哪个 key，找不到再退 A/B。
+   */
+  function judgeKey(q, raw) {
+    const txt = String(raw == null ? '' : raw).trim().toLowerCase();
+    if (!txt) return '';
+    const opts = (q && q.options) || [];
+    const find = (re) => opts.filter((o) => re.test(String(o.text || '').trim().toLowerCase()))[0];
+    const yes = find(/^(正确|对|是|√|true|t|yes|1)$/) || find(/正确|^对$/);
+    const no = find(/^(错误|错|否|×|false|f|no|0)$/) || find(/错误|^错$/);
+    if (/^(true|1|t|对|正确|是|√|yes)$/.test(txt)) return yes ? yes.key : 'A';
+    if (/^(false|0|f|错|错误|否|×|no)$/.test(txt)) return no ? no.key : 'B';
+    return /^[a-h]+$/i.test(txt) ? txt.toUpperCase() : '';
+  }
+
+  /** 把页面上的答案折算成统一的字母串（判断题做 true/false → 选项字母） */
+  function normPageAnswer(q, raw) {
+    const v = String(raw == null ? '' : raw).trim();
+    if (!v) return '';
+    if (!q || q.type !== 'judgement') return /^[A-H]+$/i.test(v) ? v.toUpperCase() : v;
+    const k = judgeKey(q, v);
+    return k || (/^[A-H]+$/i.test(v) ? v.toUpperCase() : v);
+  }
+
+  /** HTML → 纯文本（简答的隐藏域里可能存的是 <p>…</p>） */
+  function toPlain(t) {
+    return String(t == null ? '' : t)
+      .replace(/<br\s*\/?>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&amp;/g, '&')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  /** 页面自己记录的作答内容（选择题=选中字母串，填空/简答=文本） */
+  function pageValue(q) {
+    if (!q) return { value: '', src: '' };
+    const qid = q.qid || qidOf(q.root);
+    if (qid) {
+      const a =
+        document.getElementById('answer' + qid) ||
+        document.querySelector('[name="answer' + qid + '"]');
+      const as = document.querySelector('[name="answers' + qid + '"]');
+      const readOne = (el, src) => {
+        const raw = String((el && el.value) || '').trim();
+        if (!raw) return null;
+        const isText = q && (q.type === 'completion' || q.type === 'line');
+        return { value: isText ? toPlain(raw) : normPageAnswer(q, raw), raw: raw, src: src };
+      };
+      const hit = readOne(a, 'answer') || readOne(as, 'answers');
+      if (hit) return hit;
+    }
+    const ed = ueditorOf(q);
+    if (ed) {
+      const t = plainOf(ed);
+      if (t) return { value: t, src: 'ueditor' };
+    }
+    for (const el of q.inputs || []) {
+      if (el && el.value != null && String(el.value).trim()) return { value: toPlain(el.value), src: 'input' };
+      if (el && el.tagName === 'IFRAME') {
+        try {
+          const b = el.contentDocument && el.contentDocument.body;
+          if (b && (b.innerText || '').trim()) return { value: String(b.innerText).trim(), src: 'iframe' };
+        } catch (e) {}
+      }
+    }
+    // 没有隐藏域时按当前 DOM 的选中标记现算（不能用 q.options[].answered —— 那是解析时的快照，点完就过期了）
+    const sibs = (q.options || []).map((o) => o.el);
+    const marked = (q.options || [])
+      .filter((o) => isOptionAnswered(o.el, q.type, sibs))
+      .map((o) => o.key)
+      .join('');
+    if (marked) return { value: marked, src: 'dom' };
+    return { value: '', src: '' };
+  }
+
+  /** UEditor 全局对象（页面里叫 UE；Tampermonkey 沙箱下要用 unsafeWindow） */
+  function ueditorApi() {
+    try {
+      if (typeof UE !== 'undefined' && UE && typeof UE.getEditor === 'function') return UE;
+    } catch (e) {}
+    try {
+      const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : null;
+      if (w && w.UE && typeof w.UE.getEditor === 'function') return w.UE;
+    } catch (e) {}
+    return null;
+  }
+
+  function plainOf(ed) {
+    try {
+      if (!ed || !ed.body) return '';
+      if (ed.getPlainTxt) {
+        const t = String(ed.getPlainTxt() || '').replace(/\u200b/g, '').trim();
+        if (t) return t;
+      }
+      const html = String(ed.getContent ? ed.getContent() : '');
+      return html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
+  /** 找出这道题对应的 UEditor 实例（简答=answer{qid}，填空=answerEditor{qid}N） */
+  function ueditorOf(q) {
+    const api = ueditorApi();
+    if (!api || !q) return null;
+    const ids = [];
+    const qid = q.qid || qidOf(q.root);
+    if (qid) ids.push('answer' + qid);
+    const root = q.root || document;
+    try {
+      Array.from(root.querySelectorAll('textarea[id]')).forEach((el) => {
+        if (ids.indexOf(el.id) < 0) ids.push(el.id);
+      });
+    } catch (e) {}
+    (q.inputs || []).forEach((el) => {
+      if (el && el.id && ids.indexOf(el.id) < 0) ids.push(el.id);
+    });
+    for (const id of ids) {
+      try {
+        const ed = api.getEditor(id);
+        if (ed && typeof ed.getContent === 'function' && ed.body) return ed;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  /** 换页后如果新题带富文本编辑器，尽量把实例重新挂上 */
+  /** 页面自己初始化填空/简答编辑器时用的参数（从页面内联脚本里抄的，少一项皮肤就可能不一样） */
+  const EDITOR_OPTS = {
+    initialFrameHeight: 56,
+    toolbars: [],
+    pasteplain: true,
+    disablePasteImage: true,
+    disableDraggable: true
+  };
+
+  /**
+   * 原地换 DOM 之后把富文本编辑器重新挂上。
+   *
+   * 页面是靠 `UE.getEditor('answerEditor{qid}1', {...})` 初始化的，所以换完题块后
+   * 同一个调用能重新建出实例；但 **ed.body 是异步就绪的**（iframe 写文档），
+   * 建完立刻读 body 会是 null —— 之前因此把可用的页面误判成"重建失败"，
+   * 一遇填空/简答就整个退回真实跳转。这里改成等到 body 就绪为止。
+   */
+  async function ensureEditorsAsync(timeoutMs) {
+    const api = ueditorApi();
+    if (!api) return true;
+    const areas = Array.from(document.querySelectorAll('textarea[id^="answerEditor"], textarea[id^="answer"]'));
+    if (!areas.length) return true;
+    const deadline = Date.now() + (Number(timeoutMs) || 3000);
+    const sleepLocal = (ms) => new Promise((r) => setTimeout(r, ms));
+    for (const ta of areas) {
+      let ed = null;
+      try {
+        ed = api.getEditor(ta.id, EDITOR_OPTS);
+      } catch (e) {
+        ed = null;
+      }
+      if (!ed || typeof ed.setContent !== 'function') return false;
+      // 判活只能用"实例的 iframe 还在当前文档里"。
+      // 不能用 ed.body.ownerDocument === document —— UEditor 的 body 本来就在它自己的
+      // iframe 文档里，这么判会把每一个健康编辑器都判死（v1.5.0 首轮真机就栽在这里，
+      // 一遇填空/简答就退回真实跳转）。
+      const alive = () => !!(ed.body && ed.iframe && document.contains && document.contains(ed.iframe));
+      while (Date.now() < deadline && !alive()) await sleepLocal(80);
+      if (!alive()) return false;
+    }
+    return true;
+  }
+
+  /**
+   * 题干里自带答案时直接采用（本题选AB / 正确答案：AB / 选择：B）。
+   * 只认 A-H 的连续字母，且必须落在选项范围内，避免把英文单词首字母当成答案。
+   */
+  function stemAnswerKeys(stem, options) {
+    const s = String(stem || '');
+    const max = Math.max(options && options.length ? options.length : 0, 1);
+    const pats = [
+      /本题\s*(?:请)?(?:选择|选)\s*[:：]?\s*([A-Ha-h]{1,8})/,
+      /(?:正确答案|参考答案|标准答案|答案)\s*[:：]\s*([A-Ha-h]{1,8})/,
+      /(?:请选择|选择)\s*[:：]\s*([A-Ha-h]{1,8})\s*(?:[。.；;，,]|$)/
+    ];
+    for (const p of pats) {
+      const m = p.exec(s);
+      if (!m) continue;
+      const letters = String(m[1] || '')
+        .toUpperCase()
+        .split('')
+        .filter((c, i, a) => a.indexOf(c) === i);
+      if (!letters.length) continue;
+      if (letters.length > max) continue;
+      const inRange = letters.every((c) => {
+        const idx = c.charCodeAt(0) - 65;
+        return idx >= 0 && idx < max;
+      });
+      if (inRange) return letters;
+    }
+    return [];
+  }
+
+  /**
+   * 试卷标识：用来把"作答清单"绑到具体一份卷子上。
+   * 用户明确要求：换卷/关掉页面之后旧清单不用留 —— 所以清单按这个 key 存，
+   * key 一变就把旧清单丢掉（不做跨卷合并）。
+   */
+  function paperKey() {
+    try {
+      const q = new URLSearchParams(location.search);
+      const get = (n) => q.get(n) || '';
+      let pid = '';
+      const el = document.querySelector('#paperId, input[name="paperId"], #testPaperId, input[name="testPaperId"]');
+      if (el) pid = String(el.value || '').trim();
+      const parts = [pid, get('tId'), get('examId'), get('id'), get('workId'), get('courseId')].filter(Boolean);
+      if (parts.length) return parts.join('_');
+    } catch (e) {}
+    return (location.pathname || '') + '|' + String(document.title || '');
+  }
+
+  /**
+   * 页面上的「整卷预览」入口。
+   * 真机（exam-ans/exam/test/reVersionTestStartNew）上是：
+   *   <a class="completeBtn fl" href="javascript:;" onclick="topreview();">整卷预览</a>
+   * 走它 = 一页装下全部题目，答题时不用逐题翻页（这也是 ocsjs 的做法）。
+   */
+  function previewEntry() {
+    let nodes = [];
+    try {
+      nodes = Array.from(document.querySelectorAll('a,div,span,button,li'));
+    } catch (e) {
+      return null;
+    }
+    const byFn = nodes.filter((el) => /topreview|preview/i.test(el.getAttribute && (el.getAttribute('onclick') || el.getAttribute('href') || '')));
+    const byText = nodes.filter((el) => /^(整卷预览|试卷预览|整卷)$/.test(String((el.textContent || '').trim())));
+    const pick = byFn.concat(byText).filter((el) => el && el.offsetParent);
+    return pick[0] || null;
+  }
+
+  /** 尽可能走页面自己的 topreview()；没有函数就点那个入口 */
+  function enterPreview() {
+    const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+    try {
+      if (typeof w.topreview === 'function') {
+        w.topreview();
+        return true;
+      }
+    } catch (e) {}
+    const el = previewEntry();
+    if (el) {
+      try {
+        el.click();
+        return true;
+      } catch (e) {}
+    }
+    return false;
+  }
+
+  /** 整卷题量：优先"题量: N"，其次整卷模式下的题块数 */
+  function totalCount() {
+    let n = 0;
+    try {
+      const text = (document.body && document.body.innerText) || '';
+      const m = /题量\s*[:：]\s*(\d+)/.exec(text);
+      if (m) n = parseInt(m[1], 10);
+    } catch (e) {}
+    if (!n) {
+      const li = document.querySelectorAll('.questionLi').length;
+      const timu = document.querySelectorAll('.TiMu').length;
+      n = Math.max(li, timu);
+    }
+    return n || 0;
+  }
+
+  /** 当前是第几题（页面 URL 的 start 参数 + 1；整卷模式用题块序号） */
+  function currentIndex() {
+    try {
+      const m = /[?&]start=(\d+)/.exec(location.href);
+      if (m) return parseInt(m[1], 10) + 1;
+    } catch (e) {}
+    return 0;
+  }
+
+  /**
+   * 无刷新翻页：把 fetch 回来的下一页 HTML 原地换掉当前题块。
+   *
+   * 注意：`.questionLi` 里就包着 #submitTest（questionId / type{qid} / answers{qid} / enc / start
+   * 全在里），整块替换等于连表单状态一起换到新题，页面自己的行内 onclick 也不需要重新绑定
+   * （addChoice / addMultipleChoice 都是全局函数 + 行内属性）。
+   */
+  function applyNextPage(html, opts) {
+    opts = opts || {};
+    let doc = null;
+    try {
+      doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    } catch (e) {
+      return { ok: false, why: '解析失败' };
+    }
+    const newLi = doc.querySelector('.questionLi');
+    const oldLi = document.querySelector('.questionLi');
+    // 最后一题之后再翻页，超星返回的是"提示 / 无效参数！"页 —— 这里必须报"到底了"，
+    // 不能让上层把它当成"编辑���重建失败"而真跳过去（跳过去就回不来了）。
+    if (!newLi) return { ok: false, why: '下一页没有题块：已到最后一题', end: true };
+    if (!oldLi) return { ok: false, why: '当前页没有题块' };
+
+    // 最后一题之后超星会跳交卷页 / 提示页，这类页面没有 #submitTest，别硬换
+    if (!newLi.querySelector('#submitTest') && !doc.querySelector('#submitTest')) {
+      return { ok: false, why: '下一页没有作答表单', end: true };
+    }
+
+    const formInsideLi = !!(oldLi.querySelector && oldLi.querySelector('#submitTest'));
+    oldLi.outerHTML = newLi.outerHTML;
+
+    if (!formInsideLi) {
+      const newForm = doc.querySelector('#submitTest');
+      const oldForm = document.querySelector('#submitTest');
+      if (newForm && oldForm) oldForm.outerHTML = newForm.outerHTML;
+    }
+    try {
+      const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+      if (w && typeof w.answerCardLocateCurrent === 'function') w.answerCardLocateCurrent();
+    } catch (e) {}
+    try {
+      const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+      if (w && w.MathJax && typeof w.MathJax.typeset === 'function') w.MathJax.typeset();
+    } catch (e) {}
+    return { ok: true };
+  }
+
+  /* ---------- 章节测验（.TiMu） ---------- */
+
+  function parseChapter() {
+    const nodes = Array.from(document.querySelectorAll('.TiMu'));
+    return nodes.map((root, i) => {
+      const stemEl = root.querySelector('.Zy_TItle .clearfix, .Zy_TItle, .clearfix');
+      const stem = cleanStem(stemEl ? stemEl.textContent : root.textContent);
+      const optionEls = Array.from(root.querySelectorAll('.Zy_ulTop li, .answerBg')).filter((el) => !el.closest('.Py_answer'));
+      const options = optionEls.map((el, k) => {
+        const raw = (el.innerText || el.textContent || '').trim();
+        return { key: String.fromCharCode(65 + k), text: cleanOption(raw, k), raw, el, answered: false };
+      });
+      const typeAttr = root.querySelector('[answertype]');
+      let type = typeAttr ? typeFromValue(typeAttr.getAttribute('answertype') || typeAttr.value) : null;
+      if (!type || type === 'unknown') type = guessType(stem, options);
+      const optEls = options.map((o) => o.el);
+      options.forEach((o) => {
+        o.answered = isOptionAnswered(o.el, type, optEls);
+      });
+      const q = {
+        index: i,
+        key: CXAI.U.normText(stem).slice(0, 120) || 'q' + i,
+        qid: qidOf(root),
+        type,
+        typeLabel: TYPE_LABEL[type] || '未知题型',
+        stem,
+        stemRaw: stem,
+        options,
+        inputs: type === 'completion' ? readTextInputs(root) : [],
+        images: readImages(root),
+        score: null,
+        root,
+        answered: false
+      };
+      q.answered = isAnsweredNow(q);
+      return q;
+    });
+  }
+
+  /* ---------- 对外 ---------- */
+
+  function collect() {
+    const page = detectPage();
+    let questions = [];
+    if (page.kind === 'chapter') {
+      questions = parseChapter();
+    } else {
+      const roots = Array.from(document.querySelectorAll('.questionLi')).filter((el) => !el.parentElement.closest('.questionLi'));
+      questions = roots.map((root, i) => parseOne(root, i, page.kind));
+    }
+    // 过滤掉题干完全为空的容器
+    questions = questions.filter((q) => q.stem || q.options.length > 0);
+    questions.forEach((q, i) => (q.index = i));
+    return { page, questions };
+  }
+
+  /** 当前是否已经全部答完（用于单题模式判断翻页） */
+  function currentAnswered() {
+    const { questions } = collect();
+    return questions.length > 0 && questions.every((q) => q.answered || (q.options.length > 0 && q.options.some((o) => o.answered)));
+  }
+
+  /**
+   * 找"下一题"按钮。
+   *
+   * 超星单题模式里两个按钮是并排的兄弟节点：
+   *   上一题  <a class="btnBlue btn_92 fs14" onclick="getTheNextQuestion(-1)">
+   *   下一题  <a class="jb_btn jb_btn_92 fs14" onclick="getTheNextQuestion(1)">
+   * 早期版本用 [onclick*="getTheNextQuestion"] 取第一个，正好抓中"上一题"，
+   * 于是脚本在相邻两题之间来回弹，整卷永远答不完、计数永远是 0。
+   */
+  function nextButton() {
+    const all = Array.from(document.querySelectorAll('[onclick*="getTheNextQuestion"]'));
+    const exact = all.find((el) => /getTheNextQuestion\(\s*1\s*\)/.test(el.getAttribute('onclick') || ''));
+    if (exact) return exact;
+    const loose = all.find((el) => {
+      const oc = el.getAttribute('onclick') || '';
+      if (/getTheNextQuestion\(\s*-/.test(oc)) return false;
+      return !/上一题/.test((el.textContent || '').replace(/\s+/g, ''));
+    });
+    if (loose) return loose;
+    return (
+      Array.from(document.querySelectorAll('a,button,div,span')).find(
+        (el) => /^下一?题$/.test((el.textContent || '').replace(/\s+/g, '')) && el.offsetParent
+      ) || null
+    );
+  }
+
+  /** 读回页面真正处于选中态的选项 key —— 用来核对 AI 答案有没有真的落到页面上 */
+  function selectedKeys(q) {
+    if (!q || !q.options || !q.options.length) return '';
+    try {
+      const sibs = q.options.map((o) => o.el);
+      return q.options
+        .filter((o) => isOptionAnswered(o.el, q.type, sibs))
+        .map((o) => o.key)
+        .join('');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function clickNext() {
+    const btn = nextButton();
+    if (btn) {
+      btn.click();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 在"当前页面重新抓到的题目列表"里找回同一道题。
+   * 单题模式页面常有 1~2 个 questionLi（上一题残影 / 下一题预载），
+   * 而且重绘后题干里的分值、序号可能变，所以不能只按题干全等匹配。
+   */
+  function pickSame(list, q) {
+    if (!list || !list.length || !q) return null;
+    const norm = (t) => CXAI.U.normText(t || '');
+    const qStem = norm(q.stem);
+    let best = null;
+    let bestScore = 0;
+    for (const x of list) {
+      let score = 0;
+      const xs = norm(x.stem);
+      if (xs && qStem && xs === qStem) score += 100;
+      else if (xs && qStem && xs.length > 8 && qStem.length > 8 &&
+        (xs.indexOf(qStem.slice(0, 12)) >= 0 || qStem.indexOf(xs.slice(0, 12)) >= 0)) score += 60;
+      // qid 是硬身份：两道纯图片题题干/选项文字可能一模一样，只能靠它区分
+      if (q.qid && x.qid) {
+        if (x.qid === q.qid) score += 200;
+        else score -= 150;
+      }
+      const qImgs = (q.images || []).join(',');
+      const xImgs = (x.images || []).join(',');
+      if (qImgs && xImgs) score += qImgs === xImgs ? 60 : -40;
+      const qOpts = (q.options || []).map((o) => norm(o.text)).filter(Boolean);
+      const xOpts = (x.options || []).map((o) => norm(o.text)).filter(Boolean);
+      if (qOpts.length && xOpts.length) {
+        const hit = qOpts.filter((t) => xOpts.indexOf(t) >= 0).length;
+        score += Math.round((hit / qOpts.length) * 40);
+      }
+      if (x.index === q.index) score += 5;
+      if (score > bestScore) {
+        bestScore = score;
+        best = x;
+      }
+    }
+    if (best && bestScore >= 40) return best;
+    return list.length === 1 ? list[0] : null;
+  }
+
+  return {
+    detectPage,
+    collect,
+    parseOne,
+    guessType,
+    typeFromValue,
+    cleanStem,
+    cleanOption,
+    currentAnswered,
+    clickNext,
+    nextButton,
+    selectedKeys,
+    pickSame,
+    TYPE_LABEL,
+    // v1.5.0
+    optionScope,
+    isOptionAnswered,
+    isAnsweredNow,
+    judgeKey,
+    normPageAnswer,
+    toPlain,
+    pageValue,
+    stemAnswerKeys,
+    totalCount,
+    paperKey,
+    previewEntry,
+    enterPreview,
+    currentIndex,
+    qidOf,
+    ueditorApi,
+    ueditorOf,
+    ensureEditorsAsync,
+    applyNextPage
+  };
+})();
+
+/* ==================== 03b-vision.js ==================== */
+/* ---------------- 读图（多模态）层 ----------------
+ * 学习通的图片题有两个硬问题：
+ *   1) 图片挂在 mooc1.chaoxing.com 上，多半要带 Cookie/Referer 才给，模型厂商的服务器拉不到；
+ *   2) 原图动辄 1~3MB，直传会让 token 费用爆炸、甚至被端点拒收。
+ * 所以这里统一做三件事：本地抓图 → 缩放压缩 → 转 data URL（或先转写成文字）。
+ *
+ * 两种用法：
+ *   inline  把 data URL 直接塞给支持视觉的模型（qwen-vl / glm-4v / gpt-4o / magpie 背后的多模态模型）
+ *   ocr     先用读图模型把图片"读成文字"，再把文字喂给纯文本模型判题
+ */
+
+CXAI.Vision = (function () {
+  const imgCache = new Map(); // url -> {at, value}
+  const ocrCache = new Map(); // key  -> value
+
+  const SYSTEM_VISION = [
+    '你是一名试卷图片转写员。图片来自中国高校在线考试（学习通），可能包含：题干文字、数学公式、化学式、表格、几何图形、电路图、流程图、代码片段、以及印在图片里的选项。',
+    '',
+    '任务：把图上一切与解题有关的信息，原样转写成纯文本，供后续纯文本模型判题。',
+    '要求：',
+    '1. 公式用常见线性写法（如 x^2、sqrt(3)、H2SO4、a/b），不要用 LaTeX 花括号。',
+    '2. 表格按行输出，列之间用 " | " 分隔，第一行是表头。',
+    '3. 图形/电路/几何：描述关键标注、坐标、角度、边长、连接关系，不要只写"一个图"。',
+    '4. 图里出现的选项（如 A. xxx）逐条抄下来。',
+    '5. 看不清的地方写 [不清]，绝不臆造。',
+    '',
+    '只输出一个 JSON 对象，不要 markdown 围栏：',
+    '{"text":"<完整转写>","questionText":"<图上题干部分，没有就空串>","options":["<选项1>","<选项2>"],"kind":["text|formula|table|figure|code|diagram"],"confidence":<0到1>}'
+  ].join('\n');
+
+  /* ---------------- 配置 ---------------- */
+
+  function cfg() {
+    const v = CXAI.Cfg.get('ai.vision', {});
+    const d = (CXAI.DEFAULT_CONFIG.ai.vision || {});
+    const out = Object.assign({}, d, v && typeof v === 'object' ? v : {});
+    if (typeof v === 'boolean') out.enabled = v;
+    out.maxImages = Math.max(1, Math.min(8, Number(out.maxImages) || 3));
+    out.maxEdge = Math.max(320, Math.min(4096, Number(out.maxEdge) || 1400));
+    out.quality = Math.max(0.1, Math.min(1, Number(out.quality) || 0.82));
+    out.maxTotalBytes = Math.max(200000, Number(out.maxTotalBytes) || 4194304);
+    out.fetchTimeoutMs = Math.max(2000, Number(out.fetchTimeoutMs) || 15000);
+    out.strategy = ['auto', 'inline', 'ocr', 'off'].indexOf(out.strategy) >= 0 ? out.strategy : 'ocr';
+    out.enabled = out.enabled !== false;
+    return out;
+  }
+
+  function isEnabled() {
+    const c = cfg();
+    return c.enabled && c.strategy !== 'off';
+  }
+
+  function dataUrlBytes(dataUrl) {
+    const s = String(dataUrl || '');
+    const i = s.indexOf(',');
+    if (i < 0) return s.length;
+    return Math.round((s.length - i - 1) * 0.75);
+  }
+
+  function remember(map, key, value, cap) {
+    map.set(key, { at: Date.now(), value: value });
+    while (map.size > (cap || 60)) {
+      const first = map.keys().next();
+      if (first.done) break;
+      map.delete(first.value);
+    }
+  }
+
+  /* ---------------- 抓图 ---------------- */
+
+  function fetchBlob(url, timeoutMs) {
+    return new Promise((resolve, reject) => {
+      const headers = { Accept: 'image/*,*/*;q=0.8' };
+      try {
+        if (typeof location !== 'undefined' && location.href) headers.Referer = location.href;
+      } catch (e) {}
+      if (typeof GM_xmlhttpRequest === 'function') {
+        GM_xmlhttpRequest({
+          method: 'GET',
+          url: url,
+          headers: headers,
+          responseType: 'blob',
+          timeout: timeoutMs,
+          onload: (res) => {
+            if (res.status >= 200 && res.status < 300 && res.response) resolve(res.response);
+            else reject(new Error('HTTP ' + res.status));
+          },
+          onerror: () => reject(new Error('图片拉取失败（跨域或需要登录）')),
+          ontimeout: () => reject(new Error('图片拉取超时'))
+        });
+        return;
+      }
+      if (typeof fetch !== 'function') {
+        reject(new Error('当前环境没有可用的请求实现'));
+        return;
+      }
+      const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = setTimeout(() => {
+        if (ctrl) ctrl.abort();
+      }, timeoutMs);
+      fetch(url, ctrl ? { credentials: 'include', signal: ctrl.signal } : { credentials: 'include' })
+        .then((r) => {
+          clearTimeout(timer);
+          if (!r || r.ok === false) throw new Error('HTTP ' + ((r && r.status) || 0));
+          if (typeof r.blob === 'function') return r.blob();
+          if (typeof r.arrayBuffer === 'function') return r.arrayBuffer();
+          throw new Error('响应无法读取');
+        })
+        .then(resolve)
+        .catch((e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+    });
+  }
+
+  const MIME_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif', 'image/bmp': 'bmp' };
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      if (typeof blob === 'string') {
+        resolve(/^data:/.test(blob) ? blob : 'data:image/png;base64,' + blob);
+        return;
+      }
+      if (typeof FileReader === 'function' && blob && typeof blob === 'object') {
+        try {
+          const fr = new FileReader();
+          fr.onload = () => resolve(String(fr.result || ''));
+          fr.onerror = () => reject(new Error('读取图片失败'));
+          fr.readAsDataURL(blob);
+          return;
+        } catch (e) {
+          /* 落到 arrayBuffer 分支 */
+        }
+      }
+      if (blob && typeof blob.arrayBuffer === 'function') {
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            const bytes = new Uint8Array(buf);
+            let bin = '';
+            const CH = 0x8000;
+            for (let i = 0; i < bytes.length; i += CH) {
+              bin += String.fromCharCode.apply(null, Array.prototype.slice.call(bytes, i, i + CH));
+            }
+            const mime = (blob.type && MIME_EXT[blob.type] ? blob.type : 'image/png');
+            resolve('data:' + mime + ';base64,' + btoa(bin));
+          })
+          .catch(() => reject(new Error('图片编码失败')));
+        return;
+      }
+      reject(new Error('图片数据为空'));
+    });
+  }
+
+  /** 用 canvas 缩放 + 重编码，失败时原样返回（宁可直接传大图，也不要没图） */
+  function compress(dataUrl, maxEdge, quality) {
+    if (typeof Image !== 'function' || typeof document === 'undefined' || !document.createElement) {
+      return Promise.resolve(dataUrl);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => {
+        if (!settled) {
+          settled = true;
+          resolve(v || dataUrl);
+        }
+      };
+      let probe = null;
+      try {
+        probe = document.createElement('canvas');
+      } catch (e) {}
+      if (!probe || typeof probe.getContext !== 'function') return finish(dataUrl);
+      const img = new Image();
+      const timer = setTimeout(() => finish(dataUrl), 8000);
+      img.onload = () => {
+        clearTimeout(timer);
+        try {
+          const w0 = img.naturalWidth || img.width || 0;
+          const h0 = img.naturalHeight || img.height || 0;
+          if (!w0 || !h0) return finish(dataUrl);
+          const scale = Math.min(1, maxEdge / Math.max(w0, h0));
+          const w = Math.max(1, Math.round(w0 * scale));
+          const h = Math.max(1, Math.round(h0 * scale));
+          const cv = document.createElement('canvas');
+          cv.width = w;
+          cv.height = h;
+          const g = cv.getContext && cv.getContext('2d');
+          if (!g) return finish(dataUrl);
+          if (typeof g.fillRect === 'function') {
+            g.fillStyle = '#fff';
+            g.fillRect(0, 0, w, h);
+          }
+          g.drawImage(img, 0, 0, w, h);
+          const out = cv.toDataURL('image/jpeg', quality);
+          finish(out && out.length > 128 ? out : dataUrl);
+        } catch (e) {
+          finish(dataUrl);
+        }
+      };
+      img.onerror = () => {
+        clearTimeout(timer);
+        finish(dataUrl);
+      };
+      try {
+        img.src = dataUrl;
+      } catch (e) {
+        clearTimeout(timer);
+        finish(dataUrl);
+      }
+    });
+  }
+
+  /** 取单张图：URL -> {url,dataUrl,bytes,ok,error}（带内存缓存） */
+  async function load(url, c) {
+    c = c || cfg();
+    const href = String(url || '');
+    if (!href) return { url: href, dataUrl: '', bytes: 0, ok: false, error: '空地址' };
+    if (/^data:image\//i.test(href)) {
+      return { url: href, dataUrl: href, bytes: dataUrlBytes(href), ok: true, cached: true };
+    }
+    const hit = imgCache.get(href);
+    if (hit && Date.now() - hit.at < 10 * 60 * 1000) return Object.assign({}, hit.value, { cached: true });
+    try {
+      const blob = await fetchBlob(href, c.fetchTimeoutMs);
+      let dataUrl = await blobToDataUrl(blob);
+      if (!dataUrl) throw new Error('图片数据为空');
+      dataUrl = await compress(dataUrl, c.maxEdge, c.quality);
+      const value = { url: href, dataUrl: dataUrl, bytes: dataUrlBytes(dataUrl), ok: true };
+      remember(imgCache, href, value, c.cacheSize);
+      return value;
+    } catch (e) {
+      return { url: href, dataUrl: '', bytes: 0, ok: false, error: e.message };
+    }
+  }
+
+  /** 把一道题的图片全部处理成可发送的 parts */
+  async function prepare(question) {
+    const c = cfg();
+    const empty = { items: [], mode: 'none', dropped: 0, totalBytes: 0, strategy: c.strategy };
+    if (!c.enabled || c.strategy === 'off') return Object.assign(empty, { mode: 'off' });
+    const urls = (question && question.images ? question.images : []).slice(0, c.maxImages);
+    if (!urls.length) return empty;
+
+    const items = [];
+    let total = 0;
+    let dropped = 0;
+    for (const u of urls) {
+      const got = await load(u, c);
+      if (!got.ok) {
+        dropped++;
+        CXAI.Log.warn('图片读取失败：' + CXAI.U.truncate(got.url, 70) + ' · ' + got.error);
+        continue;
+      }
+      if (got.bytes < 600) {
+        dropped++; // 1x1 占位符 / 分隔线
+        continue;
+      }
+      if (total + got.bytes > c.maxTotalBytes) {
+        dropped++;
+        continue;
+      }
+      total += got.bytes;
+      items.push(got);
+    }
+    return { items: items, mode: items.length ? 'ready' : 'none', dropped: dropped, totalBytes: total, strategy: c.strategy };
+  }
+
+  /* ---------------- 读图模型 ---------------- */
+
+  /** 挑读图模型：优先设置里指定的，其次权重最高的视觉模型 */
+  function pickProvider() {
+    const c = cfg();
+    const vis = CXAI.Cfg.visionProviders();
+    if (c.ocrProviderId) {
+      const hit = vis.filter((p) => p.id === c.ocrProviderId)[0] || CXAI.Cfg.allProviders().filter((p) => p.id === c.ocrProviderId)[0];
+      if (hit) return hit;
+    }
+    return vis[0] || null;
+  }
+
+  function panelHasVision(panel) {
+    return (panel || []).some((p) => p && p.vision);
+  }
+
+  /* ---------------- 转写 ---------------- */
+
+  function buildVisionUserText(q) {
+    const lines = ['【已知信息】'];
+    if (q && q.typeLabel) lines.push('题型：' + q.typeLabel);
+    if (q && q.stem) lines.push('页面已抓到的题干文字（可能不完整）：' + CXAI.U.truncate(q.stem, 600));
+    const opts = (q && q.options ? q.options : []).map((o) => o.key + '. ' + o.text);
+    if (opts.length) lines.push('页面已抓到的选项：\n' + opts.join('\n'));
+    else lines.push('页面上没有抓到选项（选项可能印在图片里，请一并转写）。');
+    lines.push('【任务】按系统提示的 JSON 契约转写图片内容。');
+    return lines.join('\n\n');
+  }
+
+  function transcribeKey(q, items) {
+    const urls = (items || []).map((i) => i.url).join('|');
+    return 'ocr|' + urls + '|' + CXAI.U.normText(q && q.stem).slice(0, 160);
+  }
+
+  /**
+   * 用读图模型把图片转写成文字。
+   * @returns {Promise<{text,questionText,options,kind,confidence,providerLabel,raw}>}
+   */
+  async function transcribe(question, provider, items) {
+    provider = provider || pickProvider();
+    if (!provider) throw new Error('没有可用的读图模型：请在设置里添加一个支持图片输入的模型（如 qwen-vl-max / glm-4v-plus / magpie 网关）');
+    if (!items || !items.length) throw new Error('没有可转写的图片');
+    const key = transcribeKey(question, items);
+    const hit = ocrCache.get(key);
+    if (hit) return Object.assign({ cached: true }, hit.value);
+
+    const messages = [
+      { role: 'system', content: SYSTEM_VISION },
+      {
+        role: 'user',
+        content: [{ type: 'text', text: buildVisionUserText(question) }].concat(
+          items.map((i) => ({ type: 'image_url', image_url: { url: i.dataUrl } }))
+        )
+      }
+    ];
+    const res = await CXAI.AI.callProvider(provider, messages, { temperature: 0.1, maxTokens: 1500 });
+    const obj = CXAI.U.safeJson(res.text) || {};
+    const out = {
+      text: String(obj.text || obj.transcript || obj.content || '').trim(),
+      questionText: String(obj.questionText || '').trim(),
+      options: Array.isArray(obj.options) ? obj.options.map((x) => String(x == null ? '' : x).trim()).filter(Boolean) : [],
+      kind: Array.isArray(obj.kind) ? obj.kind.map(String) : [],
+      confidence: Number(obj.confidence) > 0 && Number(obj.confidence) <= 1 ? Number(obj.confidence) : 0.6,
+      providerId: provider.id,
+      providerLabel: provider.label,
+      raw: res.text
+    };
+    if (!out.text && !out.questionText && !out.options.length) {
+      // 模型没按契约输出：原文兜底，至少别丢信息
+      out.text = String(res.text || '').trim().slice(0, 4000);
+      out.confidence = Math.min(out.confidence, 0.45);
+    }
+    remember(ocrCache, key, out, cfg().cacheSize);
+    return out;
+  }
+
+  /** 把转写结果拼成给判题模型的文字块 */
+  function composePromptBlock(vision) {
+    if (!vision) return '';
+    const lines = ['【图片转写】以下内容由读图模型从题目图片中提取：'];
+    if (vision.questionText) lines.push('图内题干：' + vision.questionText);
+    if (vision.text) lines.push(vision.text);
+    if (vision.options && vision.options.length) lines.push('图内选项：\n' + vision.options.join('\n'));
+    if (!vision.questionText && !vision.text && !(vision.options || []).length) return '';
+    lines.push('（转写可能有误差，题干与选项以上下文的页面文字为准，冲突时以页面文字优先。）');
+    return lines.join('\n');
+  }
+
+  function clear() {
+    imgCache.clear();
+    ocrCache.clear();
+  }
+
+  function stats() {
+    let bytes = 0;
+    imgCache.forEach((v) => {
+      bytes += (v.value && v.value.bytes) || 0;
+    });
+    return { images: imgCache.size, transcripts: ocrCache.size, bytes: bytes };
+  }
+
+  return {
+    SYSTEM_VISION,
+    cfg,
+    isEnabled,
+    load,
+    prepare,
+    pickProvider,
+    panelHasVision,
+    transcribe,
+    composePromptBlock,
+    buildVisionUserText,
+    dataUrlBytes,
+    clear,
+    stats
+  };
+})();
+
+/* ==================== 04-ai.js ==================== */
+/* ---------------- AI 层：模型调用 + 多重判定 ----------------
+ * 无题库。每道题都交给模型现场推理，并用"议会 + 交叉复核 + 仲裁"三重机制收敛。
+ *
+ *   Round 1  并行独立作答    N 个模型/多次采样各自给答案 + 置信度
+ *   Round 2  交叉复核        每个模型审阅别人的答案，可改判（权重 1.2 倍）
+ *   Round 3  仲裁            分歧时由最高权重模型做最终裁决
+ *   收敛规则 加权一致率 >= voteThreshold 直接采纳，否则逐级升级
+ */
+
+CXAI.AI = (function () {
+  const SYSTEM_SOLVE = [
+    '你是一位严谨的中国高校考试答题专家，学科覆盖语文、数学、英语、物理、化学、生物、政治、历史、地理、计算机、医学、法学、管理学、经济学、教育学等全部科目。',
+    '',
+    '严格遵守以下输出契约：',
+    '1. 只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释性前后缀。',
+    '2. JSON 结构固定为：{"answer":"<答案>","confidence":<0到1的小数>,"reason":"<不超过60字的核心依据>"}',
+    '3. answer 字段的写法：',
+    '   - 单选题：单个选项字母，如 "B"',
+    '   - 多选题：选项字母连写、按字母升序，如 "ACD"',
+    '   - 判断题：单个选项字母（即使选项文本是"正确/错误""对/错""√/×""True/False"，也用字母）',
+    '   - 填空题 / 简答题 / 论述题：直接写答案内容；多个空之间用 "|||" 分隔，顺序与题目空位一致',
+    '4. confidence 必须真实反映把握程度，不要一律给高分。',
+    '5. 题干缺字、选项缺失、图片无法辨识时：仍给出最佳猜测，但 confidence 不得高于 0.4，并在 reason 中注明"信息不全"。',
+    '6. 宁可给出一个有依据的判断，也不要输出无法解析的内容。'
+  ].join('\n');
+
+  const SYSTEM_CRITIQUE = [
+    '你是一位考试答案复核专家。你会看到一道题和若干位答题者给出的答案，任务是指出错误、给出你独立判断的正确答案。',
+    '',
+    '输出契约：只输出一个 JSON 对象，结构为：',
+    '{"answer":"<你最终认为正确的答案>","confidence":<0到1>,"agreeWith":"<你认为正确的候选编号，如 2；都不对填 none>","reason":"<不超过60字为何这样判>"}',
+    '不要输出 JSON 以外的内容。'
+  ].join('\n');
+
+  const SYSTEM_ARBITER = [
+    '你是最终裁决者。多位专家对同一道题给出了不同答案，请综合他们的推理独立判断，给出唯一最终答案。',
+    '',
+    '输出契约：只输出一个 JSON 对象：',
+    '{"answer":"<最终答案>","confidence":<0到1>,"reason":"<不超过80字裁决依据>"}',
+    '不要输出 JSON 以外的内容。'
+  ].join('\n');
+
+  /* ---------------- 底层请求 ---------------- */
+
+  /** 通用请求：method='GET' 时不带 body */
+  function httpMethod(method, url, headers, body, timeoutMs) {
+    const hasBody = body != null;
+    const payload = hasBody ? JSON.stringify(body) : undefined;
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest === 'function') {
+        GM_xmlhttpRequest({
+          method: method,
+          url,
+          headers,
+          data: payload,
+          timeout: timeoutMs || 90000,
+          onload: (res) => {
+            let parsed = null;
+            try {
+              parsed = JSON.parse(res.responseText);
+            } catch (e) {}
+            if (res.status >= 200 && res.status < 300) resolve(parsed || {});
+            else {
+              const msg =
+                (parsed && parsed.error && (parsed.error.message || parsed.error.code)) ||
+                (res.responseText || '').slice(0, 300) ||
+                'HTTP ' + res.status;
+              reject(new Error('HTTP ' + res.status + ' · ' + msg));
+            }
+          },
+          onerror: () => reject(new Error('网络连接失败（检查 baseURL / 代理）')),
+          ontimeout: () => reject(new Error('请求超时'))
+        });
+        return;
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), timeoutMs || 90000);
+      const init = { method: method, headers: headers, signal: ctrl.signal };
+      if (hasBody) init.body = payload;
+      fetch(url, init)
+        .then(async (r) => {
+          const text = await r.text();
+          let parsed = null;
+          try {
+            parsed = JSON.parse(text);
+          } catch (e) {}
+          clearTimeout(timer);
+          if (r.ok) resolve(parsed || {});
+          else reject(new Error('HTTP ' + r.status + ' · ' + (text || '').slice(0, 300)));
+        })
+        .catch((e) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+    });
+  }
+
+  function httpJson(url, headers, body, timeoutMs) {
+    return httpMethod('POST', url, headers, body, timeoutMs);
+  }
+
+  /* ---------- 三种接口风格的报文构造 ---------- */
+
+  function flatten(content) {
+    if (content == null) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((c) => (c && typeof c === 'object' ? (c.type === 'text' ? c.text : c.type === 'image_url' ? '[图片]' : '') : String(c || '')))
+        .join('\n');
+    }
+    return String(content);
+  }
+
+  function splitDataUrl(url) {
+    const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(url || ''));
+    if (!m) return null;
+    return { mime: m[1] || 'image/png', base64: m[3] || '', isBase64: !!m[2] };
+  }
+
+  /** 统一的 parts（OpenAI 风格）→ 各家格式 */
+  function contentParts(messages) {
+    const sys = messages.filter((m) => m.role === 'system').map((m) => flatten(m.content)).join('\n\n');
+    const rest = messages.filter((m) => m.role !== 'system');
+    return { system: sys, turns: rest };
+  }
+
+  function toAnthropic(content) {
+    if (typeof content === 'string') return [{ type: 'text', text: content }];
+    return (content || []).map((c) => {
+      if (!c || typeof c !== 'object') return { type: 'text', text: String(c || '') };
+      if (c.type === 'text') return { type: 'text', text: String(c.text || '') };
+      if (c.type === 'image_url') {
+        const u = (c.image_url && c.image_url.url) || '';
+        const d = splitDataUrl(u);
+        if (d) return { type: 'image', source: { type: 'base64', media_type: d.mime, data: d.base64 } };
+        return { type: 'image', source: { type: 'url', url: u } };
+      }
+      return { type: 'text', text: '' };
+    });
+  }
+
+  function toGeminiParts(content) {
+    if (typeof content === 'string') return [{ text: content }];
+    return (content || []).map((c) => {
+      if (!c || typeof c !== 'object') return { text: String(c || '') };
+      if (c.type === 'text') return { text: String(c.text || '') };
+      if (c.type === 'image_url') {
+        const u = (c.image_url && c.image_url.url) || '';
+        const d = splitDataUrl(u);
+        if (d) return { inline_data: { mime_type: d.mime, data: d.base64 } };
+        return { file_data: { file_uri: u } };
+      }
+      return { text: '' };
+    });
+  }
+
+  /**
+   * 按 provider.apiStyle 生成 {url, headers, body}。
+   * 支持：openai（绝大多数中转/本地服务）、anthropic（Messages）、gemini（generateContent）。
+   * magpie 网关三种都吃，换风格只改这一个下拉框。
+   */
+  function buildRequest(provider, messages, opts) {
+    opts = opts || {};
+    const style = provider.apiStyle === 'anthropic' ? 'anthropic' : provider.apiStyle === 'gemini' ? 'gemini' : 'openai';
+    const base = String(provider.baseURL || '').replace(/\/+$/, '');
+    const key = String(provider.apiKey || '');
+    const temp = opts.temperature != null ? opts.temperature : provider.temperature != null ? provider.temperature : 0.2;
+    const maxTokens = Number(opts.maxTokens || provider.maxTokens || 700) || 700;
+    const headers = { 'Content-Type': 'application/json' };
+    let url = base;
+    let body = {};
+
+    if (style === 'anthropic') {
+      url = /\/messages$/.test(base) ? base : /\/v\d+$/.test(base) ? base + '/messages' : base + '/v1/messages';
+      headers['anthropic-version'] = '2023-06-01';
+      if (key) headers['x-api-key'] = key;
+      const p = contentParts(messages);
+      body = { model: provider.model, max_tokens: maxTokens, temperature: temp, messages: [] };
+      if (p.system) body.system = p.system;
+      p.turns.forEach((m) => {
+        const role = m.role === 'assistant' ? 'assistant' : 'user';
+        const content = toAnthropic(m.content);
+        const last = body.messages[body.messages.length - 1];
+        if (last && last.role === role) last.content = last.content.concat(content);
+        else body.messages.push({ role: role, content: content });
+      });
+      if (!body.messages.length) body.messages.push({ role: 'user', content: [{ type: 'text', text: '' }] });
+    } else if (style === 'gemini') {
+      const gmodel = String(provider.model || '');
+      url = /:generateContent/.test(base)
+        ? base
+        : base + '/v1beta/models/' + encodeURIComponent(gmodel) + ':generateContent';
+      if (key) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(key);
+      const p = contentParts(messages);
+      body = {
+        contents: p.turns.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: toGeminiParts(m.content) })),
+        generationConfig: { temperature: temp, maxOutputTokens: maxTokens }
+      };
+      if (p.system) body.systemInstruction = { parts: [{ text: p.system }] };
+      if (!body.contents.length) body.contents.push({ role: 'user', parts: [{ text: '' }] });
+    } else {
+      url = /\/chat\/completions$/.test(base) ? base : base + '/chat/completions';
+      if (key) headers.Authorization = 'Bearer ' + key;
+      body = { model: provider.model, messages: messages, temperature: temp, stream: false };
+      body[provider.maxTokensField || 'max_tokens'] = maxTokens;
+      if (provider.jsonMode) body.response_format = { type: 'json_object' };
+    }
+
+    if (provider.extraHeaders && typeof provider.extraHeaders === 'object') Object.assign(headers, provider.extraHeaders);
+    if (provider.extraBody && typeof provider.extraBody === 'object') {
+      // 用户可以覆盖任何字段（top_p / reasoning_effort / enable_thinking …）
+      Object.keys(provider.extraBody).forEach((k) => {
+        const v = provider.extraBody[k];
+        if (v && typeof v === 'object' && !Array.isArray(v) && body[k] && typeof body[k] === 'object' && !Array.isArray(body[k])) {
+          body[k] = CXAI.U.mergeDeep(body[k], v);
+        } else {
+          body[k] = v;
+        }
+      });
+    }
+    return { url: url, headers: headers, body: body, style: style };
+  }
+
+  function extractText(res, style) {
+    if (!res) return null;
+    if (style === 'anthropic') {
+      if (typeof res.content === 'string') return res.content;
+      if (Array.isArray(res.content)) {
+        const t = res.content
+          .filter((c) => c && (c.type === 'text' || c.text))
+          .map((c) => String(c.text || ''))
+          .join('\n')
+          .trim();
+        return t || null;
+      }
+      return null;
+    }
+    if (style === 'gemini') {
+      const cand = res.candidates && res.candidates[0];
+      const parts = (cand && cand.content && cand.content.parts) || [];
+      const t = parts
+        .map((p) => String((p && p.text) || ''))
+        .join('')
+        .trim();
+      return t || null;
+    }
+    const choice = res.choices && res.choices[0];
+    const content = choice && choice.message && choice.message.content;
+    if (content == null) return null;
+    return typeof content === 'string' ? content : flatten(content);
+  }
+
+  /**
+   * 拉取该 provider 的可用模型列表（各家 /models 端点）。
+   * 返回 [{id, label}]，按 id 排序去重。失败直接抛错，由调用方提示。
+   */
+  async function listModels(provider) {
+    provider = CXAI.normalizeProvider(provider, 0);
+    const style = provider.apiStyle === 'anthropic' ? 'anthropic' : provider.apiStyle === 'gemini' ? 'gemini' : 'openai';
+    const base = String(provider.baseURL || '').replace(/\/+$/, '');
+    const key = String(provider.apiKey || '');
+    const headers = { 'Content-Type': 'application/json' };
+    let url = base;
+
+    if (style === 'anthropic') {
+      url = /\/models$/.test(base) ? base : /\/v\d+$/.test(base) ? base + '/models' : base + '/v1/models';
+      headers['anthropic-version'] = '2023-06-01';
+      if (key) headers['x-api-key'] = key;
+    } else if (style === 'gemini') {
+      url = /\/models$/.test(base) ? base : base + '/v1beta/models';
+      if (key) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'key=' + encodeURIComponent(key);
+    } else {
+      url = /\/models$/.test(base) ? base : base.replace(/\/chat\/completions$/, '') + '/models';
+      if (key) headers.Authorization = 'Bearer ' + key;
+    }
+    if (provider.extraHeaders && typeof provider.extraHeaders === 'object') Object.assign(headers, provider.extraHeaders);
+
+    const res = await httpMethod('GET', url, headers, null, Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) : 15000);
+    const raw = (res && (res.data || res.models || res.result)) || [];
+    const arr = Array.isArray(raw) ? raw : [];
+    const seen = {};
+    const out = [];
+    arr.forEach((m) => {
+      if (!m) return;
+      let id = m.id || m.name || m.model || m.model_name;
+      if (!id) return;
+      id = String(id).replace(/^models\//, '');
+      if (style === 'gemini') {
+        const methods = m.supportedGenerationMethods || m.supported_generation_methods;
+        if (Array.isArray(methods) && !methods.some((x) => /generateContent/i.test(String(x)))) return;
+      }
+      if (seen[id]) return;
+      seen[id] = 1;
+      const dn = m.display_name || m.displayName || '';
+      out.push({ id: id, label: dn && dn !== id ? dn + ' · ' + id : id });
+    });
+    out.sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    return out;
+  }
+
+  /** 发一次对话请求，返回 {text, usage, model, style} */
+  async function callProvider(provider, messages, opts) {
+    opts = opts || {};
+    provider = CXAI.normalizeProvider(provider, 0);
+    const cfg = CXAI.Cfg.get('ai.judge', {});
+    const req = buildRequest(provider, messages, opts);
+    const timeoutMs = Number(provider.timeoutMs) > 0 ? Number(provider.timeoutMs) : cfg.timeoutMs || 90000;
+    const retries = Math.max(0, cfg.retries != null ? cfg.retries : 1);
+    let lastErr = null;
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        const res = await httpJson(req.url, req.headers, req.body, timeoutMs);
+        if (res && res.error && !res.choices && !res.content && !res.candidates) {
+          throw new Error((res.error && (res.error.message || res.error.code)) || '端点返回错误');
+        }
+        const text = extractText(res, req.style);
+        if (text == null) {
+          if (res && res.choices && res.choices[0] && res.choices[0].message && res.choices[0].message.reasoning_content) {
+            throw new Error('模型只返回了 reasoning_content，没有正文（试试关掉推理模式或换模型）');
+          }
+          throw new Error('响应缺少正文（style=' + req.style + '）');
+        }
+        return { text: String(text), usage: res.usage || null, model: res.model || provider.model, style: req.style };
+      } catch (e) {
+        lastErr = e;
+        // JSON 模式不被支持时自动降级
+        if (req.body.response_format && /response_format|json_object|400/i.test(e.message)) {
+          delete req.body.response_format;
+          continue;
+        }
+        if (attempt < retries) await CXAI.U.sleep(600 * (attempt + 1));
+      }
+    }
+    throw lastErr || new Error('调用失败');
+  }
+
+  /* ---------------- Prompt 构建 ---------------- */
+
+  function optionBlock(q) {
+    if (!q.options || q.options.length === 0) return '';
+    return q.options.map((o) => `${o.key}. ${o.text}`).join('\n');
+  }
+
+  function buildSolveMessages(q, hint, vctx, provider) {
+    const lines = [`【题型】${q.typeLabel}`, `【题干】${q.stem || '(题干为空)'}`];
+    const nImg = q.images ? q.images.length : 0;
+    const mode = vctx && vctx.mode;
+    if (nImg) {
+      if (mode === 'inline' && provider && provider.vision) lines.push(`【图片】本题含 ${nImg} 张图片，已作为图片消息附在下方，请直接读图。`);
+      else if (mode === 'ocr') lines.push(`【图片】本题原图已由读图模型转写为文字（见下方【图片转写】），请据此作答。`);
+      else lines.push(`【图片】本题含 ${nImg} 张图片，但当前没有可用读图通道，请按已抓到的文字尽力作答，必要时降低置信度。`);
+    }
+    if (vctx && vctx.vision) {
+      const block = CXAI.Vision.composePromptBlock(vctx.vision);
+      if (block) lines.push(block);
+    }
+    const ob = optionBlock(q);
+    if (ob) lines.push(`【选项】\n${ob}`);
+    else lines.push('【说明】本题为填答题，没有选项，请直接给出要填写的答案。');
+    if (hint) lines.push(`【提示】${hint}`);
+    lines.push('【输出】只输出 JSON 对象。');
+    const userText = lines.join('\n\n');
+
+    const attach = !!(provider && provider.vision && vctx && vctx.mode === 'inline' && vctx.imageParts && vctx.imageParts.length);
+    if (attach) {
+      return [
+        { role: 'system', content: SYSTEM_SOLVE },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: userText }].concat(
+            vctx.imageParts.map((i) => ({ type: 'image_url', image_url: { url: i.dataUrl } }))
+          )
+        }
+      ];
+    }
+    return [
+      { role: 'system', content: SYSTEM_SOLVE },
+      { role: 'user', content: userText }
+    ];
+  }
+
+  function visionTail(q, vctx) {
+    const lines = [];
+    if (vctx && vctx.vision) {
+      const block = CXAI.Vision.composePromptBlock(vctx.vision);
+      if (block) lines.push(block);
+    }
+    return lines;
+  }
+
+  function buildCritiqueMessages(q, drafts, vctx) {
+    const lines = [`【题型】${q.typeLabel}`, `【题干】${q.stem || '(题干为空)'}`];
+    const ob = optionBlock(q);
+    if (ob) lines.push(`【选项】\n${ob}`);
+    visionTail(q, vctx).forEach((l) => lines.push(l));
+    const cand = drafts
+      .map((d, i) => `${i + 1}. ${d.answerText}（置信度 ${d.confidence.toFixed(2)}）理由：${d.reason || '无'}`)
+      .join('\n');
+    lines.push(`【候选答案】\n${cand}`);
+    lines.push('【输出】只输出 JSON 对象。');
+    return [
+      { role: 'system', content: SYSTEM_CRITIQUE },
+      { role: 'user', content: lines.join('\n\n') }
+    ];
+  }
+
+  function buildArbiterMessages(q, drafts, critiques, vctx) {
+    const lines = [`【题型】${q.typeLabel}`, `【题干】${q.stem || '(题干为空)'}`];
+    const ob = optionBlock(q);
+    if (ob) lines.push(`【选项】\n${ob}`);
+    visionTail(q, vctx).forEach((l) => lines.push(l));
+    const cand = drafts
+      .map((d, i) => `初答${i + 1}：${d.answerText}（置信度 ${d.confidence.toFixed(2)}）理由：${d.reason || '无'}`)
+      .join('\n');
+    lines.push(`【初答】\n${cand}`);
+    if (critiques && critiques.length) {
+      lines.push(
+        `【复核意见】\n` +
+          critiques
+            .map((c, i) => `复核${i + 1}：${c.answerText}（置信度 ${c.confidence.toFixed(2)}，同意候选 ${c.agreeWith || 'none'}）理由：${c.reason || '无'}`)
+            .join('\n')
+      );
+    }
+    lines.push('【输出】只输出 JSON 对象。');
+    return [
+      { role: 'system', content: SYSTEM_ARBITER },
+      { role: 'user', content: lines.join('\n\n') }
+    ];
+  }
+
+  /* ---------------- 答案解析 ---------------- */
+
+  /** 把模型给的原始答案映射为选项 key 数组（选择题）或纯文本（填空题） */
+  function resolveAnswerKeys(answer, q) {
+    if (answer == null) return null;
+    const raw = String(answer).trim();
+    if (!raw) return null;
+
+    if (q.type === 'completion' || q.type === 'line' || q.options.length === 0) {
+      return { keys: [], text: raw };
+    }
+
+    const keys = q.options.map((o) => o.key);
+    // 1) 字母直取
+    const letters = (raw.toUpperCase().match(/[A-H]/g) || []).filter((l) => keys.indexOf(l) >= 0);
+    if (letters.length) {
+      const uniq = Array.from(new Set(letters)).sort();
+      return { keys: uniq, text: uniq.join('') };
+    }
+
+    // 2) 选项文本精确匹配
+    const norm = CXAI.U.normText(raw);
+    for (const o of q.options) {
+      if (CXAI.U.normText(o.text) === norm) return { keys: [o.key], text: o.key };
+    }
+
+    // 3) 判断题语义映射
+    if (q.type === 'judgement') {
+      const truthy = /正确|对|是|√|true|yes/i.test(raw);
+      const falsy = /错误|错|否|×|false|no/i.test(raw);
+      if (truthy !== falsy) {
+        const want = truthy;
+        for (const o of q.options) {
+          const t = CXAI.U.normText(o.text);
+          const isTrue = /^(正确|对|是|√|true|yes|t)$/.test(t);
+          const isFalse = /^(错误|错|否|×|false|no|f)$/.test(t);
+          if ((want && isTrue) || (!want && isFalse)) return { keys: [o.key], text: o.key };
+        }
+      }
+    }
+
+    // 4) 相似度兜底
+    let best = null;
+    let bestScore = 0;
+    for (const o of q.options) {
+      const s = CXAI.U.similarity(raw, o.text);
+      if (s > bestScore) {
+        bestScore = s;
+        best = o.key;
+      }
+    }
+    if (best && bestScore >= 0.34) return { keys: [best], text: best };
+
+    return null;
+  }
+
+  /** 解析模型返回的 JSON 为统一结构 */
+  function parseModelResult(text, q) {
+    const obj = CXAI.U.safeJson(text);
+    let answer = obj && (obj.answer != null ? obj.answer : obj.Answer != null ? obj.Answer : obj.result);
+    let confidence = obj && Number(obj.confidence != null ? obj.confidence : obj.置信度);
+    let reason = obj && (obj.reason || obj.analysis || obj.explain || '');
+    let agreeWith = obj && obj.agreeWith;
+
+    if (answer == null) {
+      // 纯文本兜底：抠 "答案：A" / 独立字母
+      const m = /(?:答案|answer)\s*[:：]?\s*([A-H](?:\s*[,、]?\s*[A-H])*)/i.exec(text);
+      if (m) answer = m[1];
+      else {
+        const only = /^\s*([A-H](?:\s*[,、]?\s*[A-H]){0,7})\s*$/.exec(text);
+        if (only) answer = only[1];
+      }
+    }
+    if (answer == null) return null;
+
+    const resolved = resolveAnswerKeys(answer, q);
+    if (!resolved) return null;
+
+    if (!isFinite(confidence) || confidence <= 0 || confidence > 1) {
+      // 模型给了百分比或缺失
+      if (isFinite(confidence) && confidence > 1 && confidence <= 100) confidence = confidence / 100;
+      else confidence = 0.6;
+    }
+    return {
+      keys: resolved.keys,
+      answerText: resolved.text,
+      confidence: CXAI.U.clamp(confidence, 0.01, 1),
+      reason: String(reason || '').slice(0, 200),
+      agreeWith: agreeWith != null ? String(agreeWith) : null,
+      raw: text
+    };
+  }
+
+  /* ---------------- 投票 ---------------- */
+
+  function tally(drafts) {
+    const bucket = new Map();
+    let total = 0;
+    for (const d of drafts) {
+      const k = d.answerText || '∅';
+      const w = (d.weight || 1) * (d.confidence || 0.5);
+      total += w;
+      const cur = bucket.get(k) || { key: k, score: 0, count: 0, supporters: [] };
+      cur.score += w;
+      cur.count += 1;
+      cur.supporters.push(d.providerLabel || d.providerId || '模型');
+      bucket.set(k, cur);
+    }
+    const list = Array.from(bucket.values()).sort((a, b) => b.score - a.score || b.count - a.count);
+    const top = list[0];
+    return {
+      list,
+      winner: top,
+      ratio: total > 0 && top ? top.score / total : 0
+    };
+  }
+
+  /* ---------------- 判定主流程 ---------------- */
+
+  function buildPanel() {
+    const judgeCfg = CXAI.Cfg.get('ai.judge', {});
+    const all = CXAI.Cfg.activeProviders();
+    if (all.length === 0) throw new Error('没有启用的模型：请到设置里填写 API Key');
+
+    if (judgeCfg.mode === 'fast') {
+      const base = all[0];
+      const n = Math.max(2, Math.min(5, judgeCfg.panelSize || 3));
+      return Array.from({ length: n }, (_, i) => ({
+        ...base,
+        providerLabel: base.label + '#' + (i + 1),
+        temperature: 0.15 + i * 0.35,
+        __sample: i
+      }));
+    }
+    if (judgeCfg.mode === 'single') return [all[0]];
+
+    const size = Math.max(1, Math.min(all.length, judgeCfg.panelSize || 3));
+    let list = all.slice(0, size);
+    // 勾了「读图模型也参与判题」却因为 panelSize 太小被挤出去时，把最末一票让给它
+    if (CXAI.Cfg.get('ai.vision.judgeToo')) {
+      const boths = all.filter((p) => p.role === 'both');
+      if (boths.length && !list.some((p) => p.role === 'both')) {
+        list = list.slice(0, Math.max(0, size - 1)).concat(boths[0]);
+      }
+    }
+    return list.map((p) => ({ ...p, providerLabel: p.label }));
+  }
+
+  async function runPool(tasks, concurrency) {
+    const results = new Array(tasks.length);
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, async () => {
+      while (cursor < tasks.length) {
+        const i = cursor++;
+        try {
+          results[i] = await tasks[i]();
+        } catch (e) {
+          results[i] = { __error: e };
+        }
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
+  /* ---------------- 读图通道选择 ---------------- */
+
+  /**
+   * 决定这道题的图片怎么处理。
+   * @returns {Promise<{mode:'inline'|'ocr'|'none'|'off', imageParts:any[], vision:any|null, dropped:number}>}
+   */
+  async function resolveVision(question, panel) {
+    const vc = CXAI.Vision.cfg();
+    const none = { mode: 'none', imageParts: [], vision: null, dropped: 0 };
+    if (!vc.enabled || vc.strategy === 'off') return Object.assign({}, none, { mode: 'off' });
+    if (!question.images || !question.images.length) return none;
+
+    const prep = await CXAI.Vision.prepare(question);
+    if (!prep.items.length) {
+      CXAI.Log.warn(`第 ${(question.index || 0) + 1} 题含 ${question.images.length} 张图片，但一张也没读成功，按纯文本判题`);
+      return Object.assign({}, none, { dropped: prep.dropped });
+    }
+
+    const panelVision = CXAI.Vision.panelHasVision(panel);
+    const doOcr = async () => {
+      const vp = CXAI.Vision.pickProvider() || (panel.filter((p) => p && p.vision)[0] || null);
+      if (!vp) return null;
+      try {
+        const vis = await CXAI.Vision.transcribe(question, vp, prep.items);
+        CXAI.Log.info(
+          `第 ${(question.index || 0) + 1} 题读图完成（${vp.label}·${prep.items.length}图）：` +
+            CXAI.U.truncate(vis.text || vis.questionText || '(空)', 50)
+        );
+        return vis;
+      } catch (e) {
+        CXAI.Log.warn(`第 ${(question.index || 0) + 1} 题读图失败：${e.message}`);
+        return null;
+      }
+    };
+
+    if (vc.strategy === 'inline') return { mode: 'inline', imageParts: prep.items, vision: null, dropped: prep.dropped };
+    if (vc.strategy === 'ocr') {
+      const vis = await doOcr();
+      return { mode: vis ? 'ocr' : 'none', imageParts: [], vision: vis, dropped: prep.dropped };
+    }
+    // auto：面板里有视觉模型就直传，否则先转写
+    if (panelVision) return { mode: 'inline', imageParts: prep.items, vision: null, dropped: prep.dropped };
+    const vis = await doOcr();
+    if (vis) return { mode: 'ocr', imageParts: [], vision: vis, dropped: prep.dropped };
+    CXAI.Log.warn(`第 ${(question.index || 0) + 1} 题含图片但无可用读图模型，按纯文本判题`);
+    return Object.assign({}, none, { dropped: prep.dropped });
+  }
+
+  async function runSolveRound(panel, q, vctx) {
+    const judgeCfg = CXAI.Cfg.get('ai.judge', {});
+    const tasks = panel.map((p) => async () => {
+      const messages = buildSolveMessages(q, undefined, vctx, p);
+      const t0 = Date.now();
+      const res = await callProvider(p, messages, { temperature: p.temperature });
+      const parsed = parseModelResult(res.text, q);
+      if (!parsed) throw new Error('答案无法解析：' + CXAI.U.truncate(res.text, 120));
+      return {
+        ...parsed,
+        providerId: p.id,
+        providerLabel: p.providerLabel || p.label,
+        weight: p.weight || 1,
+        ms: Date.now() - t0
+      };
+    });
+    const raw = await runPool(tasks, judgeCfg.concurrency || 3);
+    const ok = [];
+    const errors = [];
+    raw.forEach((r, i) => {
+      if (!r) return;
+      if (r.__error) errors.push(`${panel[i].providerLabel || panel[i].label}: ${r.__error.message}`);
+      else ok.push(r);
+    });
+    return { drafts: ok, errors };
+  }
+
+  async function runCritiqueRound(panel, q, drafts, vctx) {
+    const judgeCfg = CXAI.Cfg.get('ai.judge', {});
+    const tasks = panel.map((p) => async () => {
+      const messages = buildCritiqueMessages(q, drafts, vctx);
+      const res = await callProvider(p, messages, { temperature: 0.1 });
+      const parsed = parseModelResult(res.text, q);
+      if (!parsed) throw new Error('复核结果无法解析');
+      return {
+        ...parsed,
+        providerId: p.id,
+        providerLabel: (p.providerLabel || p.label) + '·复核',
+        weight: (p.weight || 1) * 1.2,
+        ms: 0
+      };
+    });
+    const raw = await runPool(tasks, judgeCfg.concurrency || 3);
+    return raw.filter((r) => r && !r.__error);
+  }
+
+  async function runArbiter(provider, q, drafts, critiques, vctx) {
+    const messages = buildArbiterMessages(q, drafts, critiques, vctx);
+    const res = await callProvider(provider, messages, { temperature: 0 });
+    const parsed = parseModelResult(res.text, q);
+    if (!parsed) return null;
+    return {
+      ...parsed,
+      providerId: provider.id,
+      providerLabel: (provider.providerLabel || provider.label) + '·仲裁',
+      weight: (provider.weight || 1) * 1.5
+    };
+  }
+
+  /**
+   * 对一道题做多重判定。
+   * @returns {Promise<{keys:string[],answerText:string,confidence:number,reason:string,stage:string,votes:any[],errors:string[],lowConfidence:boolean}>}
+   */
+  async function solve(question) {
+    const judgeCfg = CXAI.Cfg.get('ai.judge', {});
+    const panel = buildPanel();
+    if (panel.length === 0) throw new Error('模型面板为空');
+
+    // ---- Round 0：读图通道（图片 → data URL 或 文字转写） ----
+    let vctx = { mode: 'none', imageParts: [], vision: null, dropped: 0 };
+    try {
+      vctx = await resolveVision(question, panel);
+    } catch (e) {
+      CXAI.Log.warn('读图准备失败：' + e.message);
+    }
+
+    // ---- Round 1：并行独立作答 ----
+    const round1 = await runSolveRound(panel, question, vctx);
+    if (round1.drafts.length === 0) {
+      throw new Error('全部模型调用失败：' + round1.errors.join(' | '));
+    }
+    let errors = round1.errors.slice();
+    let votes = round1.drafts.slice();
+    let t = tally(votes);
+
+    const visionMeta = {
+      mode: vctx.mode,
+      images: (question.images || []).length,
+      sent: vctx.imageParts ? vctx.imageParts.length : 0,
+      dropped: vctx.dropped || 0,
+      ocrChars: vctx.vision ? String((vctx.vision.text || '') + (vctx.vision.questionText || '')).length : 0,
+      ocrBy: vctx.vision ? vctx.vision.providerLabel : ''
+    };
+
+    const accept = (stage) => ({
+      keys: resolveAnswerKeys(t.winner.key, question).keys,
+      answerText: t.winner.key,
+      confidence: bestConfidence(votes, t.winner.key),
+      reason: bestReason(votes, t.winner.key),
+      stage,
+      ratio: +t.ratio.toFixed(3),
+      votes: votes.map(voteSummary),
+      errors,
+      vision: visionMeta,
+      lowConfidence: bestConfidence(votes, t.winner.key) < (judgeCfg.minConfidence || 0.55) || t.ratio < 0.5
+    });
+
+    // 单模型 / 一致度达标 -> 直接采纳
+    if (panel.length === 1 || judgeCfg.mode === 'single' || t.ratio >= (judgeCfg.voteThreshold || 0.7)) {
+      return accept('panel');
+    }
+
+    // ---- Round 2：交叉复核 ----
+    if (judgeCfg.enableCritique !== false) {
+      CXAI.Log.info(`第 ${question.index + 1} 题分歧（一致率 ${(t.ratio * 100).toFixed(0)}%），发起交叉复核`);
+      const critiques = await runCritiqueRound(panel, question, round1.drafts, vctx);
+      if (critiques.length) {
+        votes = votes.concat(critiques);
+        t = tally(votes);
+        if (t.ratio >= (judgeCfg.voteThreshold || 0.7)) return accept('critique');
+      }
+
+      // ---- Round 3：仲裁 ----
+      if (judgeCfg.enableArbiter !== false) {
+        const arbiterProvider = panel[0];
+        try {
+          const arb = await runArbiter(arbiterProvider, question, round1.drafts, critiques, vctx);
+          if (arb) {
+            votes = votes.concat([arb]);
+            t = tally(votes);
+            return accept('arbiter');
+          }
+        } catch (e) {
+          errors.push('仲裁失败: ' + e.message);
+        }
+      }
+    }
+
+    // 兜底：取加权最高
+    return accept('fallback');
+  }
+
+  function bestConfidence(votes, key) {
+    const same = votes.filter((v) => v.answerText === key);
+    if (!same.length) return 0.5;
+    // 支持者越多、置信度越高越可信
+    const avg = same.reduce((s, v) => s + v.confidence, 0) / same.length;
+    const boost = Math.min(0.12, (same.length - 1) * 0.04);
+    return CXAI.U.clamp(avg + boost, 0.01, 1);
+  }
+
+  function bestReason(votes, key) {
+    const same = votes.filter((v) => v.answerText === key && v.reason);
+    if (!same.length) return '';
+    same.sort((a, b) => b.confidence - a.confidence);
+    return same[0].reason;
+  }
+
+  function voteSummary(v) {
+    return {
+      who: v.providerLabel,
+      answer: v.answerText,
+      confidence: +v.confidence.toFixed(2),
+      reason: v.reason,
+      agreeWith: v.agreeWith
+    };
+  }
+
+  /* ---------------- 连通性自检 ---------------- */
+
+  async function ping(provider) {
+    const t0 = Date.now();
+    const res = await callProvider(
+      provider,
+      [
+        { role: 'system', content: '你是一个连通性测试端点，只输出 JSON。' },
+        { role: 'user', content: '输出 {"answer":"ok","confidence":1,"reason":"ping"}' }
+      ],
+      { temperature: 0, maxTokens: 60 }
+    );
+    return { ok: true, ms: Date.now() - t0, text: CXAI.U.truncate(res.text, 80) };
+  }
+
+  return { solve, ping, listModels, callProvider, parseModelResult, resolveAnswerKeys, tally, buildPanel };
+})();
+
+/* ==================== 05-apply.js ==================== */
+/* ---------------- 执行层：拟人化点选与作答写入 ----------------
+ * 只做三件事：
+ *   1) 把答案落到真实 DOM 上（点选项 / 写填空 / 选判断）
+ *   2) 每步都复核是否真的选中，失败换策略重试
+ *   3) 所有动作带随机延时与真实事件序列，避免"机器点击"特征
+ */
+
+CXAI.Apply = (function () {
+  const POINTER_SEQ = ['pointerover', 'mouseover', 'pointerenter', 'mouseenter', 'pointermove', 'mousemove'];
+
+  function sleep(...a) {
+    return CXAI.U.sleep(...a);
+  }
+
+  /* ---------------- 基础：事件派发 ---------------- */
+
+  function fire(el, type, extra) {
+    const isPointer = /^pointer/.test(type);
+    const isMouse = /^(mouse|click|dblclick|contextmenu)/.test(type);
+    let ev;
+    if (isPointer && typeof PointerEvent === 'function') {
+      ev = new PointerEvent(type, Object.assign({ bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse' }, extra || {}));
+    } else if (isMouse) {
+      ev = new MouseEvent(type, Object.assign({ bubbles: true, cancelable: true, composed: true, view: window }, extra || {}));
+    } else {
+      ev = new Event(type, { bubbles: true, cancelable: true });
+    }
+    el.dispatchEvent(ev);
+  }
+
+  function centerOf(el) {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return null;
+    // 随机落点，避开正中心（真实人手不会每次都点正中）
+    const px = 0.25 + Math.random() * 0.5;
+    const py = 0.3 + Math.random() * 0.4;
+    return {
+      x: Math.round(r.left + r.width * px),
+      y: Math.round(r.top + r.height * py),
+      clientX: Math.round(r.left + r.width * px),
+      clientY: Math.round(r.top + r.height * py)
+    };
+  }
+
+  /**
+   * 拟人点击：指针预热 + 一次激活行为。
+   *
+   * 关键（对齐 ocsjs 的 `option.click()`）：
+   *   **一次操作 = 一次 click**。
+   * 旧实现先 fire('click') 再 el.click()，等于同一选项被 handler 处理两次：
+   *   - 多选/复选的 handler 是 toggle 语义 → 点两次 = 选中又取消；
+   *   - 单选虽然幂等，但页面会因此发两次保存请求，后端按最后一次落库。
+   * 这就是"页面上明明看到点了，超星却记 0 题"的直接来源。
+   */
+  async function humanClick(el, opts) {
+    opts = opts || {};
+    if (!el) return false;
+    try {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch (e) {
+      try {
+        el.scrollIntoView();
+      } catch (e2) {}
+    }
+    await sleep(CXAI.U.randInt(90, 240));
+
+    const pt = centerOf(el) || { clientX: 0, clientY: 0 };
+    const base = {
+      clientX: pt.clientX,
+      clientY: pt.clientY,
+      screenX: pt.clientX + (window.screenX || 0),
+      screenY: pt.clientY + (window.screenY || 0),
+      button: 0,
+      buttons: 0
+    };
+
+    // 指针预热：只负责 hover/按下/抬起的"手感"，不触发激活行为
+    for (const t of POINTER_SEQ) {
+      fire(el, t, base);
+      await sleep(CXAI.U.randInt(5, 18));
+    }
+    fire(el, 'focus', base);
+    fire(el, 'pointerdown', Object.assign({}, base, { buttons: 1 }));
+    fire(el, 'mousedown', Object.assign({}, base, { buttons: 1 }));
+    await sleep(CXAI.U.randInt(45, 120));
+    fire(el, 'pointerup', base);
+    fire(el, 'mouseup', base);
+    await sleep(CXAI.U.randInt(10, 35));
+
+    // 唯一的激发点：原生 click（走页面自己的 handler + 浏览器默认行为）
+    try {
+      el.click();
+    } catch (e) {}
+    return true;
+  }
+
+  /** 一次点击：语义等同 humanClick，留着是为了让调用点读起来明确"只点一次" */
+  function clickOnce(el) {
+    return humanClick(el, {});
+  }
+
+  /* ---------------- 状态探测 ---------------- */
+
+  /** class 列表（避开 "unchecked" 这种含 checked 的坑） */
+  function classTokens(node) {
+    const raw = node && node.className;
+    if (!raw) return [];
+    if (typeof raw === 'string') return raw.split(/\s+/).filter(Boolean);
+    if (raw.baseVal != null) return String(raw.baseVal).split(/\s+/).filter(Boolean);
+    return [];
+  }
+
+  /**
+   * 选中态类名（各版皮肤都可能用到）：
+   *   check_answer / checkAnswer  —— 超星老考试页、作业页
+   *   checked / selected / active / chosed / chosen —— 新版与预览页
+   * 明确排除 unchecked / unselected 这类反向类名。
+   */
+  const SEL_TOKEN = /^(check_?answer|checked|selected|active|chosed|chosen|curSelected)$/i;
+
+  function hasSelClass(node) {
+    if (!node) return false;
+    return classTokens(node).some((t) => !/^un/i.test(t) && SEL_TOKEN.test(t));
+  }
+
+  function inputOf(el) {
+    if (!el) return null;
+    const own = el.querySelector && el.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (own) return own;
+    const host = el.parentElement;
+    return (host && host.querySelector && host.querySelector('input[type="radio"], input[type="checkbox"]')) || null;
+  }
+
+  /**
+   * 选项是否已选中。
+   *
+   * **只在"仅含这一个选项"的容器里查**（见 Scraper.optionScope）：
+   * 超星考试页 .stem_answer 同时包住 A/B/C/D 四个 .answerBg，
+   * 一旦往上找到 .stem_answer 的 `[class*="check_answer"]`，任意一个选项被选就会
+   * 把四个都判成"已选"—— 多选的取消多余勾选因此一次都不执行（真机实测：
+   * 正确答案 AB，页面留下 ACD）。
+   */
+  function sibsOf(q) {
+    return ((q && q.options) || []).map((o) => o.el);
+  }
+
+  function isChecked(optionEl, siblings) {
+    if (!optionEl) return false;
+    const scope = (CXAI.Scraper.optionScope && CXAI.Scraper.optionScope(optionEl, siblings)) || optionEl;
+    for (const node of [optionEl, scope]) {
+      if (node && hasSelClass(node)) return true;
+      if (node && node.getAttribute && node.getAttribute('aria-checked') === 'true') return true;
+      if (node && node.hasAttribute && node.hasAttribute('checked')) return true;
+    }
+    try {
+      if (scope.querySelector && scope.querySelector('[class*="check_answer"], [class*="checkAnswer"]')) return true;
+    } catch (e) {}
+    const inp = inputOf(optionEl);
+    if (inp && (inp.checked || (inp.hasAttribute && inp.hasAttribute('checked')))) return true;
+    return false;
+  }
+
+  /**
+   * 选项状态指纹：类名链 + input.checked。
+   * 页面用什么类名我们事先并不知道，"点完之后指纹变了"是唯一与皮肤无关的客观证据，
+   * 用它代替"必须命中某个特定类名"的判定，可以避免"点了、页面也变了、但脚本仍认为没选中"
+   * 从而连环补点、把已选 toggle 掉的情况。
+   */
+  function stateSig(optionEl) {
+    if (!optionEl) return '';
+    const chain = [optionEl, optionEl.parentElement, optionEl.parentElement && optionEl.parentElement.parentElement].filter(Boolean);
+    const parts = chain.map((n) => classTokens(n).join('.'));
+    const inp = inputOf(optionEl);
+    parts.push(inp ? String(!!inp.checked) + '@' + (inp.getAttribute('checked') || '') : '-');
+    return parts.join('|');
+  }
+
+  async function waitChecked(optionEl, timeoutMs, siblings) {
+    const deadline = Date.now() + (timeoutMs || 1200);
+    while (Date.now() < deadline) {
+      if (isChecked(optionEl, siblings)) return true;
+      await sleep(80);
+    }
+    return isChecked(optionEl, siblings);
+  }
+
+  /* ---------------- 选择题 ---------------- */
+
+  /** 元素是否还挂在文档上：单题模式页面会在 AI 请求期间重绘，旧引用会失效 */
+  function isLive(el) {
+    if (!el) return false;
+    try {
+      if (el.isConnected === true) return true;
+      if (typeof document.contains === 'function') return document.contains(el);
+    } catch (e) {}
+    // 判断不了就当它是活的：点一下没反应也不会有副作用，验收那步会兜住
+    return true;
+  }
+
+  function innerInput(opt) {
+    const el = opt.el;
+    const own = el.querySelector && el.querySelector('input[type="radio"], input[type="checkbox"]');
+    if (own) return own;
+    const host = el.parentElement;
+    return (host && host.querySelector && host.querySelector('input[type="radio"], input[type="checkbox"]')) || null;
+  }
+
+  /**
+   * 点击阶梯：从"最像人手"到"最像注入"，逐级尝试。
+   * 单题模式实测最常见的两种失败是
+   *   1) 页面事件委托挂在 a.answerBg / li 上，点 .answer_p 不冒到 handler；
+   *   2) 页面用 jQuery 绑定，原生 click 不触发（需要 .trigger('click')）。
+   */
+  /** 找选项/祖先上的行内 onclick 代码，用于直接调用页面自己的选中函数 */
+  function pageFnOf(el) {
+    let p = el;
+    for (let i = 0; i < 5 && p; i++) {
+      const attr = p.getAttribute ? p.getAttribute('onclick') : null;
+      if (attr && /[A-Za-z_$][\w$]*\s*\(/.test(attr)) return { node: p, code: attr.trim() };
+      p = p.parentElement;
+    }
+    return null;
+  }
+
+  /**
+   * 点击目标阶梯。顺序对齐 ocsjs：**先点选项元素本身**（ocsjs 就是 `option.click()`，
+   * option 取的是 `.answerBg .answer_p / .textDIV / .eidtDiv`），页面自己的 handler 跑不通
+   * 再退到行内 onclick 函数、容器、input。
+   * 每一步都与上一步不同节点，绝不重复点同一个位置。
+   */
+  function clickPlan(opt) {
+    const el = opt.el;
+    const plan = [];
+    const seen = [];
+    const add = (kind, node, label) => {
+      if (!node || seen.indexOf(node) >= 0) return;
+      seen.push(node);
+      plan.push({ kind, el: node, label });
+    };
+
+    add('human', el, 'self');
+    const pf = pageFnOf(el);
+    if (pf) plan.push({ kind: 'pagefn', el: pf.node, code: pf.code, label: 'page-fn' });
+    // 页面把状态挂在容器上（answerBg / li / label）时，补一次容器点击
+    let p = el;
+    for (let i = 0; i < 3 && p; i++) {
+      p = p.parentElement;
+      if (!p) break;
+      if (/^(LI|LABEL|A)$/.test(p.tagName) || /answerBg|answer_bg|answerItem|option|chose/i.test(String(p.className || ''))) {
+        add('human', p, 'anc:' + p.tagName.toLowerCase());
+        break;
+      }
+    }
+    add('native', innerInput(opt), 'input');
+    add('jquery', el.parentElement || el, 'jq:self');
+    add('hit', el, 'hit-test');
+    return plan;
+  }
+
+  async function perform(step) {
+    // 注意：这里不因为"看起来脱离文档"就跳过。派发事件给游离节点没有任何副作用，
+    // 而 isLive() 在部分页面/沙箱环境下会误判，导致一次点击都发不出去（v1.4.2 的教训）。
+    if (!step || !step.el) return false;
+    try {
+      if (step.kind === 'native') {
+        step.el.click();
+        return true;
+      }
+      if (step.kind === 'hit') {
+        // 选项被透明遮罩/浮层盖住时，事件会落到命中元素上，这里改点真正的命中元素
+        if (typeof document.elementFromPoint !== 'function') return false;
+        const r = step.el.getBoundingClientRect();
+        const x = Math.round(r.left + r.width / 2);
+        const y = Math.round(r.top + r.height / 2);
+        const hit = document.elementFromPoint(x, y);
+        if (!hit || hit === step.el) return false;
+        await humanClick(hit, { nativeFallback: true });
+        return true;
+      }
+      if (step.kind === 'pagefn') {
+        const win = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+        const m = /^([A-Za-z_$][\w$]*)\s*\(/.exec(step.code || '');
+        const fn = m && win[m[1]];
+        if (typeof fn !== 'function') return false;
+        fn.call(win, step.el, window.event);
+        return true;
+      }
+      if (step.kind === 'jquery') {
+        const jq = window.jQuery || (typeof unsafeWindow !== 'undefined' && unsafeWindow.jQuery);
+        if (typeof jq !== 'function') return false;
+        jq(step.el).trigger('click');
+        return true;
+      }
+      await humanClick(step.el, { nativeFallback: true });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 用抓取器重新读一遍页面，判断答案是否真的落到 DOM 上（最可靠的验收） */
+  function freshAnswered(q, keys) {
+    try {
+      const list = (CXAI.Scraper.collect() || {}).questions || [];
+      if (!list.length) return false;
+      const target = CXAI.Scraper.pickSame(list, q);
+      if (!target) return false;
+      const sibs = sibsOf(target);
+      return (keys || []).some((k) => {
+        const o = target.options.filter((x) => x.key === k)[0];
+        return !!(o && (o.answered || isChecked(o.el, sibs)));
+      });
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 失败时把选项的祖先结构记下来，方便定位是哪套页面皮肤 */
+  function domSignature(opt) {
+    const out = [];
+    let p = opt && opt.el;
+    for (let i = 0; i < 5 && p; i++) {
+      out.push(p.tagName.toLowerCase() + (p.className ? '.' + String(p.className).trim().split(/\s+/).slice(0, 2).join('.') : ''));
+      p = p.parentElement;
+    }
+    return out.join(' < ');
+  }
+
+  /**
+   * 处理一道选择题。
+   * @returns {Promise<{ok:boolean, clicked:string[], strategy:string, error?:string}>}
+   */
+  /** 页面上当前真实的答案串：优先页面自己的隐藏域（#answer{qid}/answers{qid}），退回选中标记 */
+  function currentKeys(q) {
+    try {
+      const v = CXAI.Scraper.pageValue(q);
+      if (v && v.value && /^[A-H]+$/i.test(v.value)) return v.value.toUpperCase();
+    } catch (e) {}
+    return CXAI.Scraper.selectedKeys(q);
+  }
+
+  async function answerChoice(q, keys, opts) {
+    opts = opts || {};
+    const sibs = sibsOf(q);
+    const want = (keys || []).filter((k) => q.options.some((o) => o.key === k)).sort();
+    if (!want.length) return { ok: false, clicked: [], strategy: 'none', error: '答案选项不存在' };
+    if (q.type === 'single' || q.type === 'judgement') {
+      // 单选/判断只取第一个：页面自身是单值语义，点新的会自动取消旧的
+      const r = await clickOne(q, want[0], opts);
+      const actual = currentKeys(q);
+      return Object.assign({}, r, { actual, ok: !!(r && r.ok) && actual.indexOf(want[0]) >= 0 });
+    }
+
+    // 多选：以页面真实答案做差量 —— 只补缺的、只取消多的。
+    // 之前靠 isChecked 判断，而 isChecked 会在 .stem_answer 层看到别的选项的勾，
+    // 于是"已有的全跳过、多余的全不改"，最后留下 ACD（正确答案 AB）。
+    const before = currentKeys(q);
+    const clicked = [];
+    const add = want.filter((k) => before.indexOf(k) < 0);
+    const del = opts.clearExtra === false
+      ? []
+      : before.split('').filter((k) => k && want.indexOf(k) < 0);
+
+    for (const k of add) {
+      const opt = q.options.filter((o) => o.key === k)[0];
+      if (!opt) return { ok: false, clicked, strategy: 'multi', error: '选项缺失' };
+      const r = await clickOne(q, k, opts);
+      if (!r.ok) return { ok: false, clicked, strategy: r.strategy, error: r.error, dom: r.dom, actual: currentKeys(q) };
+      clicked.push(k);
+      await sleep(CXAI.U.randInt(220, 620));
+    }
+    for (const k of del) {
+      const opt = q.options.filter((o) => o.key === k)[0];
+      if (!opt) continue;
+      // 取消勾选也必须真的点一下（toggle 语义），点完以页面答案为准
+      const r = await clickOne(q, k, Object.assign({}, opts, { deselect: true }));
+      clicked.push('-' + k);
+      if (!r.ok) break;
+      await sleep(CXAI.U.randInt(180, 420));
+    }
+
+    let actual = currentKeys(q);
+    // 差量点完还不对 → 按"逐项对齐"再补一轮（页面对 toggle 有节流时会出现）
+    if (actual !== want.join('')) {
+      for (const k of want) {
+        if (actual.indexOf(k) >= 0) continue;
+        const r = await clickOne(q, k, opts);
+        if (!r.ok) break;
+        actual = currentKeys(q);
+        if (actual.indexOf(k) >= 0) clicked.push(k);
+        await sleep(CXAI.U.randInt(160, 380));
+      }
+    }
+    const ok = want.every((k) => actual.indexOf(k) >= 0) && (opts.clearExtra === false || actual.length === want.length);
+    return { ok, clicked, strategy: 'multi', actual };
+  }
+
+  /**
+   * 文本兜底：拿着答案选项的文字，重新从页面上抓一遍题，按文字找元素再点。
+   * 单题模式页面会重绘，原引用失效时这条路径能把答案落到新元素上。
+   */
+  async function retryByText(q, keys) {
+    const norm = (t) => CXAI.U.normText(t || '');
+    const wanted = (keys || [])
+      .map((k) => {
+        const o = q.options.filter((x) => x.key === k)[0];
+        return o ? norm(o.text) : '';
+      })
+      .filter(Boolean);
+    if (!wanted.length) return null;
+    let list = [];
+    try {
+      list = (CXAI.Scraper.collect() || {}).questions || [];
+    } catch (e) {
+      return null;
+    }
+    const target = CXAI.Scraper.pickSame(list, q);
+    if (!target || !target.options.length) return null;
+
+    const picked = [];
+    for (const t of wanted) {
+      let opt = target.options.filter((o) => norm(o.text) === t)[0];
+      if (!opt) {
+        const short = t.slice(0, 12);
+        opt = target.options.filter((o) => short && norm(o.text).indexOf(short) >= 0)[0];
+      }
+      if (!opt) return null;
+      const r = await clickOne(target, opt.key, {});
+      if (!r.ok) return { ok: false, clicked: picked, strategy: 'by-text', error: r.error, dom: r.dom };
+      picked.push(opt.key);
+      await sleep(CXAI.U.randInt(200, 460));
+    }
+    if (target.type === 'single' || target.type === 'judgement') {
+      // 单选只认第一个
+      return { ok: picked.length > 0, clicked: picked, strategy: 'by-text' };
+    }
+    return { ok: picked.length === wanted.length, clicked: picked, strategy: 'by-text' };
+  }
+
+  /**
+   * 把某个选项点到"页面上确实处于选中态"。
+   *
+   * 复用 ocsjs 被长期验证正确的三条：
+   *   1) 用原生 el.click() 让页面自己的 handler 跑（不代劳改 DOM、不伪造状态）；
+   *   2) 点一次就等 ~500ms 再看结果，不在同一次操作里连点；
+   *   3) 已经选中就跳过，绝不重复点（toggle 语义的选项一点第二次就回到未选）。
+   *
+   * 在三条之上只加一件事：**状态指纹比对**。
+   * 页面用 check_answer 也好、只改 input.checked 也好、换成别的类名也好，
+   * 只要点完之后指纹和点之前不同，就认定这一下生效了，立刻收手。
+   * 这样既不会因为"类名不认识"而连环补点，也不会把选中态 toggle 掉。
+   */
+  async function clickOne(q, key, opts) {
+    opts = opts || {};
+    const opt = q.options.filter((o) => o.key === key)[0];
+    if (!opt) return { ok: false, clicked: [], strategy: 'none', error: '选项缺失' };
+
+    // 已选中 → 直接过（ocsjs 的 if 判断就是这一条：已选不再点）
+    // 例外：opts.deselect（多选里要取消多余勾选）时必须真的点一下
+    const sibs = sibsOf(q);
+    if (!opts.deselect && isChecked(opt.el, sibs)) return { ok: true, clicked: [key], strategy: 'already' };
+
+    const settleMs = Number(opts.settleMs || 520); // ocsjs: await $.sleep(500)
+    const sigBefore = stateSig(opt.el);
+    const plan = clickPlan(opt);
+    const tried = [];
+    let maxSteps = Number(opts.maxSteps || 3);
+
+    for (const step of plan) {
+      if (tried.filter((t) => t.indexOf('(跳过)') < 0).length >= maxSteps) break;
+      const did = await perform(step);
+      tried.push(step.label + (did ? '' : '(跳过)'));
+      if (!did) continue;
+
+      await sleep(settleMs); // 只等一次，不在这里做任何补点
+
+      const picked = isChecked(opt.el, sibs);
+      const changed = stateSig(opt.el) !== sigBefore;
+      if (picked || changed) {
+        return { ok: true, clicked: [key], strategy: step.label + (changed && !picked ? '+sig' : '') };
+      }
+      // 完全没有变化 → 说明这一下没打到 handler，才换下一个目标（换的是不同节点）
+      await sleep(CXAI.U.randInt(120, 260));
+    }
+
+    let probe = '';
+    try {
+      const r = opt.el.getBoundingClientRect ? opt.el.getBoundingClientRect() : null;
+      probe =
+        'live=' + isLive(opt.el) +
+        ' conn=' + opt.el.isConnected +
+        ' rect=' + (r ? Math.round(r.width) + 'x' + Math.round(r.height) : '?') +
+        ' cls=' + (opt.el.className || '-') +
+        ' sig=' + sigBefore +
+        ' now=' + stateSig(opt.el);
+    } catch (e) {
+      probe = 'probe 失败：' + e.message;
+    }
+    return {
+      ok: false,
+      clicked: [],
+      strategy: 'failed',
+      error: '点击后页面无任何变化（试过 ' + tried.slice(0, 6).join(' / ') + '）',
+      dom: domSignature(opt) + ' ｜ ' + probe
+    };
+  }
+
+  /**
+   * 点完之后的"落库窗口"。
+   *
+   * 超星各版本收集答案的时机不同：作业页要点每题自带的保存按钮，考试页多在
+   * 点击后异步 POST、翻页前再由页面统一保存。原实现在 clickOne 成功后立刻点
+   * "下一题"，等于抢在页面把答案写进内部状态之前换题 —— 表现就是"选项看着是选中的，
+   * 交卷/回看却是 0 题"。
+   *
+   * 这里做两件事：有保存按钮就点一次；再留一段固定静默期给页面的 AJAX 落库。
+   */
+  async function settle(q, minMs) {
+    let saved = false;
+    try {
+      const btn =
+        (q && q.root && q.root.querySelector('[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]')) ||
+        document.querySelector('[onclick*="saveQuestion"], .saveQuestion');
+      if (btn) {
+        await clickOnce(btn);
+        saved = true;
+      }
+    } catch (e) {}
+    const wait = Math.max(Number(minMs || 0), Number(CXAI.Cfg.get('apply.settleMs', 900)) || 900);
+    await sleep(wait);
+    return { saved, waited: wait };
+  }
+
+  /* ---------------- 填空题 ---------------- */
+
+  /** 给原生输入框写值，模拟键盘输入末尾的事件序列 */
+  function setNativeValue(el, value) {
+    const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+    if (desc && desc.set) desc.set.call(el, value);
+    else el.value = value;
+    fire(el, 'keydown');
+    fire(el, 'input');
+    fire(el, 'keyup');
+    fire(el, 'change');
+    fire(el, 'blur');
+  }
+
+  /** 富文本 iframe（有道/超星自带编辑器）写入 */
+  function setFrameValue(frame, value) {
+    const doc = frame.contentDocument;
+    if (!doc) return false;
+    const body = doc.body;
+    if (!body) return false;
+    body.innerHTML = String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>');
+    try {
+      body.dispatchEvent(new doc.defaultView.Event('input', { bubbles: true }));
+      body.dispatchEvent(new doc.defaultView.Event('keyup', { bubbles: true }));
+    } catch (e) {}
+    return true;
+  }
+
+  /** 逐字符"打字"，让 input 事件序列看起来像真人 */
+  async function typeInto(el, text, opts) {
+    opts = opts || {};
+    const target = String(text == null ? '' : text);
+    if (opts.instant) {
+      setNativeValue(el, target);
+      return true;
+    }
+    try {
+      el.focus();
+    } catch (e) {}
+    setNativeValue(el, '');
+    const step = Math.max(1, Math.ceil(target.length / 24));
+    let cur = '';
+    for (let i = 0; i < target.length; i += step) {
+      cur = target.slice(0, i + step);
+      setNativeValue(el, cur);
+      await sleep(CXAI.U.randInt(28, 90));
+    }
+    setNativeValue(el, target);
+    return el.value === target;
+  }
+
+  function splitBlanks(text, count) {
+    const t = String(text || '').trim();
+    if (count <= 1) return [t];
+    let parts = t.split(/\s*\|\|\|\s*/);
+    if (parts.length === count) return parts;
+    parts = t.split(/\s*[;；]\s*/);
+    if (parts.length === count) return parts;
+    // 数量对不上：整段塞第一个空，其余保持
+    const out = new Array(count).fill('');
+    out[0] = t;
+    return out;
+  }
+
+  /* ---------------- 富文本（UEditor） ---------------- */
+
+  /**
+   * 找出这道题上的 UEditor 实例。
+   * 超星填空/简答提交时走 setStuAnswerOfSomeQues() → UE.getEditor(id).sync()，
+   * 而 sync() 取的是 **编辑器实例内部的内容**。v1.4.x 直接往 iframe.body 里写 HTML，
+   * 编辑器实例并不知道，sync() 同步出去仍是空串 —— 这就是"填空/简答看着填了、系统里是 0"。
+   */
+  function editorList(q) {
+    const out = [];
+    const api = CXAI.Scraper.ueditorApi ? CXAI.Scraper.ueditorApi() : null;
+    if (!api || !q) return out;
+    const qid = q.qid || (CXAI.Scraper.qidOf ? CXAI.Scraper.qidOf(q.root) : '');
+    // 顺序很重要：先页面上真实存在的 textarea（填空是 answerEditor{qid}N），
+    // 再退到 answer{qid}（简答的编辑器 id）。反过来的话，UE.getEditor('answer{qid}')
+    // 会为一个不存在的容器造出"空壳实例"（setContent 存在、body 为 null），
+    // 写进去的内容会被 submitForm 里的 sync() 用空内容覆盖掉 —— 又变成"填了没交"。
+    const ids = [];
+    try {
+      Array.from((q.root || document).querySelectorAll('textarea[id]')).forEach((ta) => {
+        if (ids.indexOf(ta.id) < 0) ids.push(ta.id);
+      });
+    } catch (e) {}
+    (q.inputs || []).forEach((el) => {
+      if (el && el.id && ids.indexOf(el.id) < 0) ids.push(el.id);
+    });
+    if (qid) ids.push('answer' + qid);
+    for (const id of ids) {
+      try {
+        const ed = api.getEditor(id);
+        if (ed && typeof ed.setContent === 'function' && ed.body && out.indexOf(ed) < 0) out.push(ed);
+      } catch (e) {}
+    }
+    return out;
+  }
+
+  function toEditorHtml(text) {
+    return String(text == null ? '' : text)
+      .split(/\r?\n/)
+      .map((l) => '<p>' + l.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</p>')
+      .join('');
+  }
+
+  /** 写入编辑器并 sync 回隐藏域，最后按编辑器内容验收 */
+  function setEditorValue(ed, text) {
+    if (!ed || typeof ed.setContent !== 'function') return false;
+    try {
+      if (typeof ed.focus === 'function') ed.focus();
+    } catch (e) {}
+    try {
+      ed.setContent(toEditorHtml(text), false);
+    } catch (e) {
+      try {
+        ed.setContent(toEditorHtml(text));
+      } catch (e2) {
+        return false;
+      }
+    }
+    try {
+      if (typeof ed.sync === 'function') ed.sync();
+    } catch (e) {}
+    try {
+      if (typeof ed.fireEvent === 'function') {
+        ed.fireEvent('contentChange');
+        ed.fireEvent('selectionchange');
+      }
+    } catch (e) {}
+    let got = '';
+    try {
+      got = ed.getPlainTxt ? ed.getPlainTxt() : String(ed.getContent() || '').replace(/<[^>]+>/g, ' ');
+    } catch (e) {}
+    const norm = (t) => String(t || '').replace(/\s+/g, '');
+    const want = norm(String(text == null ? '' : text).slice(0, 24));
+    return !!want && norm(got).indexOf(want) >= 0;
+  }
+
+  /**
+   * 处理填空题 / 简答题。
+   * @returns {Promise<{ok:boolean, filled:number, mode?:string, error?:string}>}
+   */
+  async function answerBlank(q, text, opts) {
+    opts = opts || {};
+    const eds = editorList(q);
+    if (eds.length) {
+      const parts = splitBlanks(text, eds.length);
+      let filled = 0;
+      for (let i = 0; i < eds.length; i++) {
+        const val = parts[i] != null ? parts[i] : String(text || '');
+        if (!val) continue;
+        if (setEditorValue(eds[i], val)) filled++;
+        await sleep(CXAI.U.randInt(160, 420));
+      }
+      if (filled) return { ok: true, filled, total: eds.length, mode: 'ueditor' };
+    }
+    const inputs = (q.inputs || []).filter((el) => el && el.isConnected);
+    if (!inputs.length) {
+      // 回退：从 root 里现找
+      q.inputs = Array.from(q.root.querySelectorAll('textarea, input[type="text"], iframe')).filter((el) => !el.closest('.mark_answer'));
+    }
+    const list = (q.inputs || []).filter((el) => el && el.isConnected);
+    if (!list.length) return { ok: false, filled: 0, error: '未找到输入框' };
+
+    const parts = splitBlanks(text, list.length);
+    let filled = 0;
+    for (let i = 0; i < list.length; i++) {
+      const el = list[i];
+      const val = parts[i] != null ? parts[i] : parts[parts.length - 1] || '';
+      if (!val) continue;
+      if (el.tagName === 'IFRAME') {
+        if (setFrameValue(el, val)) filled++;
+      } else {
+        const ok = await typeInto(el, val, opts);
+        if (ok) filled++;
+      }
+      await sleep(CXAI.U.randInt(160, 420));
+    }
+    // 原生控件也回读一次：input 事件被页面重置时 typeInto 会"写成功但值是空"
+    let got = 0;
+    for (const el of list) {
+      if (el.value != null && String(el.value).trim()) got++;
+      else if (el.tagName === 'IFRAME') {
+        try {
+          if (el.contentDocument && el.contentDocument.body && (el.contentDocument.body.innerText || '').trim()) got++;
+        } catch (e) {}
+      }
+    }
+    if (got) filled = Math.max(filled, got);
+    return { ok: filled > 0, filled, total: list.length, mode: 'native' };
+  }
+
+  /* ---------------- 统一入口 ---------------- */
+
+  /**
+   * 把一道题的判定结果写到页面上。
+   * @param {object} q  题目对象
+   * @param {object} result  CXAI.AI.solve 的返回
+   */
+  async function apply(q, result) {
+    if (!q || !result) return { ok: false, error: '参数缺失' };
+    const opts = {
+      verifyMs: CXAI.Cfg.get('apply.verifyMs', 1100),
+      clearExtra: CXAI.Cfg.get('apply.clearExtra', true),
+      instant: CXAI.Cfg.get('apply.instantType', false)
+    };
+    if (q.type === 'completion' || q.type === 'line' || q.options.length === 0) {
+      const r = await answerBlank(q, result.answerText, opts);
+      let freshBlank = q;
+      try {
+        const l = (CXAI.Scraper.collect() || {}).questions || [];
+        freshBlank = CXAI.Scraper.pickSame(l, q) || q;
+      } catch (e) {}
+      const liveText = (CXAI.Scraper.pageValue(freshBlank) || {}).value || '';
+      return Object.assign({}, r, { actual: liveText, ok: !!(r && r.filled) || !!liveText });
+    }
+    if (q.type === 'judgement' && result.keys.length === 0 && q.options.length) {
+      // 判断但答案没映射到 key：按文本再试一次
+      const mapped = CXAI.AI.resolveAnswerKeys(result.answerText, q);
+      if (mapped && mapped.keys.length) result.keys = mapped.keys;
+    }
+    let r = await answerChoice(q, result.keys, opts);
+    if (!r || !r.ok) {
+      // 兜底：元素可能已经被页面重绘换掉，按选项文字重新找一遍
+      const again = await retryByText(q, result.keys);
+      if (again && again.ok) r = again;
+    }
+    // 最终以页面自己的隐藏域为准（#answer{qid} / answers{qid}），这是"真的落盘了吗"的唯一客观证据。
+    // 必须重新抓一遍：重绘后旧引用已经游离，读它只会得到空值（会误报"没落盘"）。
+    let freshQ = q;
+    try {
+      const list = (CXAI.Scraper.collect() || {}).questions || [];
+      freshQ = CXAI.Scraper.pickSame(list, q) || q;
+    } catch (e) {}
+    const live = (CXAI.Scraper.pageValue(freshQ) || {}).value || (r && r.actual) || '';
+    const want = (result.keys || []).join('');
+    return Object.assign({}, r || {}, {
+      actual: live,
+      ok: !!(r && r.ok) && (q.type === 'completion' ? !!live : (!!live && (want ? live.indexOf(want.split('')[0]) >= 0 : true)))
+    });
+  }
+
+  /** 单题保存（部分考试页每题都有保存按钮） */
+  async function saveOne(q) {
+    const btn =
+      (q.root && q.root.querySelector('[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]')) ||
+      document.querySelector('[onclick*="saveQuestion"]');
+    if (!btn) return false;
+    await clickOnce(btn);
+    await sleep(CXAI.U.randInt(200, 500));
+    return true;
+  }
+
+  /** 整卷提交按钮（默认只找不点，交给人工确认） */
+  function findSubmitButton() {
+    const patterns = [/交卷/, /提交试卷/, /提交答案/, /^提交$/];
+    const nodes = Array.from(document.querySelectorAll('a,button,div,span')).filter((el) => {
+      if (!el.offsetParent) return false;
+      const t = (el.textContent || '').trim();
+      if (t.length > 12) return false;
+      return patterns.some((p) => p.test(t));
+    });
+    return nodes[0] || null;
+  }
+
+  return { humanClick, clickOnce, settle, apply, answerChoice, answerBlank, clickOne, isChecked, stateSig, saveOne, findSubmitButton, typeInto, fire };
+})();
+
+/* ==================== 06-guard.js ==================== */
+/* ---------------- 环境伪装与节流 ----------------
+ * 考试页的常见干扰：
+ *   1) 切屏 / 失焦检测（visibilitychange、blur、document.hidden）
+ *   2) 定时弹窗确认（"是否继续作答"）
+ *   3) 频率检测（同一秒内多点、等间隔点击）
+ * 本模块按配置逐项处理，并给主循环提供"像人"的节奏。
+ */
+
+CXAI.Guard = (function () {
+  let installed = false;
+  let alertTimer = null;
+  const patched = [];
+
+  function on(obj, prop, value) {
+    try {
+      const desc = Object.getOwnPropertyDescriptor(obj, prop);
+      Object.defineProperty(obj, prop, {
+        configurable: true,
+        get() {
+          return typeof value === 'function' ? value() : value;
+        },
+        set() {}
+      });
+      patched.push(() => {
+        try {
+          if (desc) Object.defineProperty(obj, prop, desc);
+          else delete obj[prop];
+        } catch (e) {}
+      });
+    } catch (e) {}
+  }
+
+  /* ---------- 1. 前台伪装 ---------- */
+
+  function patchVisibility() {
+    on(document, 'hidden', false);
+    on(document, 'visibilityState', 'visible');
+    try {
+      document.hasFocus = function () {
+        return true;
+      };
+    } catch (e) {}
+    // 吞掉可见性/失焦事件，避免上报"切屏次数"
+    const killer = (e) => {
+      if (e.type === 'visibilitychange' || e.type === 'blur' || e.type === 'pagehide' || e.type === 'freeze') {
+        e.stopImmediatePropagation();
+        e.stopPropagation();
+      }
+    };
+    ['visibilitychange', 'blur', 'pagehide', 'freeze', 'webkitvisibilitychange'].forEach((t) => {
+      window.addEventListener(t, killer, true);
+      document.addEventListener(t, killer, true);
+    });
+    window.addEventListener('focus', () => {}, true);
+  }
+
+  /* ---------- 2. 防调试噪音 ---------- */
+
+  function patchDebugger() {
+    if (!CXAI.Cfg.get('guard.blockDevtools', true)) return;
+    // 屏蔽极高频率的 debugger 陷阱（只处理 setInterval/setTimeout 里的函数体）
+    const rawSetInterval = window.setInterval;
+    window.setInterval = function (fn, ms) {
+      if (typeof fn === 'function' && /debugger/.test(fn.toString())) return 0;
+      return rawSetInterval.apply(window, arguments);
+    };
+    // 关掉右键/复制限制这类常见的小动作（会挡住自己的 UI）
+    document.addEventListener(
+      'contextmenu',
+      (e) => {
+        e.stopImmediatePropagation();
+      },
+      true
+    );
+  }
+
+  /* ---------- 3. 弹窗自动确认 ---------- */
+
+  /**
+   * 弹窗处理：**不抢在用户前面点**。
+   *
+   * 有些弹窗里是可能要看的信息（提交确认、分数提示、是否继续作答……），立刻点掉
+   * 等于把有用的东西一起关掉。所以改成：
+   *   1) 弹窗出现只记时间，谁都不点；
+   *   2) 等够 `guard.dialogDelaySec` 秒（默认 10，可在设置里改；0 = 永不自动点）；
+   *   3) 期间你自己关掉了 → 元素消失，什么都不做；
+   *   4) 一直没关才点一下，并记一条日志。
+   * 交卷 / 提交试卷类按钮永远不在名单里。
+   */
+  const seen = new WeakMap();
+
+  function dismissDialogs() {
+    let clicked = 0;
+    const delaySec = Number(CXAI.Cfg.get('guard.dialogDelaySec', 10));
+    if (!(delaySec > 0)) {
+      // 0 = 只手动关，连计时都不做
+      return 0;
+    }
+    const killers = [/继续作答/, /继续考试/, /离开/, /确定/, /知道了/, /继续/];
+    const nodes = Array.from(document.querySelectorAll('.layui-layer-btn a, .dialog-btn, .btn, button, a, .popup-btn, [class*="confirm"]'));
+    const now = Date.now();
+    const visible = (el) => {
+      // 不能用 offsetParent 判可见：fixed 定位的弹窗（超星大量使用）offsetParent 恒为 null，
+      // 会被误判成"不可见"而永远不关。getClientRects 对 fixed 也有效。
+      try {
+        if (el.getClientRects && el.getClientRects().length > 0) return true;
+      } catch (e) {}
+      return !!el.offsetParent;
+    };
+    for (const el of nodes) {
+      if (!visible(el)) {
+        seen.delete(el);
+        continue;
+      }
+      const t = (el.textContent || '').trim();
+      if (!t || t.length > 10) continue;
+      if (!killers.some((p) => p.test(t))) continue;
+      // 交卷 / 提交试卷类按钮，任何时候都不自动点
+      if (/交卷|提交试卷|确定提交|结束考试/.test(t)) continue;
+      const first = seen.get(el);
+      if (!first) {
+        seen.set(el, now);
+        CXAI.Log.info('发现弹窗「' + t + '」，' + delaySec + ' 秒内你不关我再自动关');
+        continue;
+      }
+      if (now - first < delaySec * 1000) continue;
+      try {
+        el.click();
+        clicked++;
+        CXAI.Log.warn('弹窗「' + t + '」已 ' + delaySec + ' 秒未处理，自动关闭');
+      } catch (e) {}
+      seen.delete(el);
+    }
+    return clicked;
+  }
+
+  function startAlertWatcher() {
+    if (alertTimer) return;
+    alertTimer = setInterval(() => {
+      try {
+        dismissDialogs();
+      } catch (e) {}
+    }, 1500);
+  }
+
+  /* ---------- 4. 原生 confirm / alert 接管 ---------- */
+
+  function patchNativeDialog() {
+    if (!CXAI.Cfg.get('guard.autoConfirm', true)) return;
+    try {
+      const rawConfirm = window.confirm.bind(window);
+      window.confirm = function (msg) {
+        const text = String(msg == null ? '' : msg);
+        // 交卷 / 提交试卷这类确认，脚本自己没在跑自动交卷时**不要替用户点掉**：
+        // 该看到的提示要能看到（用户明确提过"有些弹窗可能是我们需要的"）。
+        const risky = /交卷|提交试卷|提交答案|结束考试|确认提交/.test(text);
+        const auto = CXAI.Cfg.get('apply.autoSubmit', false);
+        if (risky && !auto) {
+          CXAI.Log.warn('这是交卷确认，交给你自己点：' + text.slice(0, 80));
+          try {
+            return rawConfirm(msg);
+          } catch (e) {
+            return false;
+          }
+        }
+        CXAI.Log.warn('已自动确认 confirm：' + text.slice(0, 80));
+        return true;
+      };
+      window.alert = function (msg) {
+        CXAI.Log.info('已吞掉 alert：' + String(msg).slice(0, 80));
+      };
+    } catch (e) {}
+  }
+
+  /* ---------- 5. 节奏控制 ---------- */
+
+  /**
+   * 下一题之前的等待时间。人工答题不会匀速，这里用
+   * "基础间隔 × 抖动 + 概率性长停顿" 模拟。
+   */
+  function pace(index) {
+    const min = CXAI.Cfg.get('guard.minDelay', 1400);
+    const max = CXAI.Cfg.get('guard.maxDelay', 4200);
+    let wait = CXAI.U.randInt(min, max);
+    // 每 5~8 题插入一次较长停顿（喝水、抬头）
+    const every = CXAI.Cfg.get('guard.longBreakEvery', 6);
+    if (every > 0 && index > 0 && index % every === 0) {
+      wait += CXAI.U.randInt(4000, 9000);
+      CXAI.Log.info(`第 ${index} 题后长停顿 ${Math.round(wait / 1000)}s`);
+    }
+    // 偶发 3% 概率的额外犹豫
+    if (Math.random() < 0.03) wait += CXAI.U.randInt(3000, 7000);
+    return wait;
+  }
+
+  /* ---------- 对外 ---------- */
+
+  function install() {
+    if (installed) return;
+    installed = true;
+    if (CXAI.Cfg.get('guard.enabled', true)) {
+      patchVisibility();
+      patchDebugger();
+      patchNativeDialog();
+      startAlertWatcher();
+      CXAI.Log.ok('环境伪装已启用（前台保持 / 弹窗自动确认 / 节奏抖动）');
+    } else {
+      CXAI.Log.warn('环境伪装未启用');
+    }
+  }
+
+  function uninstall() {
+    patched.forEach((fn) => fn());
+    patched.length = 0;
+    if (alertTimer) clearInterval(alertTimer);
+    alertTimer = null;
+    installed = false;
+  }
+
+  return { install, uninstall, pace, dismissDialogs, installed: () => installed };
+})();
+
+/* ==================== 07-ui.js ==================== */
+/* ---------------- 控制台 UI（Shadow DOM 隔离，避免被页面 CSS 污染） ---------------- */
+
+CXAI.UI = (function () {
+  let host = null;
+  let root = null;
+  let state = { running: false, paused: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
+
+  const CSS = `
+:host { all: initial; }
+* { box-sizing: border-box; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+/* 细滚动条（浅色） */
+* { scrollbar-width: thin; scrollbar-color: #c7cdd8 transparent; }
+*::-webkit-scrollbar { width: 7px; height: 7px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #ccd2dd; border-radius: 7px; }
+*::-webkit-scrollbar-thumb:hover { background: #b6bfcd; }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+.wrap { position: fixed; right: 18px; bottom: 18px; z-index: 2147483000; font-size: 13px; color: #1f2430; }
+
+/* 悬浮球：浅色、平时很淡，可拖 */
+.ball { position: relative; width: 34px; height: 34px; border-radius: 50%;
+  background: rgba(248,250,252,.5); border: 1px solid rgba(203,213,225,.4);
+  color: #9aa3b2; display:flex; align-items:center; justify-content:center;
+  font-size: 10px; font-weight: 600; letter-spacing:.3px; cursor: pointer;
+  opacity: .26; transition: opacity .18s, background .18s, transform .12s, box-shadow .18s;
+  user-select:none; touch-action:none; box-shadow: 0 2px 8px rgba(16,24,40,.08); }
+.ball:hover { opacity: .9; background:rgba(255,255,255,.95); color:#2563eb; border-color:#cbd9f2; box-shadow: 0 3px 10px rgba(37,99,235,.12); }
+.ball.busy { opacity: .4; }
+.ball.busy::after { content:''; position:absolute; right:4px; top:4px; width:6px; height:6px; border-radius:50%; background:#16a34a; }
+/* 长按后弹出的手势提示（球上方） */
+.gmode { position:absolute; right:4px; bottom:44px; background:#fff; border:1px solid #e5e8ee; border-radius:9px;
+  box-shadow:0 8px 22px rgba(16,24,40,.12); padding:5px; display:none; flex-direction:column; gap:2px;
+  font-size:11px; color:#6b7280; white-space:nowrap; z-index:2; }
+.gmode.show { display:flex; }
+.gmode .g { padding:4px 9px; border-radius:6px; transition:.12s; }
+.gmode .g.on { background:#eaf1ff; color:#2563eb; font-weight:600; }
+.gtoast { position:absolute; right:0; bottom:44px; background:#111827; color:#fff; font-size:11px; line-height:1.4;
+  padding:4px 9px; border-radius:7px; opacity:0; transform:translateY(5px); transition:.18s; pointer-events:none;
+  white-space:nowrap; z-index:3; }
+.gtoast.show { opacity:.9; transform:translateY(0); }
+
+/* 运行/结束时球本身变淡绿并显示数字或 OK（不再额外加一个小圆） */
+.ball.running { background: rgba(220,252,231,.46); border-color: rgba(167,243,208,.5); color: #62a987; opacity: .42; }
+.ball.running #balllabel { font-size: 11px; }
+.ball.done { background: rgba(220,252,231,.62); border-color: rgba(167,243,208,.6); color: #4f9e72; opacity: .5; }
+.ball.done #balllabel { font-size: 10px; letter-spacing: .5px; }
+.ball.dragging { opacity: 1; cursor: grabbing; transform: scale(1.05); }
+
+.panel { position:absolute; right:0; bottom:44px; width: 404px; max-height: 76vh; background:#fff; border:1px solid #e5e8ee;
+  border-radius: 12px; box-shadow: 0 16px 44px rgba(16,24,40,.16); display:none; flex-direction:column; overflow:hidden; }
+.panel.show { display:flex; }
+.hd { padding:10px 12px; background:#f7f8fb; border-bottom:1px solid #e8ebf1; display:flex; align-items:center; gap:8px; }
+.hd .t { font-weight:600; font-size:13px; color:#111827; flex:1; }
+.hd .x { cursor:pointer; color:#7b8494; padding:5px 9px; font-size:17px; line-height:1;
+  border-radius:7px; transition:background .15s, color .15s; user-select:none; }
+.hd .x:hover { color:#2563eb; background:#eef4ff; }
+.hd .x.close:hover { color:#dc2626; background:#fdeeee; }
+.stat { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:#e8ebf1; }
+.stat div { background:#fff; padding:7px 6px; text-align:center; }
+.stat b { display:block; font-size:15px; color:#2563eb; font-weight:700; }
+.stat span { font-size:11px; color:#8a93a3; }
+.bar { display:flex; gap:5px; padding:8px 10px; border-bottom:1px solid #e8ebf1; }
+button.b { flex:1; padding:6px 0; border-radius:7px; border:1px solid #dde2ea; background:#fff; color:#374151;
+  cursor:pointer; font-size:11.5px; transition:.15s; }
+button.b:hover { background:#f5f7fb; border-color:#c8d2e0; color:#111827; }
+button.b.primary { background:linear-gradient(135deg,#3b82f6,#6366f1); border:none; color:#fff; font-weight:600; box-shadow:0 2px 8px rgba(59,130,246,.24); }
+button.b.danger { color:#dc2626; border-color:#f0c9c9; background:#fff7f7; }
+button.b:disabled { opacity:.45; cursor:not-allowed; box-shadow:none; }
+
+/* 题号格子：颜色即状态 */
+.qgrid { display:grid; grid-template-columns:repeat(auto-fill, minmax(36px,1fr)); gap:6px;
+  padding:9px 10px; max-height:138px; overflow-y:auto; overflow-x:hidden;
+  border-bottom:1px solid #e8ebf1; background:#fafbfd; }
+.qcard { height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+  font-size:12px; font-weight:600; cursor:pointer; border:1px solid #e2e7ef; background:#fff; color:#6b7280;
+  transition:.15s; user-select:none; overflow:hidden; }
+.qcard:hover { border-color:#bcd0f5; color:#2563eb; background:#f6f9ff; }
+.qcard.ok { background:#eaf8ef; border-color:#bfe6cd; color:#15803d; }
+.qcard.no { background:#fdf6e3; border-color:#f0e0b8; color:#a16207; }
+.qcard.err { background:#fdeeee; border-color:#f3c9c9; color:#b91c1c; }
+.qcard.wait { background:#fef7e6; border-color:#f2dfae; color:#b45309; }
+.qcard.cur { box-shadow: 0 0 0 2px #2563eb inset; }
+.qcard.sel { box-shadow: 0 0 0 2px #2563eb, 0 0 0 4px rgba(37,99,235,.14); }
+
+.qdetail { flex:1; min-height:110px; overflow-y:auto; overflow-x:hidden; padding:9px 12px 10px; background:#fff; }
+.qd-hd { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+.qd-hd .qn { font-weight:700; color:#2563eb; font-size:13px; }
+.qd-hd .tag { font-size:10px; padding:1px 5px; border-radius:4px; background:#eef2f9; color:#5b6b86; }
+.qd-hd .st { font-size:10px; padding:1px 5px; border-radius:4px; margin-left:auto; }
+.qd-hd .st.ok { background:#eaf8ef; color:#15803d; }
+.qd-hd .st.no { background:#fdf6e3; color:#a16207; }
+.qd-hd .st.err { background:#fdeeee; color:#b91c1c; }
+.qd-hd .st.wait { background:#fef7e6; color:#b45309; }
+.qd-hd .st.todo { background:#f4f5f7; color:#6b7280; }
+.qd-jump { font-size:10px; color:#2563eb; cursor:pointer; padding:1px 5px; border:1px solid #cfe0fb; border-radius:4px; background:#f6f9ff; }
+.qd-jump:hover { background:#e9f1ff; }
+.qd-stem { font-size:12px; color:#1f2937; line-height:1.6; margin-bottom:7px; word-break:break-word; }
+.qd-opts { list-style:none; margin:0 0 8px; padding:0; }
+.qd-opts li { display:flex; gap:6px; font-size:11.5px; color:#4b5563; padding:3px 4px; line-height:1.5; word-break:break-word; border-radius:5px; }
+.qd-opts li b { flex:none; width:16px; height:16px; border-radius:4px; background:#f1f3f7; color:#6b7280; font-size:10px;
+  display:flex; align-items:center; justify-content:center; font-weight:700; margin-top:1px; }
+.qd-opts li.ai { background:#f2f7ff; }
+.qd-opts li.ai b { background:#2563eb; color:#fff; }
+.qd-opts li.pg { background:#f1faf4; color:#166534; }
+.qd-opts li.pg b { background:#15803d; color:#fff; }
+.qd-meta { border-top:1px dashed #e5e8ee; padding-top:7px; display:flex; flex-direction:column; gap:5px; }
+.qd-meta .kv { display:flex; align-items:baseline; gap:6px; flex-wrap:wrap; }
+.qd-meta .k { flex:none; min-width:52px; font-size:10.5px; color:#8a93a3; }
+.qd-meta .v { font-size:11.5px; font-weight:600; color:#111827; word-break:break-word; line-height:1.5; }
+.qd-meta .v.ai { color:#2563eb; }
+.qd-meta .v.pg { color:#15803d; }
+.qd-meta .v.muted { font-weight:400; color:#8a93a3; }
+.qd-meta .chip { font-size:10px; line-height:15px; padding:0 5px; border-radius:4px; color:#5b6b86;
+  background:#f4f6fa; border:1px solid #e3e8f0; flex:none; }
+.qd-meta .chip.ok { color:#15803d; background:#eaf8ef; border-color:#bfe6cd; }
+.qd-meta .chip.bad { color:#b91c1c; background:#fdeeee; border-color:#f3c9c9; }
+.qempty { padding:16px 12px; color:#9aa3b2; font-size:11.5px; text-align:center; line-height:1.6; }
+
+.logs { flex:0 0 auto; max-height:0; overflow:hidden; transition:max-height .2s; background:#fff; }
+.logs.show { max-height: 148px; overflow-y:auto; border-top:1px solid #e8ebf1; }
+.lg { padding:2px 12px; font-size:11px; color:#5b6472; line-height:1.55; font-family:ui-monospace,Menlo,monospace; }
+.lg.warn { color:#b45309; } .lg.error { color:#dc2626; } .lg.ok { color:#15803d; }
+.q { padding:8px 12px; border-bottom:1px solid #f0f2f6; }
+.q .h { display:flex; gap:6px; align-items:baseline; }
+.q .idx { color:#8a93a3; font-size:11px; min-width:22px; }
+.q .tag { font-size:10px; padding:1px 5px; border-radius:4px; background:#eef2f9; color:#5b6b86; }
+.q .ans { margin-left:auto; font-weight:700; color:#15803d; font-size:13px; }
+.q .ans.low { color:#b45309; }
+.q .ans.err { color:#dc2626; }
+.q .stem { color:#4b5563; font-size:11.5px; margin:3px 0 0 28px; line-height:1.5; word-break:break-word; }
+.q .meta { margin-left:28px; font-size:10.5px; color:#8a93a3; margin-top:2px; }
+.q .meta em { color:#2563eb; font-style:normal; }
+.ft { padding:6px 12px; border-top:1px solid #e8ebf1; font-size:10.5px; color:#8a93a3; display:flex; align-items:center; gap:10px; background:#f7f8fb; }
+.ft .lg-toggle { margin-left:auto; cursor:pointer; color:#8a93a3; padding:1px 5px; border-radius:4px; }
+.ft .lg-toggle:hover { color:#2563eb; background:#eef4ff; }
+.ft .ftstate { margin-left:0; }
+
+/* 设置层 */
+.mask { position:fixed; inset:0; background:rgba(17,24,39,.32); backdrop-filter: blur(1.5px); display:none; z-index:10; }
+.mask.show { display:block; }
+.dlg { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%); width:min(820px,94vw); height:min(660px,88vh);
+  background:#fff; border:1px solid #e5e8ee; border-radius:12px; display:flex; flex-direction:column; overflow:hidden;
+  box-shadow:0 24px 64px rgba(16,24,40,.22); }
+.dlg .dh { padding:11px 14px; font-weight:600; font-size:13px; color:#111827; border-bottom:1px solid #e8ebf1;
+  display:flex; align-items:center; background:#f7f8fb; }
+.dlg .dh .x { margin-left:auto; cursor:pointer; color:#9aa3b2; }
+.dlg .dh .x:hover { color:#2563eb; }
+.dbody { flex:1; display:flex; min-height:0; }
+.dnav { width:126px; flex:none; border-right:1px solid #eaedf3; background:#fafbfd; padding:10px 8px; display:flex; flex-direction:column; gap:3px; overflow-y:auto; }
+.navhd { font-size:10px; color:#a3abb9; padding:2px 10px 7px; letter-spacing:.5px; }
+.ntab { display:flex; align-items:center; gap:7px; padding:8px 10px; border-radius:8px; font-size:12px; color:#5b6472;
+  cursor:pointer; user-select:none; transition:.15s; }
+.ntab:hover { background:#f1f4f9; color:#111827; }
+.ntab.on { background:#eaf1ff; color:#2563eb; font-weight:600; box-shadow: inset 3px 0 0 #2563eb; }
+.ntab .ic { font-size:12px; opacity:.85; width:14px; text-align:center; }
+.dlg .db { flex:1; min-width:0; overflow-y:auto; overflow-x:hidden; padding:12px 14px; background:#fff; }
+.dlg .df { padding:9px 14px; border-top:1px solid #e8ebf1; display:flex; gap:8px; background:#f7f8fb; }
+.tabs { display:flex; gap:2px; border-bottom:1px solid #e8ebf1; margin:-2px 0 10px; background:#fff; }
+.tab { padding:7px 12px; font-size:12px; color:#6b7280; cursor:pointer; border-radius:7px 7px 0 0; }
+.tab:hover { color:#111827; background:#f4f6fa; }
+.tab.on { color:#2563eb; background:#eef4ff; }
+.pane { display:none; }
+.pane.show { display:block; }
+.testout { margin-top:7px; padding:8px 10px; background:#fafbfd; border:1px solid #e6eaf1; border-radius:8px;
+  font-family:ui-monospace,Menlo,monospace; font-size:11px; color:#5b6472; line-height:1.7;
+  max-height:150px; overflow-y:auto; white-space:pre-wrap; word-break:break-word; }
+.testout .ok { color:#15803d; } .testout .bad { color:#dc2626; } .testout .mid { color:#b45309; }
+
+.fld { margin-bottom:9px; }
+.fld label { display:block; font-size:11px; color:#6b7280; margin-bottom:3px; }
+.fld input[type=text], .fld input[type=password], .fld input[type=number], .fld select, .fld textarea {
+  width:100%; background:#fff; border:1px solid #dde2ea; color:#111827; border-radius:7px; padding:6px 8px; font-size:12px; outline:none; transition:.15s; }
+.fld input:hover, .fld select:hover, .fld textarea:hover { border-color:#c8d2e0; }
+.fld input:focus, .fld select:focus, .fld textarea:focus { border-color:#2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+.withbtn { display:flex; gap:6px; align-items:center; }
+.withbtn input { flex:1; min-width:0; }
+.mini { flex:0 0 auto; padding:5px 9px; font-size:11px; border-radius:6px; border:1px solid #dde2ea; background:#fff; color:#4b5563; cursor:pointer; }
+.mini:hover { border-color:#2563eb; color:#2563eb; background:#f6f9ff; }
+.mini[disabled] { opacity:.55; cursor:default; }
+#mpop { position:fixed; display:none; background:#fff; border:1px solid #dfe4ec; border-radius:9px; box-shadow:0 14px 36px rgba(16,24,40,.18); overflow:hidden; }
+#mpop .mph { display:flex; gap:6px; align-items:center; padding:7px 8px; border-bottom:1px solid #e8ebf1; }
+#mpop .mpf { flex:1; min-width:0; background:#fff; border:1px solid #dde2ea; border-radius:6px; color:#111827; font-size:12px; padding:5px 7px; }
+#mpop .mpc { font-size:11px; color:#8a93a3; white-space:nowrap; }
+#mpop .mpl { max-height:262px; overflow-y:auto; padding:4px; }
+#mpop .mi { padding:5px 8px; font-size:12px; color:#374151; border-radius:6px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#mpop .mi:hover { background:#f1f5fb; color:#111827; }
+#mpop .mi.on { background:#eaf1ff; color:#2563eb; }
+#mpop .mi-empty { padding:10px; font-size:12px; color:#8a93a3; }
+
+/* 模型折叠卡 */
+.pv { border:1px solid #e6eaf1; border-radius:10px; margin-bottom:7px; background:#fff; overflow:hidden; transition:border-color .15s, box-shadow .15s; }
+.pv:hover { border-color:#cfd8e5; }
+.pv .fld { margin-bottom:6px; }
+.pv .row2 { gap:7px; }
+.pv .ph { display:flex; align-items:center; gap:8px; padding:0 11px; height:38px; cursor:pointer; margin:0; }
+.pv .ph:hover { background:#f7f9fc; }
+.pv[data-open="1"] { border-color:#c9d8f2; box-shadow:0 2px 10px rgba(37,99,235,.07); }
+.pv[data-open="1"] .ph { background:#f7f9fc; }
+.pv .dot { width:7px; height:7px; border-radius:50%; background:#16a34a; flex:none; }
+.pv.off .dot { background:#c7cdd8; }
+.pv .nm { font-size:12px; font-weight:600; color:#111827; flex:none; min-width:50px; line-height:1; }
+.pv .pm { flex:1; min-width:0; font-size:11.5px; line-height:1; color:#2563eb; font-family:ui-monospace,Menlo,monospace;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pv .chipx { flex:none; font-size:10px; line-height:15px; padding:0 5px; border-radius:4px;
+  color:#5b6b86; background:#f2f5fa; border:1px solid #e3e8f0; }
+.pv .ph .del { flex:none; color:#dc2626; font-size:11px; line-height:1; padding:4px 6px; border-radius:5px; }
+.pv .ph .del:hover { background:#fdeeee; }
+/* 行头里的复选框必须是一行内的小控件，不能继承 .fld label 的块级/间距 */
+.pv .ph label.chk { display:inline-flex; align-items:center; gap:4px; margin:0; padding:0;
+  font-size:11px; line-height:1; color:#4b5563; white-space:nowrap; flex:none; }
+.pv .ph label.chk input { width:13px; height:13px; margin:0; accent-color:#2563eb; vertical-align:middle; }
+.pv .ph .dot, .pv .ph .chipx { margin-top:0; }
+.pv .pbody { display:none; padding:8px 10px 10px; border-top:1px solid #eef1f6; background:#fcfdff; }
+.pv[data-open="1"] .pbody { display:block; }
+.addrow { width:100%; padding:8px 0; border-radius:9px; border:1px dashed #cfd8e5; background:#fafbfd;
+  color:#5b6472; font-size:12px; cursor:pointer; }
+.addrow:hover { border-color:#2563eb; color:#2563eb; background:#f5f9ff; }
+.pvbar { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.pvbar .t { font-size:12px; color:#4b5563; flex:1; }
+.pvbar .mini { flex:none; }
+
+details.adv { border-top:1px solid #e8ebf1; margin-top:8px; padding-top:6px; }
+details.more { margin-top:6px; border-top:1px dashed #e8ebf1; padding-top:2px; }
+details.adv > summary, details.more > summary { cursor:pointer; font-size:11px; color:#6b7280; padding:5px 0; list-style:none; user-select:none; }
+details.adv > summary:hover, details.more > summary:hover { color:#2563eb; }
+details.adv > summary::-webkit-details-marker, details.more > summary::-webkit-details-marker { display:none; }
+details.adv > summary::before, details.more > summary::before { content:'▸ '; }
+details.adv[open] > summary::before, details.more[open] > summary::before { content:'▾ '; }
+details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
+.row2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
+.chk, .fld label.chk { display:flex; align-items:center; gap:5px; font-size:11.5px; color:#4b5563; margin-bottom:0; }
+.fld label.chk { margin-top:5px; }
+.help { font-size:10.5px; color:#8a93a3; line-height:1.6; margin-top:2px; }
+.pv .mhint { font-size:10.5px; color:#8a93a3; }
+.tagv { display:inline-block; font-size:9.5px; padding:1px 4px; border-radius:3px; background:#eef4ff; color:#2563eb; margin-left:4px; }
+`;
+  /* ---------------- 结构 ---------------- */
+
+  function template() {
+    return `
+<div class="wrap">
+  <div class="panel" id="panel">
+    <div class="hd">
+      <div class="t">CX 考试 AI 大脑</div>
+      <div class="x cfg" data-act="cfg" title="设置">⚙</div>
+      <div class="x close" data-act="hide" title="收起面板">✕</div>
+    </div>
+    <div class="stat">
+      <div><b id="s-total">0</b><span>题目</span></div>
+      <div><b id="s-done">0</b><span>已答</span></div>
+      <div><b id="s-todo">0</b><span>未答</span></div>
+      <div><b id="s-model">0</b><span>模型</span></div>
+    </div>
+    <div class="bar">
+      <button class="b primary" data-act="next" title="答下一道还没答的题">答一题</button>
+      <button class="b" data-act="run" title="从头连答到底">自动连答</button>
+      <button class="b" data-act="pause">暂停</button>
+      <button class="b danger" data-act="stop">停止</button>
+    </div>
+    <div class="qgrid" id="qgrid"></div>
+    <div class="qdetail" id="qdetail"></div>
+    <div class="logs" id="logs"></div>
+    <div class="ft">Ctrl+Shift+X 呼出/隐藏<span class="lg-toggle" data-act="logs" title="展开/收起日志">日志</span><span id="s-state" class="ftstate">待机</span></div>
+    <div class="mask" id="mask">
+      <div class="dlg">
+        <div class="dh">设置<div class="x" data-act="cfg-close">✕</div></div>
+        <div class="dbody">
+          <div class="dnav" id="cfg-nav">
+            <div class="navhd">分类</div>
+            <div class="ntab on" data-act="tab" data-tab="model"><span class="ic">◈</span>模型</div>
+            <div class="ntab" data-act="tab" data-tab="judge"><span class="ic">◉</span>判题</div>
+            <div class="ntab" data-act="tab" data-tab="run"><span class="ic">▷</span>运行</div>
+            <div class="ntab" data-act="tab" data-tab="bak"><span class="ic">⇅</span>备份</div>
+          </div>
+          <div class="db" id="cfg-body"></div>
+        </div>
+        <div class="df">
+          <button class="b" data-act="cfg-test">测试连接</button>
+          <button class="b primary" data-act="cfg-save">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="gmode" id="gmode">
+    <div class="g" data-dir="left">← 左滑：答一题</div>
+    <div class="g" data-dir="up">↑ 上滑：自动连答</div>
+  </div>
+  <div class="gtoast" id="gtoast"></div>
+  <div class="ball" id="ball"><span id="balllabel">CX</span></div>
+</div>`;
+  }
+
+  function mount() {
+    if (host) return;
+    host = document.createElement('div');
+    host.id = 'cx-ai-host';
+    host.style.cssText = 'position:fixed;z-index:2147483000;';
+    (document.body || document.documentElement).appendChild(host);
+    root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+    const style = document.createElement('style');
+    style.textContent = CSS;
+    root.appendChild(style);
+    const box = document.createElement('div');
+    box.innerHTML = template();
+    root.appendChild(box);
+    // 设置窗必须挂在 shadow 根上：它原先嵌在 .wrap/.panel 里，panel 收起时 display:none，
+    // 展开时又被 46px 宽的 wrap 夹住，导致整块 0×0 点不到。
+    const maskEl = box.querySelector('#mask');
+    if (maskEl && maskEl.parentElement && maskEl.parentElement.id === 'panel') {
+      root.appendChild(maskEl);
+    }
+    bind();
+    setupBall();
+    render();
+
+  }
+
+  /** 卸掉整个界面（交卷/离开作答页时用）：节点移除，引用清空，之后可再 mount */
+  function unmount() {
+    try {
+      if (host && host.parentNode) host.parentNode.removeChild(host);
+    } catch (e) {}
+    host = null;
+    root = null;
+  }
+
+  const $ = (sel) => (root ? root.querySelector(sel) : null);
+
+  function bind() {
+    root.addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'ball') return; // 悬浮球的单击由 setupBall 处理（要和拖动区分）
+      // 事件目标常常是行内的子节点（模型名、图标、文字），直接读 e.target 的 data-act
+      // 会读不到 —— 表现就是"有时点得开、有时点不开"：点在空隙能开，点在文字上没反应。
+      // 统一往上找最近一个带 data-act 的祖先。
+      const actEl = e.target.closest ? e.target.closest('[data-act]') : null;
+      const act =
+        (e.target.getAttribute && e.target.getAttribute('data-act')) ||
+        (actEl && actEl.getAttribute('data-act'));
+      if (!act) return;
+      switch (act) {
+        case 'hide':
+          togglePanel(false);
+          break;
+        case 'cfg':
+          openConfig();
+          break;
+        case 'cfg-close':
+          closeConfig();
+          break;
+        case 'cfg-save':
+          saveConfig();
+          break;
+        case 'cfg-test':
+          testProviders();
+          break;
+        case 'cfg-export':
+          exportConfig();
+          break;
+        case 'cfg-import':
+          importConfig();
+          break;
+        case 'run':
+          CXAI.Engine.start();
+          break;
+        case 'next':
+          CXAI.Engine.answerNext();
+          break;
+        case 'prefetch':
+          CXAI.Engine.prefetch();
+          break;
+        case 'pause':
+          CXAI.Engine.togglePause();
+          break;
+        case 'stop':
+          CXAI.Engine.stop();
+          break;
+        case 'help':
+          showHelp();
+          break;
+        case 'pick': {
+          const row = e.target.closest ? e.target.closest('.qcard') : null;
+          const n = Number((actEl && actEl.getAttribute('data-i')) || e.target.getAttribute('data-i') || (row && row.getAttribute('data-i')) || 0) || 0;
+          if (n) {
+            state.sel = n;
+            render();
+          }
+          break;
+        }
+        case 'tab': {
+          const t = e.target.closest ? e.target.closest('.ntab') : null;
+          if (t) showTab(t.getAttribute('data-tab'));
+          break;
+        }
+        case 'pv-toggle': {
+          // 点行头展开/收起；但行头里的勾选框、删除、下拉不该触发
+          if (e.target.closest && e.target.closest('input, label, select, button, .del, a, [data-del], [data-fetch], [data-pick]')) break;
+          const card = e.target.closest ? e.target.closest('.pv') : null;
+          if (!card) break;
+          card.setAttribute('data-open', card.getAttribute('data-open') === '1' ? '0' : '1');
+          break;
+        }
+        case 'pv-all': {
+          const want = e.target.getAttribute('data-open') === '1' ? '1' : '0';
+          Array.from(root.querySelectorAll('.pv')).forEach((c) => c.setAttribute('data-open', want));
+          break;
+        }
+        case 'logs': {
+          const lg = $('#logs');
+          if (lg) lg.classList.toggle('show');
+          break;
+        }
+        case 'go': {
+          const n = Number((actEl && actEl.getAttribute('data-i')) || e.target.getAttribute('data-i') || 0) || 0;
+          if (n && CXAI.Engine && CXAI.Engine.jumpTo) CXAI.Engine.jumpTo(n);
+          break;
+        }
+      }
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && (e.key === 'X' || e.key === 'x')) {
+        e.preventDefault();
+        togglePanel();
+      }
+    });
+    CXAI.Log.on((entry) => appendLog(entry));
+  }
+
+  /* ---------------- 渲染 ---------------- */
+
+  /** 面板贴着球的一侧展开：球在左半屏就往右开，别溢出屏幕 */
+  function placePanel(ballLeft) {
+    const p = $('#panel');
+    if (!p) return;
+    const x = ballLeft != null ? ballLeft : (root.querySelector('.wrap') || { getBoundingClientRect: () => ({ left: window.innerWidth - 40 }) }).getBoundingClientRect().left;
+    if (x < 440) {
+      p.style.left = '0';
+      p.style.right = 'auto';
+    } else {
+      p.style.right = '0';
+      p.style.left = 'auto';
+    }
+  }
+
+  /**
+   * 悬浮球的单击 / 双击。
+   *   单击 = 直接开始答题（跑着的时候=暂停）
+   *   双击 = 打开/收起整个面板
+   * 用 260ms 定时器区分：单击先挂起，等这么久没有第二次点击才执行。
+   */
+  let ballClickTimer = null;
+  let toastTimer = null;
+
+  function toast(text) {
+    const el = $('#gtoast');
+    if (!el) return;
+    el.textContent = text;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 1400);
+  }
+
+  function modeNow() {
+    return state.mode === 'auto' ? 'auto' : 'single';
+  }
+
+  /** 切换小球点击模式：single=点一下答一题 / auto=点一下跑完整卷 */
+  function setMode(m, silent) {
+    state.mode = m === 'auto' ? 'auto' : 'single';
+    try {
+      CXAI.Store.set('ballMode', state.mode);
+    } catch (e) {}
+    render();
+    if (!silent) toast(state.mode === 'auto' ? '模式：自动连答（点一下跑完整卷）' : '模式：答一题（点一下答一道）');
+  }
+
+  /** 单击：按当前模式执行；双击：开合面板（260ms 内第二次点击算双击） */
+  function onClickBall() {
+    if (ballClickTimer) {
+      clearTimeout(ballClickTimer);
+      ballClickTimer = null;
+      togglePanel();
+      return;
+    }
+    ballClickTimer = setTimeout(function () {
+      ballClickTimer = null;
+      try {
+        if (modeNow() === 'auto') {
+          if (CXAI.Engine.st.running) CXAI.Engine.togglePause();
+          else CXAI.Engine.start();
+        } else {
+          if (CXAI.Engine.st.running) {
+            CXAI.Engine.stop();
+            toast('已停止自动连答');
+            return;
+          }
+          CXAI.Engine.answerNext();
+        }
+      } catch (e) {}
+    }, 260);
+  }
+
+  /**
+   * 悬浮球手势：
+   *   单击        = 按当前模式执行（答一题 / 自动连答）
+   *   双击        = 开合面板
+   *   长按后左滑  = 切到「答一题」模式
+   *   长按后上滑  = 切到「自动连答」模式
+   *   直接拖动    = 摆位置（长按一旦触发就不再拖动，避免两种意图打架）
+   */
+  function setupBall() {
+    const ball = $('#ball');
+    const wrap = root.querySelector('.wrap');
+    const gmode = $('#gmode');
+    if (!ball || !wrap) return;
+    try {
+      const pos = CXAI.Store.get('uiPos', null);
+      if (pos && pos.left != null) {
+        wrap.style.left = pos.left + 'px';
+        wrap.style.top = pos.top + 'px';
+        wrap.style.right = 'auto';
+        wrap.style.bottom = 'auto';
+      }
+      const m = CXAI.Store.get('ballMode', '');
+      if (m === 'auto' || m === 'single') state.mode = m;
+    } catch (e) {}
+    placePanel();
+
+    let drag = null;
+    let lpTimer = null;
+    const LP_MS = 420;
+    const GEST = 26;
+
+    const showHint = (on) => {
+      if (gmode) gmode.classList.toggle('show', !!on);
+    };
+    const markDir = (dir) => {
+      if (!gmode) return;
+      Array.from(gmode.querySelectorAll('.g')).forEach((g) => g.classList.toggle('on', !!dir && g.getAttribute('data-dir') === dir));
+    };
+
+    ball.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const r = wrap.getBoundingClientRect();
+      drag = { sx: e.clientX, sy: e.clientY, ox: r.left, oy: r.top, moved: false, lp: false, dir: '' };
+      try {
+        ball.setPointerCapture(e.pointerId);
+      } catch (err) {}
+      clearTimeout(lpTimer);
+      lpTimer = setTimeout(function () {
+        if (!drag || drag.moved) return;
+        drag.lp = true;
+        ball.classList.add('dragging');
+        showHint(true);
+        markDir('');
+      }, LP_MS);
+      e.preventDefault();
+    });
+
+    ball.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const dx = e.clientX - drag.sx;
+      const dy = e.clientY - drag.sy;
+      if (drag.lp) {
+        // 长按之后：移动 = 选手势方向（不再拖动位置）
+        let dir = '';
+        if (dx <= -GEST && Math.abs(dx) >= Math.abs(dy)) dir = 'left';
+        else if (dy <= -GEST && Math.abs(dy) > Math.abs(dx)) dir = 'up';
+        if (dir !== drag.dir) {
+          drag.dir = dir;
+          markDir(dir);
+        }
+        e.preventDefault();
+        return;
+      }
+      if (Math.abs(dx) + Math.abs(dy) > 4) {
+        drag.moved = true;
+        clearTimeout(lpTimer);
+      }
+      if (!drag.moved) return;
+      const left = Math.min(window.innerWidth - 42, Math.max(2, drag.ox + dx));
+      const top = Math.min(window.innerHeight - 42, Math.max(2, drag.oy + dy));
+      wrap.style.left = left + 'px';
+      wrap.style.top = top + 'px';
+      wrap.style.right = 'auto';
+      wrap.style.bottom = 'auto';
+      e.preventDefault();
+    });
+
+    const finish = () => {
+      clearTimeout(lpTimer);
+      if (!drag) return;
+      const d = drag;
+      drag = null;
+      ball.classList.remove('dragging');
+      showHint(false);
+      if (d.lp) {
+        if (d.dir === 'left') setMode('single');
+        else if (d.dir === 'up') setMode('auto');
+        else toast('已取消（没选方向）');
+        return;
+      }
+      if (!d.moved) {
+        onClickBall();
+        return;
+      }
+      const r = wrap.getBoundingClientRect();
+      try {
+        CXAI.Store.set('uiPos', { left: Math.round(r.left), top: Math.round(r.top) });
+      } catch (err) {}
+      placePanel(r.left);
+    };
+
+    ball.addEventListener('pointerup', (e) => {
+      try {
+        ball.releasePointerCapture(e.pointerId);
+      } catch (err) {}
+      finish();
+    });
+    ball.addEventListener('pointercancel', () => {
+      drag = null;
+      clearTimeout(lpTimer);
+      ball.classList.remove('dragging');
+      showHint(false);
+    });
+  }
+
+  function togglePanel(force) {
+    const p = $('#panel');
+    if (!p) return;
+    const show = force != null ? force : !p.classList.contains('show');
+    p.classList.toggle('show', show);
+    if (show) placePanel();
+    try {
+      CXAI.Store.set('uiOpen', show);
+    } catch (e) {}
+  }
+
+  function render() {
+    if (!root) return;
+    const set = (id, v) => {
+      const el = $('#' + id);
+      if (el) el.textContent = v;
+    };
+    const rows = rowsForRender();
+    const answered = rows.filter((r) => r.status === 'ok' || r.status === 'skip').length;
+    const failed = rows.filter((r) => r.status === 'fail').length;
+    const total = Math.max(state.total || 0, rows.length);
+    state.answered = answered;
+    state.failed = failed;
+    state.todo = Math.max(0, total - answered);
+    set('s-total', total);
+    set('s-done', answered);
+    set('s-todo', state.todo);
+    set('s-model', state.providers);
+    set('s-page', state.pageKind);
+    set('s-state', (state.running ? (state.paused ? '已暂停' : '运行中') : '待机') +
+      (state.pageKind && state.pageKind !== '-' ? ' · ' + state.pageKind : '') +
+      (failed ? ' · 失败 ' + failed : '') +
+      ' · ' + (state.mode === 'auto' ? '自动连答' : '答一题'));
+    renderQGrid(rows);
+    renderQDetail(rows);
+    const ball = $('#ball');
+    if (ball) ball.classList.toggle('busy', state.running && !state.paused);
+    const label = $('#balllabel');
+    if (label) {
+      if (state.doneAll && !state.running) label.textContent = 'OK';
+      else if (state.running) label.textContent = String(state.answered || 0);
+      else label.textContent = 'CX';
+    }
+    if (ball) {
+      ball.classList.toggle('running', !!state.running && !state.doneAll);
+      ball.classList.toggle('done', !!state.doneAll && !state.running);
+    }
+    const runBtn = $('[data-act="run"]');
+    if (runBtn) {
+      runBtn.textContent = state.running ? '运行中…' : '自动连答';
+      runBtn.disabled = state.running;
+    }
+  }
+
+  function update(patch) {
+    Object.assign(state, patch || {});
+    render();
+  }
+
+  function appendLog(entry) {
+    const box = $('#logs');
+    if (!box) return;
+    const div = document.createElement('div');
+    div.className = 'lg ' + (entry.level || 'info');
+    const t = new Date(entry.t);
+    const hh = String(t.getHours()).padStart(2, '0');
+    const mm = String(t.getMinutes()).padStart(2, '0');
+    const ss = String(t.getSeconds()).padStart(2, '0');
+    div.textContent = `${hh}:${mm}:${ss} ${entry.msg}`;
+    box.appendChild(div);
+    const maxLines = Math.max(50, Number(CXAI.Cfg.get('ui.logMax', 300)) || 300);
+    while (box.children.length > maxLines) box.removeChild(box.firstChild);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  /* ---------------- 作答清单：一题一格 + 点开看详情 ---------------- */
+
+  /**
+   * 把"清单记录 + 还没做过的题号"合成完整的一张表（每道题都要有一格）。
+   * 换卷后旧清单要丢掉：清单按 paperKey 存，纸一换就重置（用户明确要求"不用留"）。
+   */
+  function rowsForRender() {
+    const items = state.qlist || [];
+    let maxNo = 0;
+    items.forEach((it) => {
+      maxNo = Math.max(maxNo, Number(it.index) || 0);
+    });
+    const total = Math.max(state.total || 0, maxNo);
+    const byNo = {};
+    items.forEach((it) => {
+      const n = Number(it.index) || 0;
+      if (n) byNo[n] = it;
+    });
+    const rows = [];
+    for (let i = 1; i <= total; i++) rows.push(byNo[i] || { index: i, status: 'todo', placeholder: true });
+    items.forEach((it) => {
+      const n = Number(it.index) || 0;
+      if (!n || n > total) rows.push(it);
+    });
+    return rows;
+  }
+
+  const STATUS_WORD = { ok: '已答', skip: '已答·原有', fail: '失败', wait: '作答中', todo: '未答' };
+
+  function statusOf(it) {
+    const n = Number(it.index) || 0;
+    let st = it.status || 'todo';
+    const cur = Number(state.current) || 0;
+    const pend = state.pending && Number(state.pending.index) ? Number(state.pending.index) : 0;
+    if (st === 'todo' && (n === cur || n === pend) && state.running) st = 'wait';
+    return st;
+  }
+
+  function clsOf(st) {
+    return st === 'ok' ? 'ok' : st === 'skip' ? 'no' : st === 'wait' ? 'wait' : st === 'fail' ? 'err' : 'todo';
+  }
+
+  /** 题号格子：颜色=状态，点击=在下方面板看这题的选项与 AI 作答 */
+  function renderQGrid(rows) {
+    const box = $('#qgrid');
+    if (!box) return;
+    rows = rows || rowsForRender();
+    if (!rows.length) {
+      box.innerHTML = '<div class="qempty">还没有题目 —— 进入考试/作业页后这里会出现题号格子</div>';
+      return;
+    }
+    const esc = (t) => CXAI.U.escapeHtml(String(t == null ? '' : t));
+    const cur = Number(state.current) || 0;
+    const sel = Number(state.sel) || 0;
+    box.innerHTML = rows
+      .map((it) => {
+        const n = Number(it.index) || 0;
+        const st = statusOf(it);
+        const cls = clsOf(st);
+        const isCur = n && n === cur;
+        const isSel = n && n === sel;
+        const tip = [`#${n}`, STATUS_WORD[st] || '', it.typeLabel || '', it.stem || ''].filter(Boolean).join(' · ');
+        return '<div class="qcard ' + cls + (isCur ? ' cur' : '') + (isSel ? ' sel' : '') +
+          '" data-act="pick" data-i="' + esc(n) + '" title="' + esc(tip) + '">' + esc(n || '?') + '</div>';
+      })
+      .join('');
+    // 选中/当前格滚进视野
+    const focus = box.querySelector('.qcard.sel') || box.querySelector('.qcard.cur');
+    if (focus && focus.scrollIntoView) {
+      try {
+        focus.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      } catch (e) {}
+    }
+  }
+
+  /** 选中题的下方详情：题干 / 选项（AI 选中的高亮）/ AI 答案 / 页面答案 / 置信度 */
+  function renderQDetail(rows) {
+    const box = $('#qdetail');
+    if (!box) return;
+    rows = rows || rowsForRender();
+    const esc = (t) => CXAI.U.escapeHtml(String(t == null ? '' : t));
+    let sel = Number(state.sel) || 0;
+    if (!sel) {
+      // 没选过就看当前题
+      sel = Number(state.current) || Number(state.pending && state.pending.index) || 0;
+      if (!sel && rows.length) sel = Number(rows[0].index) || 0;
+    }
+    const pend = state.pending && Number(state.pending.index) === sel ? state.pending : null;
+    let it = rows.filter((r) => Number(r.index) === sel)[0];
+    if (!it && pend) it = { index: sel, status: 'todo', placeholder: true, stem: pend.stem, typeLabel: pend.typeLabel };
+    if (!it) {
+      box.innerHTML = '<div class="qempty">点上面的题号格子，这里显示那道题的题目、选项和 AI 作答</div>';
+      return;
+    }
+    const st = statusOf(it);
+    const aiLetters = String(it.answer || '').toUpperCase().replace(/[^A-H]/g, '');
+    const pgLetters = String(it.actual || '').toUpperCase().replace(/[^A-H]/g, '');
+    const opts = (it.options && it.options.length ? it.options : []).map((o) => {
+      const k = String(o.k || o.key || '').toUpperCase();
+      const mark = aiLetters.indexOf(k) >= 0 ? ' ai' : pgLetters.indexOf(k) >= 0 ? ' pg' : '';
+      const flag = pgLetters.indexOf(k) >= 0 ? ' ✓' : '';
+      return '<li class="' + mark.trim() + '"><b>' + esc(k) + '</b><span>' + esc(String(o.t || o.text || '')) + flag + '</span></li>';
+    }).join('');
+    // 底部信息只显示"有值且有意义"的行：不再出现 ? / - 这种占位符
+    const conf = it.confidence != null && Number(it.confidence) > 0 ? Math.round(Number(it.confidence) * 100) + '%' : '';
+    const stageWord = {
+      panel: '议会投票', critique: '交叉复核', arbiter: '仲裁裁决', fallback: '兜底取值',
+      cached: '复用本次判定', stored: '复用上次判定', stem: '题干自带'
+    };
+    // 字母答案顺手翻成选项文字：B → B（北京），省得对着字母回看页面
+    const letterize = (val) => {
+      const raw = String(val == null ? '' : val).trim();
+      if (!raw) return '';
+      if (!/^[A-Ha-h]+$/.test(raw) || !it.options || !it.options.length) return raw;
+      return raw.toUpperCase().split('').map((c) => {
+        const o = it.options.filter((x) => String(x.k || '').toUpperCase() === c)[0];
+        return o ? c + '（' + String(o.t || '').slice(0, 18) + '）' : c;
+      }).join('  ');
+    };
+    const norm2 = (v) => String(v || '').replace(/[\s（）()·]/g, '').toUpperCase();
+    const aiTxt = letterize(it.answer);
+    const pgTxt = letterize(it.actual);
+    const meta = [];
+    if (aiTxt) {
+      meta.push('<div class="kv"><span class="k">AI 判定</span><span class="v ai">' + esc(aiTxt) + '</span>' +
+        (conf ? '<span class="chip">置信度 ' + conf + '</span>' : '') +
+        (stageWord[it.stage] ? '<span class="chip">' + esc(stageWord[it.stage]) + '</span>' : '') + '</div>');
+    }
+    if (pgTxt) {
+      const same = aiTxt && norm2(aiTxt) === norm2(pgTxt);
+      meta.push('<div class="kv"><span class="k">页面已存</span><span class="v pg">' + esc(pgTxt) + '</span>' +
+        (aiTxt
+          ? (same ? '<span class="chip ok">与 AI 一致</span>' : '<span class="chip bad">与 AI 不一致</span>')
+          : '<span class="chip">你手动作答 · AI 未参与</span>') + '</div>');
+    }
+    if (!meta.length) meta.push('<div class="kv"><span class="v muted">这题还没作答</span></div>');
+    box.innerHTML =
+      '<div class="qd-hd">' +
+      '<span class="qn">#' + esc(it.index) + '</span>' +
+      '<span class="tag">' + esc(it.typeLabel || '') + '</span>' +
+      '<span class="st ' + clsOf(st) + '">' + (STATUS_WORD[st] || '未答') + '</span>' +
+      '<span class="qd-jump" data-act="go" data-i="' + esc(it.index) + '">跳到该题</span>' +
+      '</div>' +
+      '<div class="qd-stem">' + esc(it.stem || (it.placeholder ? '这题还没有作答记录（点「开始答题」，或手动作答后回来查看）' : '(没有题干)')) + '</div>' +
+      (opts ? '<ul class="qd-opts">' + opts + '</ul>' : '') +
+      '<div class="qd-meta">' + meta.join('') + '</div>';
+  }
+
+  /* ---------------- 清单存储（按卷隔离，换卷即清空） ---------------- */
+
+  function paperNow() {
+    try {
+      return CXAI.Scraper.paperKey ? CXAI.Scraper.paperKey() : '';
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function getQList() {
+    try {
+      const saved = CXAI.Store.get('qlist', null);
+      if (!saved) return [];
+      // 老格式（纯数组）直接当成"上一份卷子"，丢掉
+      if (Array.isArray(saved)) return [];
+      if (saved.paper !== paperNow()) return [];
+      return saved.rows || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function saveQList(rows) {
+    try {
+      CXAI.Store.set('qlist', { paper: paperNow(), rows: rows || [] });
+    } catch (e) {}
+  }
+
+  /** 记一条作答记录（同一题重复处理只覆盖，不重复堆格子） */
+  function pushQuestion(rec) {
+    if (!rec) return;
+    const arr = getQList().slice();
+    const key = rec.key || 'qid:' + (rec.qid || rec.index);
+    const at = arr.findIndex((x) => (x.key || 'qid:' + (x.qid || x.index)) === key);
+    const item = Object.assign({}, rec, { key });
+    if (at >= 0) arr[at] = item;
+    else arr.push(item);
+    const rows = arr.slice(-300);
+    state.qlist = rows;
+    saveQList(rows);
+    // 图谱跟着当前题走：新记录进来就把详情切到这道题
+    if (rec.status === 'ok' || rec.status === 'fail' || rec.status === 'skip') state.sel = Number(rec.index) || state.sel;
+    render();
+  }
+
+  /** 追加一道题的判定结果卡片 */
+  function addQuestionCard(q, result, applyResult) {
+    const box = $('#logs');
+    if (!box) return;
+    const div = document.createElement('div');
+    div.className = 'q';
+    const ok = applyResult && applyResult.ok;
+    const low = result && result.lowConfidence;
+    const cls = !ok ? 'ans err' : low ? 'ans low' : 'ans';
+    const shown = result ? (result.answerText || '?') : '跳过';
+    const conf = result ? Math.round((result.confidence || 0) * 100) + '%' : '-';
+    const stageMap = { panel: '议会', critique: '复核', arbiter: '仲裁', fallback: '兜底', cached: '缓存' };
+    const votes = result && result.votes ? result.votes.length : 0;
+    const agree = result && result.ratio != null ? Math.round(result.ratio * 100) + '%' : '-';
+    div.innerHTML = `
+      <div class="h">
+        <span class="idx">#${(q.index || 0) + 1}</span>
+        <span class="tag">${CXAI.U.escapeHtml(q.typeLabel)}</span>
+        <span class="${cls}">${CXAI.U.escapeHtml(shown)}</span>
+      </div>
+      <div class="stem">${CXAI.U.escapeHtml(q.stem || '(无题干)')}</div>
+      <div class="meta">置信度 <em>${conf}</em> · 一致率 <em>${agree}</em> · 阶段 <em>${stageMap[result && result.stage] || '-'}</em> · 投票 <em>${votes}</em>${ok ? '' : ' · <em style="color:#ef7676">写入失败</em>'}</div>`;
+    box.appendChild(div);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  /* ---------------- 设置面板 ---------------- */
+
+  /**
+   * 预设下拉显示的应该是"这份配置实际像哪个预设"，而不是历史存下来的 preset 字段。
+   * 旧版本存过 preset:'deepseek'，用户后来把 Base URL 改成 magpie 网关，
+   * 下拉还显示 DeepSeek —— 就是这个原因。这里按 Base URL 反查，查不到再退回存的值。
+   */
+  function guessPreset(p) {
+    const list = CXAI.PRESETS || [];
+    const norm = (u) => String(u || '').replace(/\/+$/, '').toLowerCase();
+    const hit = list.filter((x) => x.baseURL && norm(x.baseURL) === norm(p && p.baseURL))[0];
+    if (hit) return hit.id;
+    if (p && p.preset && list.some((x) => x.id === p.preset)) return p.preset;
+    try {
+      if (p && CXAI.isLocalURL(p.baseURL)) return 'magpie';
+    } catch (e) {}
+    return 'custom';
+  }
+
+  function presetOptions(cur) {
+    const list = CXAI.PRESETS || [];
+    const known = list.some((p) => p.id === cur);
+    return (
+      (cur && !known ? `<option value="${CXAI.U.escapeHtml(cur)}" selected>${CXAI.U.escapeHtml(cur)}</option>` : '') +
+      list.map((p) => `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${CXAI.U.escapeHtml(p.label)}</option>`).join('')
+    );
+  }
+
+  function setHint(el, text, bad) {
+    if (!el) return;
+    el.textContent = text || '';
+    el.style.color = bad ? '#ff8f8f' : '';
+  }
+
+  /** 拉取某个 provider 的模型列表，填进该行的 datalist */
+  async function fetchModels(i) {
+    const row = root.querySelector('.pv[data-i="' + i + '"]');
+    if (!row) return;
+    const btn = row.querySelector('[data-fetch]');
+    const hint = row.querySelector('.mhint');
+    const p = readRow(row, i);
+    if (!p.baseURL) return setHint(hint, '先填 Base URL', true);
+    if (!p.apiKey && !p.keyOptional) return setHint(hint, '先填 API Key', true);
+    const label = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '…';
+    }
+    setHint(hint, '正在拉取 ' + p.baseURL + ' 的模型列表…');
+    try {
+      const list = await CXAI.AI.listModels(p);
+      row.__models = list;
+      const mEl = row.querySelector('.f-model');
+      if (mEl && !mEl.value.trim() && list.length) mEl.value = list[0].id;
+      refreshVisionSelect();
+      setHint(hint, list.length ? '拉到 ' + list.length + ' 个模型 · 点 ▾ 选择（可输入过滤）' : '接口没返回模型', !list.length);
+      CXAI.Log.info('[模型] ' + (p.label || p.baseURL) + ' → ' + list.length + ' 个可用模型');
+    } catch (err) {
+      setHint(hint, '拉取失败：' + (err && err.message ? err.message : String(err)), true);
+      CXAI.Log.warn('[模型] 拉取失败：' + (err && err.message ? err.message : err));
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = label || '拉取';
+      }
+    }
+  }
+
+  /* ---------- 模型选择浮层（原生 datalist 只展示前几项，127 个没法用） ---------- */
+
+  let picker = null;
+
+  function hidePicker() {
+    if (picker && picker.el) picker.el.style.display = 'none';
+  }
+
+  function renderPickerList() {
+    if (!picker) return;
+    const row = root.querySelector('.pv[data-i="' + picker.i + '"]');
+    const all = (row && row.__models) || [];
+    const q = (picker.filter.value || '').trim().toLowerCase();
+    const hit = q ? all.filter((m) => (m.id + ' ' + (m.label || '')).toLowerCase().indexOf(q) >= 0) : all;
+    const cur = row && row.querySelector('.f-model') ? row.querySelector('.f-model').value.trim() : '';
+    picker.list.innerHTML = hit.length
+      ? hit
+          .slice(0, 400)
+          .map(
+            (m) =>
+              `<div class="mi${m.id === cur ? ' on' : ''}" data-id="${CXAI.U.escapeHtml(m.id)}">${CXAI.U.escapeHtml(m.label || m.id)}</div>`
+          )
+          .join('')
+      : '<div class="mi-empty">没有匹配的模型</div>';
+    picker.count.textContent = hit.length + ' / ' + all.length;
+  }
+
+  function ensurePicker() {
+    if (picker) return picker;
+    const el = document.createElement('div');
+    el.id = 'mpop';
+    el.innerHTML =
+      '<div class="mph"><input type="text" class="mpf" placeholder="输入关键词过滤…"><span class="mpc"></span></div><div class="mpl"></div>';
+    root.appendChild(el);
+    picker = { el: el, filter: el.querySelector('.mpf'), list: el.querySelector('.mpl'), count: el.querySelector('.mpc'), i: -1 };
+    el.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!t || !t.classList || !t.classList.contains('mi')) return;
+      const id = t.getAttribute('data-id');
+      const row = root.querySelector('.pv[data-i="' + picker.i + '"]');
+      if (row && id != null) {
+        const mEl = row.querySelector('.f-model');
+        if (mEl) mEl.value = id;
+        setHint(row.querySelector('.mhint'), '已选 ' + id);
+        // 关键：浮层点选后必须重画读图下拉，否则那里还显示上一个模型的名字
+        refreshVisionSelect();
+      }
+      hidePicker();
+    });
+    picker.filter.addEventListener('input', renderPickerList);
+    document.addEventListener(
+      'mousedown',
+      (e) => {
+        if (!picker || picker.el.style.display !== 'block') return;
+        const path = e.composedPath ? e.composedPath() : [];
+        if (path.indexOf(picker.el) >= 0) return;
+        const isPickBtn = path.some((n) => n && n.getAttribute && n.getAttribute('data-pick') != null);
+        if (isPickBtn) return;
+        hidePicker();
+      },
+      true
+    );
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hidePicker();
+    });
+    return picker;
+  }
+
+  async function openModelPicker(i) {
+    let row = root.querySelector('.pv[data-i="' + i + '"]');
+    if (!row) return;
+    if (!row.__models || !row.__models.length) {
+      await fetchModels(i);
+      row = root.querySelector('.pv[data-i="' + i + '"]');
+    }
+    const list = (row && row.__models) || [];
+    if (!list.length) return;
+    const pk = ensurePicker();
+    pk.i = i;
+    pk.filter.value = '';
+    renderPickerList();
+    const btn = row.querySelector('[data-pick]') || row;
+    const r = btn.getBoundingClientRect();
+    const w = Math.max(260, Math.min(460, (r.width || 200) + 200));
+    pk.el.style.width = w + 'px';
+    pk.el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
+    const h = 320;
+    pk.el.style.top = (r.bottom + h + 8 > window.innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
+    pk.el.style.display = 'block';
+    pk.el.style.zIndex = '30';
+    pk.filter.focus();
+  }
+
+  /** 事件只绑一次：点「拉取」；改 Key/Base/预设且模型名为空时自动拉一次 */
+  function wireProviderBox(box) {
+    if (box.__wired) return;
+    box.__wired = 1;
+    box.addEventListener('click', (e) => {
+      const t = e.target;
+      if (!t || !t.getAttribute) return;
+      const del = t.getAttribute('data-del');
+      if (del != null) {
+        e.preventDefault();
+        const list = readProviders();
+        const at = Number(del);
+        list.splice(at, 1);
+        renderProviders(list);
+        CXAI.Log.info('已删除模型 ' + (at + 1) + '（保存后生效）');
+        return;
+      }
+      const idx = t.getAttribute('data-fetch');
+      if (idx != null) {
+        e.preventDefault();
+        fetchModels(Number(idx));
+        return;
+      }
+      const pk = t.getAttribute('data-pick');
+      if (pk != null) {
+        e.preventDefault();
+        openModelPicker(Number(pk));
+      }
+    });
+    let syncTimer = 0;
+    const syncSoon = () => {
+      clearTimeout(syncTimer);
+      syncTimer = setTimeout(refreshVisionSelect, 160);
+    };
+    box.addEventListener('input', (e) => {
+      const t = e.target;
+      if (!t || !t.classList) return;
+      if (t.classList.contains('f-model') || t.classList.contains('f-base')) syncSoon();
+    });
+    box.addEventListener('change', (e) => {
+      const t = e.target;
+      if (!t || !t.classList) return;
+      if (
+        !t.classList.contains('f-key') &&
+        !t.classList.contains('f-base') &&
+        !t.classList.contains('f-preset') &&
+        !t.classList.contains('f-model') &&
+        !t.classList.contains('f-enabled')
+      )
+        return;
+      refreshVisionSelect();
+      const row = t.closest ? t.closest('.pv') : null;
+      if (!row) return;
+      const mEl = row.querySelector('.f-model');
+      if (mEl && !mEl.value.trim()) fetchModels(Number(row.getAttribute('data-i')));
+    });
+  }
+
+  /** 把预设值填进某个 provider 行 */
+  function applyPreset(box, id) {
+    const pre = (CXAI.PRESETS || []).filter((p) => p.id === id)[0];
+    if (!pre || !box) return;
+    box.setAttribute('data-preset', id);
+    const setVal = (sel, v) => {
+      const el = box.querySelector(sel);
+      if (el && v != null) el.value = v;
+    };
+    if (pre.baseURL != null) setVal('.f-base', pre.baseURL);
+    if (pre.apiKey != null) setVal('.f-key', pre.apiKey);
+    if (pre.model != null) setVal('.f-model', pre.model);
+    setVal('.f-style', pre.apiStyle || 'openai');
+    const styleBox = box.querySelector('.stylebox');
+    if (styleBox) styleBox.style.display = id === 'custom' ? '' : 'none';
+    const hint = box.querySelector('.mhint');
+    if (hint) setHint(hint, pre.hint || '');
+    box.__models = null;
+  }
+
+  /** 取某个 provider 行的真实名字（模型名优先；绝不用预设名冒充模型名） */
+  function rowName(box, i) {
+    const model = ((box.querySelector('.f-model') || {}).value || '').trim();
+    const presetId = box.querySelector('.f-preset') ? box.querySelector('.f-preset').value : '';
+    const pre = (CXAI.PRESETS || []).filter((x) => x.id === presetId)[0] || null;
+    const base = ((box.querySelector('.f-base') || {}).value || '').trim();
+    let host = '';
+    try {
+      host = base ? new URL(base).host : '';
+    } catch (e) {
+      host = base.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    }
+    return { model: model, presetLabel: pre ? pre.label : '', presetModel: pre ? pre.model || '' : '', base: base, host: host };
+  }
+
+  /**
+   * 读图模型下拉：把所有行列出来，选中谁就让谁读图。
+   * 显示顺序固定为「真实模型名 → 行号 → 主机」，模型名为空时明确写「未填模型名」，
+   * 预设名只作为末尾的次要信息出现 —— 之前把预设名当模型名显示，导致下拉里全是 "DeepSeek"。
+   */
+  function refreshVisionSelect() {
+    const sel = $('#cfg-vmodel');
+    if (!sel) return;
+    const cur = sel.value;
+    const esc = (x) => CXAI.U.escapeHtml(x == null ? '' : String(x));
+    const opts = ['<option value="">不用读图（纯文字题目）</option>'];
+    const ids = [];
+    root.querySelectorAll('.pv').forEach((box, i) => {
+      const r = rowName(box, i);
+      const id = box.getAttribute('data-id') || 'p' + i;
+      ids.push(id);
+      const name = r.model || '（未填模型名）';
+      const tail = [];
+      if (r.host) tail.push(r.host);
+      // 模型名才是唯一可信的东西；只有模型名为空时才拿预设名兜底，避免下拉里塞满厂商名
+      if (r.presetLabel && !r.model) tail.push('预设 ' + r.presetLabel);
+      const enabled = box.querySelector('.f-enabled') ? box.querySelector('.f-enabled').checked : true;
+      if (!enabled) tail.push('已停用');
+      const text = `${name} · 模型 ${i + 1}` + (tail.length ? ' · ' + tail.join(' · ') : '');
+      opts.push(`<option value="${esc(id)}" title="${esc(r.base || '未填 Base URL')}">${esc(text)}</option>`);
+    });
+    sel.innerHTML = opts.join('');
+    // 只有当前值还在列表里才还原，否则退回「不用读图」，避免下拉显示空白/错位
+    sel.value = cur && ids.indexOf(cur) >= 0 ? cur : '';
+    syncVisionHint();
+  }
+
+  function syncVisionHint() {
+    const sel = $('#cfg-vmodel');
+    const hint = $('#vmodel-hint');
+    if (!hint) return;
+    const id = sel ? sel.value : '';
+    const c = $('#cfg-vjudge');
+    const both = !!(c && c.checked);
+    const n = root.querySelectorAll('.pv').length;
+    if (!id) {
+      hint.textContent = both ? '' : '选「不用读图」时，带图的题会当成纯文字去猜';
+      return;
+    }
+    if (both) {
+      hint.textContent =
+        n <= 1
+          ? '就这一个模型：图片先转成文字，再由它自己作答、自己投票 —— 单模型也能跑完整套流程'
+          : '图片先由它转成文字，然后它也会进议会投票（相当于多一票）';
+    } else {
+      hint.textContent =
+        n <= 1
+          ? '它只负责把图转成文字，不投票；现在是唯一的模型，判题会没有模型可用 —— 建议勾上上面那个框'
+          : '题目图片先交给这个模型转成文字，再交给下面的判题模型；它自己不投票';
+    }
+  }
+
+  function openConfig() {
+    const body = $('#cfg-body');
+    if (!body) return;
+    const c = CXAI.Cfg.data || CXAI.Cfg.load();
+    const providers = c.ai.providers || [];
+    const v = c.ai.vision || {};
+    // 老配置或半截配置可能缺段，逐段兜底，避免渲染时抛异常导致面板打不开
+    const D = CXAI.DEFAULT_CONFIG || {};
+    const g = Object.assign({}, D.guard || {}, c.guard || {});
+    const ap = Object.assign({}, D.apply || {}, c.apply || {});
+    const strength =
+      c.ai.judge.mode === 'single' ? 'single' : c.ai.judge.mode === 'fast' ? 'fast' : c.ai.judge.enableArbiter ? 'max' : 'council';
+    body.innerHTML = `
+      <div class="pane show" data-pane="model">
+        <div class="fld">
+          <label>读图模型（题目带图时先由它把图转成文字）</label>
+          <select id="cfg-vmodel"></select>
+          <label class="chk"><input type="checkbox" id="cfg-vjudge"${v.judgeToo ? ' checked' : ''}> 这个模型也参与判题（它读图 + 自己投票；只配 1 个模型时必须勾）</label>
+          <div class="help" id="vmodel-hint"></div>
+        </div>
+        <div class="fld">
+          <div class="pvbar">
+            <span class="t">判题模型（至少一个；可加多个投票）</span>
+            <button class="mini" data-act="pv-all" data-open="1">全部展开</button>
+            <button class="mini" data-act="pv-all" data-open="0">全部收起</button>
+          </div>
+          <div id="cfg-providers"></div>
+          <button class="addrow" data-act="cfg-add" id="cfg-add">+ 添加模型</button>
+        </div>
+        <div class="fld">
+          <label>连通性测试</label>
+          <button class="b" data-act="cfg-test" id="cfg-test2" style="width:100%;margin-top:0">测试连接</button>
+          <div class="testout" id="cfg-testout">点了才会测：逐个 ping 每个模型，结果直接显示在这里</div>
+        </div>
+      </div>
+
+      <div class="pane" data-pane="judge">
+        <div class="fld">
+          <label>判定强度</label>
+          <select id="cfg-strength">
+            <option value="single"${strength === 'single' ? ' selected' : ''}>省 token · 单模型直接作答</option>
+            <option value="fast"${strength === 'fast' ? ' selected' : ''}>快速 · 单模型采样 3 次自一致</option>
+            <option value="council"${strength === 'council' ? ' selected' : ''}>标准 · 多模型议会投票（推荐）</option>
+            <option value="max"${strength === 'max' ? ' selected' : ''}>严格 · 议会 + 交叉复核 + 仲裁</option>
+          </select>
+          <div class="help">答得准就别动它。越往下越慢、越费 token。</div>
+        </div>
+        <div class="row2">
+          <div class="fld"><label>判定模式</label>
+            <select id="cfg-mode">
+              <option value="council"${c.ai.judge.mode === 'council' ? ' selected' : ''}>议会（多模型投票）</option>
+              <option value="fast"${c.ai.judge.mode === 'fast' ? ' selected' : ''}>快速（单模型多次采样）</option>
+              <option value="single"${c.ai.judge.mode === 'single' ? ' selected' : ''}>单模型</option>
+            </select></div>
+          <div class="fld"><label>参与模型数</label><input type="number" id="cfg-panel" min="1" max="6" value="${c.ai.judge.panelSize}"></div>
+        </div>
+        <div class="row2">
+          <div class="fld"><label>一致率阈值</label><input type="number" id="cfg-vote" min="0.3" max="1" step="0.05" value="${c.ai.judge.voteThreshold}"></div>
+          <div class="fld"><label>最低置信度</label><input type="number" id="cfg-minconf" min="0" max="1" step="0.05" value="${c.ai.judge.minConfidence}"></div>
+        </div>
+        <div class="fld"><label>单题并发</label><input type="number" id="cfg-conc" min="1" max="6" value="${c.ai.judge.concurrency}"></div>
+        <div class="fld">
+          <label>复核与仲裁</label>
+          <label class="chk"><input type="checkbox" id="cfg-critique"${c.ai.judge.enableCritique ? ' checked' : ''}> 交叉复核（Round 2）</label>
+          <label class="chk"><input type="checkbox" id="cfg-arbiter"${c.ai.judge.enableArbiter ? ' checked' : ''}> 仲裁（Round 3）</label>
+        </div>
+      </div>
+
+      <div class="pane" data-pane="run">
+        <div class="row2">
+          <div class="fld"><label>题间最短间隔(ms)</label><input type="number" id="cfg-dmin" value="${g.minDelay}"></div>
+          <div class="fld"><label>题间最长间隔(ms)</label><input type="number" id="cfg-dmax" value="${g.maxDelay}"></div>
+        </div>
+        <div class="row2">
+          <div class="fld">
+            <label>弹窗自动关闭(秒)</label>
+            <input type="number" id="cfg-dlg" min="0" max="120" value="${Number(g.dialogDelaySec != null ? g.dialogDelaySec : 10)}">
+            <div class="help">弹窗出现后等这么多秒才自动关；期间你手动关掉就不动它。0 = 永不自动关。</div>
+          </div>
+          <div class="fld">
+            <label>日志保留行数</label>
+            <input type="number" id="cfg-logmax" min="50" max="2000" value="${Number(CXAI.Cfg.get('ui.logMax', 300))}">
+            <div class="help">面板「日志」区的上限，超出从头丢。</div>
+          </div>
+        </div>
+        <div class="fld">
+          <label>落盘行为</label>
+          <label class="chk"><input type="checkbox" id="cfg-guard"${g.enabled ? ' checked' : ''}> 环境伪装（前台保持 + 自动确认弹窗）</label>
+          <label class="chk"><input type="checkbox" id="cfg-force"${ap.overwriteAnswered ? ' checked' : ''}> 重做已答题目</label>
+          <label class="chk"><input type="checkbox" id="cfg-save"${ap.saveEach ? ' checked' : ''}> 每题点保存按钮</label>
+          <label class="chk"><input type="checkbox" id="cfg-submit"${ap.submit === true || ap.autoSubmit === true ? ' checked' : ''}> 全部答完后自动交卷（慎用）</label>
+        </div>
+        <div class="fld">
+          <label>答案预取</label>
+          <button class="b" data-act="prefetch" style="width:100%;margin-top:0">立即预取当前页答案</button>
+          <div class="help">进考试页时已默认在后台预取（每道题先判一遍存起来）。这里只是手动再跑一次，点小球答一题时就不用等模型。</div>
+        </div>
+      </div>
+
+      <div class="pane" data-pane="bak">
+        <div class="fld">
+          <label>配置备份 · 换浏览器 / 换域名时用它搬</label>
+          <div class="row2">
+            <button class="b" data-act="cfg-export" style="margin-top:0">导出到文本框</button>
+            <button class="b" data-act="cfg-import" style="margin-top:0">从文本框导入</button>
+          </div>
+          <textarea id="cfg-io" rows="8" style="height:180px;font-family:ui-monospace,monospace;font-size:11px" placeholder="点「导出到文本框」把当前配置变成 JSON；在另一台电脑 / 另一个域名粘贴进来点「从文本框导入」"></textarea>
+          <div class="help" id="cfg-iohint"></div>
+        </div>
+        <div class="fld">
+          <label>存储状态</label>
+          <div class="testout" id="cfg-storeinfo"></div>
+        </div>
+      </div>`;
+    renderProviders(providers);
+    const vsel0 = $('#cfg-vmodel');
+    if (vsel0) {
+      const saved = providers.filter((p) => p.vision && (p.role === 'vision' || p.role === 'both'))[0];
+      // 只配了一个模型时，读书+判题都只能靠它：默认就选它读图、并勾上「也参与判题」
+      const only = providers.length === 1 ? providers[0] : null;
+      const preOne = only ? (CXAI.PRESETS || []).filter((x) => x.id === (only.preset || ''))[0] : null;
+      // 只有一个模型、且它看起来能读图（预设带视觉 / 本地网关 / 已勾视觉）→ 默认让它读图并兼任判题
+      const onlyVision = !!(
+        only &&
+        (only.vision ||
+          only.role === 'vision' ||
+          only.role === 'both' ||
+          (preOne && preOne.vision) ||
+          CXAI.isLocalURL(only.baseURL))
+      );
+      const autoBoth = !!(only && !saved && onlyVision);
+      vsel0.value = v.ocrProviderId || (saved ? saved.id : '') || (autoBoth ? only.id : '') || '';
+      const vj = $('#cfg-vjudge');
+      if (vj) vj.checked = saved ? saved.role === 'both' : autoBoth ? true : !!v.judgeToo;
+      syncVisionHint();
+    }
+    $('#cfg-add').addEventListener('click', () => {
+      const list = readProviders();
+      list.push(
+        CXAI.normalizeProvider(
+          { id: CXAI.U.uid('p'), label: '新模型', baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini', weight: 1 },
+          list.length
+        )
+      );
+      renderProviders(list);
+    });
+    // 判定强度：一次改四个高级字段，普通用户只碰这一个下拉
+    const stSel = $('#cfg-strength');
+    if (stSel) {
+      stSel.addEventListener('change', () => {
+        const MAP = {
+          single: { mode: 'single', panel: 1, critique: false, arbiter: false },
+          fast: { mode: 'fast', panel: 1, critique: false, arbiter: false },
+          council: { mode: 'council', panel: 3, critique: true, arbiter: false },
+          max: { mode: 'council', panel: 3, critique: true, arbiter: true }
+        };
+        const cfg = MAP[stSel.value];
+        if (!cfg) return;
+        const setV = (sel, val) => {
+          const el = $(sel);
+          if (el) el.value = String(val);
+        };
+        const setC = (sel, on) => {
+          const el = $(sel);
+          if (el) el.checked = !!on;
+        };
+        setV('#cfg-mode', cfg.mode);
+        setV('#cfg-panel', cfg.panel);
+        setC('#cfg-critique', cfg.critique);
+        setC('#cfg-arbiter', cfg.arbiter);
+      });
+    }
+    const storeInfo = $('#cfg-storeinfo');
+    if (storeInfo) {
+      try {
+        const info = CXAI.Store.info(CXAI.CONFIG_KEY);
+        storeInfo.textContent =
+          '后端：' + info.backend + ' · 范围：' + (info.backend === 'gm' ? '所有域名共享' : '仅本域名') +
+          ' · 体积：' + info.bytes + ' 字节\n' + '站点：' + location.host + '\n版本：' + CXAI.__version;
+      } catch (e) {
+        storeInfo.textContent = '读取失败：' + e.message;
+      }
+    }
+    const ioHint = $('#cfg-iohint');
+    if (ioHint) {
+      const info = CXAI.Store.info(CXAI.CONFIG_KEY);
+      ioHint.textContent =
+        info.backend === 'gm'
+          ? '存储：油猴 GM 存储（本脚本在所有域名间共享，换考试站点配置不会丢）· ' + info.bytes + ' 字节'
+          : '存储：仅本源 localStorage（换域名就看不到这份配置）· ' + info.bytes + ' 字节 —— 用上面的导出/导入搬';
+    }
+    const vmSel = $('#cfg-vmodel');
+    if (vmSel) vmSel.addEventListener('change', syncVisionHint);
+    const vjChk = $('#cfg-vjudge');
+    if (vjChk) vjChk.addEventListener('change', syncVisionHint);
+    // 预设联动（委托，避免重渲染丢监听）
+    const pbox = $('#cfg-providers');
+    if (pbox) {
+      pbox.addEventListener('change', (e) => {
+        const t = e.target;
+        if (t && t.classList && t.classList.contains('f-preset')) {
+          applyPreset(t.closest('.pv'), t.value);
+          refreshVisionSelect();
+        }
+      });
+    }
+    showTab(state.cfgTab || 'model');
+    $('#mask').classList.add('show');
+  }
+
+  /** 切换设置窗页签（左侧竖排导航） */
+  function showTab(name) {
+    if (!root) return;
+    name = name || 'model';
+    state.cfgTab = name;
+    Array.from(root.querySelectorAll('.ntab')).forEach((x) => x.classList.toggle('on', x.getAttribute('data-tab') === name));
+    Array.from(root.querySelectorAll('.pane')).forEach((x) => x.classList.toggle('show', x.getAttribute('data-pane') === name));
+  }
+
+  function renderProviders(list) {
+    const box = $('#cfg-providers');
+    if (!box) return;
+    const esc = (s) => CXAI.U.escapeHtml(s == null ? '' : String(s));
+    box.innerHTML = (list || [])
+      .map((p, i) => {
+        const pid = p.id || 'p' + i;
+        const style = p.apiStyle === 'anthropic' ? 'anthropic' : 'openai';
+        const preset = guessPreset(p);
+        const showStyle = preset === 'custom';
+        return `
+      <div class="pv${p.enabled ? '' : ' off'}" data-i="${i}" data-id="${esc(pid)}" data-preset="${esc(preset)}" data-open="${i === 0 ? '1' : '0'}">
+        <div class="ph" data-act="pv-toggle" data-i="${i}" title="点击展开 / 收起这张卡">
+          <span class="dot"></span>
+          <span class="nm">模型 ${i + 1}</span>
+          <span class="pm">${esc(p.model || '(未填模型名)')}</span>
+          <span class="chipx">${esc(preset)}</span>
+          <label class="chk" data-nohead="1"><input type="checkbox" class="f-enabled"${p.enabled ? ' checked' : ''}>启用</label>
+          <span class="del" data-del="${i}">删除</span>
+        </div>
+        <div class="pbody">
+        <div class="row2">
+          <div class="fld"><label>预设</label><select class="f-preset">${presetOptions(preset)}</select></div>
+          <div class="fld"><label>模型名</label>
+            <div class="withbtn"><input type="text" class="f-model" value="${esc(p.model)}" placeholder="填好 Key 点「拉取」"><button type="button" class="mini" data-fetch="${i}">拉取</button><button type="button" class="mini" data-pick="${i}" title="从拉取到的模型里选">▾</button></div>
+            <div class="hint mhint"></div></div>
+        </div>
+        <div class="row2">
+          <div class="fld"><label>Base URL</label><input type="text" class="f-base" value="${esc(p.baseURL)}" placeholder="https://api.deepseek.com/v1"></div>
+          <div class="fld"><label>API Key</label><input type="password" class="f-key" value="${esc(p.apiKey)}" placeholder="本地网关可留空"></div>
+        </div>
+        <div class="row2 stylebox"${showStyle ? '' : ' style="display:none"'}>
+          <div class="fld"><label>接口协议</label>
+            <select class="f-style">
+              <option value="openai"${style === 'openai' ? ' selected' : ''}>OpenAI 兼容（/chat/completions）</option>
+              <option value="anthropic"${style === 'anthropic' ? ' selected' : ''}>Anthropic 兼容（/v1/messages）</option>
+            </select></div>
+          <div class="fld"><label>说明</label><div class="hint">默认 OpenAI 兼容，Base URL 不用改</div></div>
+        </div>
+        </div>
+      </div>`;
+      })
+      .join('');
+    wireProviderBox(box);
+    refreshVisionSelect();
+  }
+
+  function readRow(box, i) {
+    const q = (sel) => box.querySelector(sel);
+    const v = (sel) => (q(sel) ? q(sel).value : '');
+    const ck = (sel) => !!(q(sel) && q(sel).checked);
+    const presetId = q('.f-preset') ? q('.f-preset').value : box.getAttribute('data-preset') || '';
+    const pre = (CXAI.PRESETS || []).filter((p) => p.id === presetId)[0] || null;
+    const tempRaw = String(v('.f-temp') || '').trim();
+    return CXAI.normalizeProvider(
+      {
+        id: box.getAttribute('data-id') || 'p' + i,
+        preset: presetId,
+        label: v('.f-model').trim() || v('.f-label').trim() || (pre ? pre.label : '') || '模型' + (i + 1),
+        baseURL: v('.f-base').trim(),
+        apiStyle: v('.f-style') || 'openai',
+        role: 'judge',
+        apiKey: v('.f-key').trim(),
+        model: v('.f-model').trim(),
+        weight: Number(v('.f-weight')) || 1,
+        temperature: tempRaw === '' ? 0.2 : Number(tempRaw),
+        maxTokens: Number(v('.f-max')) || 700,
+        enabled: ck('.f-enabled'),
+        vision: false,
+        jsonMode: q('.f-json') ? ck('.f-json') : true,
+        keyOptional: q('.f-keyopt') ? ck('.f-keyopt') : undefined,
+        extraBody: undefined,
+        extraHeaders: undefined
+      },
+      i
+    );
+  }
+
+  function readProviders() {
+    const out = [];
+    root.querySelectorAll('.pv').forEach((box, i) => out.push(readRow(box, i)));
+    const sel = $('#cfg-vmodel');
+    const vid = sel ? sel.value : '';
+    const both = (function () {
+      const c = $('#cfg-vjudge');
+      return !!(c && c.checked);
+    })();
+    out.forEach((p) => {
+      const isVision = !!vid && p.id === vid;
+      if (!isVision) {
+        p.role = 'judge';
+        p.vision = false;
+      } else if (both) {
+        p.role = 'both';
+        p.vision = true;
+      } else {
+        p.role = 'vision';
+        p.vision = true;
+      }
+    });
+    return out;
+  }
+
+  function closeConfig() {
+    const m = $('#mask');
+    if (m) m.classList.remove('show');
+  }
+
+  function saveConfig(opt) {
+    const silent = !!(opt && opt.silent);
+    const val = (id) => $(id);
+    const draft = readProviders();
+    const vsel = val('#cfg-vmodel');
+    const vid = vsel ? vsel.value : '';
+    let judges = draft.filter((p) => p.enabled && p.role !== 'vision');
+    let both = !!(vid && $('#cfg-vjudge') && $('#cfg-vjudge').checked);
+    // 只有一个模型（或独立判题模型全被停用）时，让它兼任判题，别把保存卡死
+    if (!judges.length && vid) {
+      const vp = draft.filter((p) => p.id === vid && p.enabled)[0];
+      if (vp) {
+        vp.role = 'both';
+        vp.vision = true;
+        both = true;
+        if ($('#cfg-vjudge')) $('#cfg-vjudge').checked = true;
+        judges = draft.filter((p) => p.enabled && p.role !== 'vision');
+        CXAI.Log.info('没有独立判题模型：已让读图模型「' + (vp.model || vp.label) + '」兼任判题');
+      }
+    }
+    if (!judges.length) {
+      CXAI.Log.error('没有可用模型：至少启用一个，或把读图模型也勾上「参与判题」');
+      return false;
+    }
+    CXAI.Cfg.set('ai.providers', draft);
+    CXAI.Cfg.set('ai.vision.enabled', !!vid);
+    CXAI.Cfg.set('ai.vision.strategy', vid ? 'ocr' : 'off');
+    CXAI.Cfg.set('ai.vision.ocrProviderId', vid || '');
+    CXAI.Cfg.set('ai.vision.judgeToo', both);
+
+    CXAI.Cfg.set('ai.judge.mode', val('#cfg-mode').value);
+    // 不要向下夹到模型数：夹一次就会永久变小，之后加模型也回不来；真正取面板时 buildPanel 会自己夹
+    CXAI.Cfg.set('ai.judge.panelSize', Math.max(1, Number(val('#cfg-panel').value) || 3));
+    CXAI.Cfg.set('ai.judge.voteThreshold', Number(val('#cfg-vote').value) || 0.7);
+    CXAI.Cfg.set('ai.judge.concurrency', Number(val('#cfg-conc').value) || 3);
+    CXAI.Cfg.set('ai.judge.minConfidence', Number(val('#cfg-minconf').value) || 0.55);
+    CXAI.Cfg.set('ai.judge.enableCritique', val('#cfg-critique').checked);
+    CXAI.Cfg.set('ai.judge.enableArbiter', val('#cfg-arbiter').checked);
+
+    CXAI.Cfg.set('guard.minDelay', Number(val('#cfg-dmin').value) || 1400);
+    CXAI.Cfg.set('guard.maxDelay', Number(val('#cfg-dmax').value) || 4200);
+    CXAI.Cfg.set('guard.enabled', val('#cfg-guard').checked);
+    CXAI.Cfg.set('guard.dialogDelaySec', Math.max(0, Number(val('#cfg-dlg').value) || 0));
+    CXAI.Cfg.set('ui.logMax', Math.max(50, Number(val('#cfg-logmax').value) || 300));
+    CXAI.Cfg.set('apply.overwriteAnswered', val('#cfg-force').checked);
+    CXAI.Cfg.set('apply.saveEach', val('#cfg-save').checked);
+    CXAI.Cfg.set('apply.submit', val('#cfg-submit').checked);
+    const wrote = CXAI.Cfg.save();
+    if (!silent) {
+      CXAI.Log.ok(
+        '设置已保存 · 判题 ' + judges.length + ' 个' + (vid ? ' / 读图 1 个' + (both ? '（兼任判题）' : '') : '')
+      );
+      if (CXAI.Store.backend === 'local') CXAI.Log.warn('当前没有油猴存储：这份配置只在本网站生效，换域名请用面板底部「导出/导入」搬运');
+    }
+    update({ providers: CXAI.Cfg.activeProviders().length });
+    if (!silent) closeConfig();
+    return wrote !== false;
+  }
+
+  /* ---------- 配置搬运（换浏览器 / 换域名 / 换脚本实例） ---------- */
+
+  function exportConfig() {
+    if (!saveConfig({ silent: true })) return;
+    const txt = $('#cfg-io');
+    if (txt) txt.value = CXAI.Cfg.json();
+    const hint = $('#cfg-iohint');
+    if (hint) hint.textContent = '已导出 ' + (txt ? txt.value.length : 0) + ' 字符。全选复制，粘贴到另一台/另一个域名的同一个框里点「导入」。';
+    CXAI.Log.ok('配置已导出到文本框（' + (txt ? txt.value.length : 0) + ' 字符）');
+  }
+
+  function importConfig() {
+    const txt = $('#cfg-io');
+    const raw = txt ? String(txt.value || '').trim() : '';
+    if (!raw) {
+      CXAI.Log.error('文本框是空的：先把导出的 JSON 粘进来');
+      return;
+    }
+    try {
+      CXAI.Cfg.importJSON(raw);
+    } catch (e) {
+      CXAI.Log.error('导入失败：' + (e && e.message ? e.message : e));
+      return;
+    }
+    CXAI.Log.ok('配置已导入 · 模型 ' + (CXAI.Cfg.get('ai.providers', []) || []).length + ' 个');
+    openConfig();
+  }
+
+  async function testProviders() {
+    const out = $('#cfg-testout');
+    const btn = $('#cfg-test2');
+    const esc = (t) => CXAI.U.escapeHtml(String(t == null ? '' : t));
+    const say = (html) => {
+      if (out) out.innerHTML = html;
+    };
+    const line = (cls, text) => '<div class="' + cls + '">' + esc(text) + '</div>';
+
+    const saved = CXAI.Cfg.get('ai.providers', []);
+    const draft = readProviders();
+    CXAI.Cfg.set('ai.providers', draft);
+    const judge = CXAI.Cfg.activeProviders();
+    const vis = CXAI.Cfg.visionProviders();
+    const all = judge.concat(vis.filter((p) => judge.every((j) => j.id !== p.id)));
+
+    if (!all.length) {
+      CXAI.Cfg.set('ai.providers', saved);
+      const msg = '没有可用模型：检查 Base URL / Key / 模型名是否填全（本地网关记得勾「允许空 Key」）';
+      say(line('bad', msg));
+      CXAI.Log.error(msg);
+      return;
+    }
+
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '测试中…';
+    }
+    say(line('mid', '正在测试 ' + all.length + ' 个模型…'));
+    const lines = [];
+    let okN = 0;
+    for (const p of all) {
+      const tag = p.role === 'vision' ? '[读图]' : p.vision ? '[判题+读图]' : '[判题]';
+      const head = tag + (p.label || p.id) + ' · ' + (p.model || '(未填模型)') + ' · ' + (p.baseURL || '');
+      lines.push(line('mid', '… ' + head));
+      say(lines.join(''));
+      try {
+        const t0 = Date.now();
+        const r = await CXAI.AI.ping(p);
+        okN++;
+        lines[lines.length - 1] = line('ok', '✓ ' + head + ' · ' + (r.ms || Date.now() - t0) + 'ms · ' +
+          CXAI.U.truncate(String(r.text || '').replace(/\s+/g, ' '), 40));
+        CXAI.Log.ok(`${p.label || p.id} 连通 (${r.ms}ms) · ${CXAI.U.truncate(r.text, 40)}`);
+      } catch (e) {
+        lines[lines.length - 1] = line('bad', '✗ ' + head + ' · ' + e.message);
+        CXAI.Log.error(`${p.label || p.id} 失败：${e.message}`);
+      }
+      say(lines.join(''));
+    }
+    lines.push(line(okN === all.length ? 'ok' : 'bad', '完成：' + okN + '/' + all.length + ' 连通'));
+    say(lines.join(''));
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '测试连接';
+    }
+    CXAI.Cfg.save();
+  }
+
+  function showHelp() {
+    const box = $('#logs');
+    if (!box) return;
+    box.innerHTML = `
+      <div class="lg">用法：</div>
+      <div class="lg">1. 点 ⚙ → 模型列表里选「预设」自动填好，或手填任意兼容接口</div>
+      <div class="lg">2. 图片题：在「图片题处理」选策略；要直传就把模型勾上「支持图片输入」</div>
+      <div class="lg">3. 本地网关（magpie / Ollama / LM Studio）：Base URL 填本机端口，勾「允许空 Key」</div>
+      <div class="lg">4. 打开考试页（整卷 / 单题模式均可），点「开始答题」</div>
+      <div class="lg warn">低置信度题目标黄，建议人工复核后再交卷</div>
+      <div class="lg">Ctrl+Shift+X 呼出面板；交卷只在显式开启时自动点</div>`;
+  }
+
+  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, openConfig, closeConfig, getQList, saveQList, state };
+})();
+
+/* ==================== 08-main.js ==================== */
+/* ---------------- 主编排引擎 ----------------
+ * 两种页面形态：
+ *   whole   整卷渲染（所有 .questionLi 同时在 DOM 里）→ 顺序遍历
+ *   single  单题模式（一次只渲染一题）→ 答完点"下一题"循环
+ * 判题靠 CXAI.AI.solve（多重 AI），落盘靠 CXAI.Apply。
+ */
+
+CXAI.Engine = (function () {
+  const st = {
+    running: false,
+    paused: false,
+    haltReason: '',
+    stopped: false,
+    cursor: 0,
+    cache: new Map(),
+    results: [],
+    skipped: 0,
+    failed: 0,
+    startedAt: 0,
+    // 单题模式是整页导航（getTheNextQuestion → submitForm → location.href），
+    // 每翻一页脚本内存就清零一次。已答题数必须从会话存储里累加，否则面板永远显示 0。
+    baseDone: 0,
+    // 跨页记录每道题被处理过几次：来回弹（比如误点"上一题"）靠它兜底
+    visited: {},
+    // 题量（页面右上"题量: N"）。单题模式下页面只有一个题块，不能拿 .questionLi 数当题量
+    total: 0,
+    // 这一程是否已经尝试切到"整卷预览"（防来回跳）
+    previewTried: false,
+    // 预取状态
+    prefetching: false,
+    prefetchPromise: null,
+    // 切整卷预览 = 主动把活交接给下一页，finally 不能把 running 标记清掉，
+    // 否则新页面 boot 读不到"上次还在跑"，就再也不会自动开始（用户实测的问题）
+    handoff: false
+  };
+
+  function sleep(...a) {
+    return CXAI.U.sleep(...a);
+  }
+
+  /* ---------------- 会话断点（页面刷新后能接着答） ---------------- */
+
+  const SESSION_KEY = 'session';
+
+  function saveSession(running) {
+    try {
+      CXAI.Store.set(SESSION_KEY, {
+        running: running !== false && st.running,
+        startedAt: st.startedAt,
+        done: appliedCount() + st.skipped,
+        failed: st.failed,
+        visited: st.visited || {},
+        previewTried: st.previewTried || false,
+        url: location.href,
+        at: Date.now()
+      });
+    } catch (e) {}
+  }
+
+  function assertAlive() {
+    if (st.stopped) throw new Error('__STOPPED__');
+    return true;
+  }
+
+  /** 暂停点：在每题开始前等待恢复 */
+  async function waitIfPaused() {
+    while (st.paused && !st.stopped) await sleep(300);
+    assertAlive();
+  }
+
+  /**
+   * 会话/持久缓存键。
+   * 纯图片题的题干和选项文字都是空的（题面全在图里），只按文字算键会让第二题
+   * 直接命中第一题的结论（真机踩过：#2 命中缓存，模型根本没被调用）。
+   * 所以把图片地址也拼进去；有 qid 的再加一道 qid 兜底。
+   */
+  function cacheKey(q) {
+    const imgs = (q.images || []).join(',');
+    return [
+      CXAI.U.normText(q.stem || ''),
+      (q.options || []).map((o) => CXAI.U.normText(o.text || '')).join('|'),
+      imgs
+    ].join('||');
+  }
+
+  /* ---------------- 单题处理 ---------------- */
+
+  /** 落盘前重新从页面取一次题目：单题模式页面会在判题期间重绘，旧元素引用会失效 */
+  function relive(q) {
+    try {
+      const list = (CXAI.Scraper.collect() || {}).questions || [];
+      const hit = CXAI.Scraper.pickSame(list, q);
+      if (!hit || !hit.options.length) return q;
+      hit.index = q.index;
+      return hit;
+    } catch (e) {
+      return q;
+    }
+  }
+
+  /** 把一道题的结论写进面板清单（跨页持久化），同时读回页面真实选中态做对比 */
+  function recordQ(q, result, applied, status) {
+    try {
+      const live = (CXAI.Scraper.pageValue(q) || {}).value || '';
+      CXAI.UI.pushQuestion({
+        index: q.no || (Number(q.index) || 0) + 1,
+        qid: q.qid || '',
+        type: q.type || '',
+        typeLabel: q.typeLabel || '',
+        stem: CXAI.U.truncate(q.stem || '', 240),
+        options: (q.options || []).slice(0, 10).map((o) => ({ k: o.key, t: CXAI.U.truncate(o.text || '', 60), a: !!o.answered })),
+        answer: result && result.answerText ? String(result.answerText) : '',
+        actual: live,
+        stage: result && result.stage ? result.stage : '',
+        confidence: result && result.confidence != null ? result.confidence : null,
+        status: status,
+        // 用题号（qid）当主键：同一道题翻回来还是同一行，不会堆成两条
+        key: q.qid ? 'qid:' + q.qid : 'stem:' + (CXAI.U.normText(q.stem || '').slice(0, 40) || 'i' + (Number(q.index) || 0))
+      });
+    } catch (e) {}
+  }
+
+  /* ---------------- 判题结果的跨页缓存 ----------------
+   * 单题模式一旦整页重载，内存里的 st.cache 就没了；而面板要"每题都显示 AI 答案"、
+   * 续跑时也不该为同一题重复烧 token。所以按题号落一份到存储里。
+   */
+  const ANSWERS_KEY = 'answers';
+
+  function readAnswers() {
+    try {
+      const m = CXAI.Store.get(ANSWERS_KEY, null);
+      return m && typeof m === 'object' ? m : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function saveAnswer(q, result) {
+    if (!q || !result) return;
+    try {
+      const all = readAnswers();
+      const id = q.qid || CXAI.U.normText(q.stem || '').slice(0, 40);
+      if (!id) return;
+      all[id] = {
+        keys: (result.keys || []).slice(),
+        answerText: result.answerText || '',
+        confidence: result.confidence || 0,
+        stage: result.stage || '',
+        stem: CXAI.U.truncate(q.stem || '', 90),
+        typeLabel: q.typeLabel || '',
+        no: q.no || 0,
+        at: Date.now()
+      };
+      CXAI.Store.set(ANSWERS_KEY, all);
+    } catch (e) {}
+  }
+
+  function cachedAnswer(q) {
+    try {
+      const all = readAnswers();
+      const id = q.qid || CXAI.U.normText(q.stem || '').slice(0, 40);
+      const hit = id && all[id];
+      if (!hit || !hit.answerText) return null;
+      return Object.assign({ votes: [], ratio: null }, hit, { stage: 'stored' });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** 题干自带答案（本题选AB / 答案：B）就直接用，别让模型把明写的答案改掉 */
+  function stemResult(q) {
+    const keys = CXAI.Scraper.stemAnswerKeys ? CXAI.Scraper.stemAnswerKeys(q.stem, q.options) : [];
+    if (!keys.length) return null;
+    return {
+      keys: keys.slice(),
+      answerText: keys.join(''),
+      confidence: 1,
+      ratio: 1,
+      stage: 'stem',
+      votes: [],
+      reason: '题干自带答案'
+    };
+  }
+
+  async function handleQuestion(q, pageKind) {
+    const overwrite = CXAI.Cfg.get('apply.overwriteAnswered', false);
+    const no = q.no || (Number(q.index) || 0) + 1;
+    const liveBefore = (CXAI.Scraper.pageValue(q) || {}).value || '';
+
+    // 页面已经答过、又不想覆盖时，先看是否"答错了"：答错才重做（apply.fixWrong 默认开），
+    // 答对就跳过。之前是一律跳过，于是上一轮写错的 ACD 永远修不回来。
+    const fixWrong = CXAI.Cfg.get('apply.fixWrong', true);
+
+    const ck = cacheKey(q);
+    let result = null;
+    const sr = stemResult(q);
+    if (sr) {
+      result = sr;
+      CXAI.Log.info(`#${no} 题干自带答案 ${sr.answerText}，直接采用`);
+    } else if (st.cache.has(ck) && !overwrite) {
+      result = Object.assign({}, st.cache.get(ck), { stage: 'cached' });
+      CXAI.Log.info(`#${no} 命中本次会话缓存`);
+    } else {
+      const stored = overwrite ? null : cachedAnswer(q);
+      if (stored) {
+        result = stored;
+        CXAI.Log.info(`#${no} 命中上次的判定结果 ${stored.answerText}`);
+      }
+    }
+
+    // 判断题页面存 true/false，AI 给 A/B：比较前统一折算成字母串
+    const aiKeys = result
+      ? ((result.keys && result.keys.length)
+          ? result.keys.join('')
+          : (CXAI.AI.resolveAnswerKeys(result.answerText, q).keys || []).join(''))
+      : '';
+    if (q.answered && !overwrite) {
+      const norm = (v) => CXAI.U.normText(String(v == null ? '' : v).replace(/<[^>]+>/g, ' '));
+      // 选择题比字母串；填空/简答比文本（两边都洗成纯文本再比）
+      const same = q.type === 'completion'
+        ? !!result && !!norm(result.answerText) && (norm(liveBefore).indexOf(norm(result.answerText)) >= 0 || norm(result.answerText).indexOf(norm(liveBefore)) >= 0)
+        : (!!aiKeys && aiKeys.split('').sort().join('') === String(liveBefore).split('').sort().join(''));
+      if (same || !fixWrong) {
+        st.skipped++;
+        CXAI.Log.info(`#${no} 已答（页面：${liveBefore || '-'}），跳过`);
+        recordQ(q, result, { ok: true }, 'skip');
+        CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
+        saveSession(true);
+        return { q, skipped: true };
+      }
+      CXAI.Log.warn(`#${no} 页面答案是 ${liveBefore}，与判定 ${result ? result.answerText : '(待判)'} 不一致，重做这题`);
+    }
+
+    if (!result) {
+      CXAI.Log.info(`#${no} 判定中 · ${q.typeLabel} · ${CXAI.U.truncate(q.stem, 40)}`);
+      result = await CXAI.AI.solve(q);
+      st.cache.set(ck, result);
+      saveAnswer(q, result);
+    }
+
+    await waitIfPaused();
+    // 重试：每次重试都重新取元素引用（页面重绘是最常见的失败原因）
+    const retries = Math.max(0, Number(CXAI.Cfg.get('apply.retries', 2)) || 0);
+    let applied = { ok: false, error: '未执行' };
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt) {
+        CXAI.Log.warn(`#${no} 页面元素可能已重绘，重新取一次再落盘（第 ${attempt}/${retries} 次）`);
+        await sleep(CXAI.U.randInt(350, 700));
+      }
+      applied = await CXAI.Apply.apply(attempt === 0 ? q : relive(q), result);
+      if (applied.ok) break;
+    }
+    const live = (CXAI.Scraper.pageValue(q) || {}).value || applied.actual || '';
+    if (!applied.ok) {
+      st.failed++;
+      CXAI.Log.error(`#${no} 写入失败：${applied.error || '未知'}（答案 ${result.answerText}｜页面 ${live || '空'}）`);
+      if (applied.dom) CXAI.Log.warn(`选项结构：${applied.dom}`);
+      if (CXAI.Cfg.get('apply.stopOnFail', true)) {
+        st.haltReason = '写入失败';
+        st.paused = true;
+        CXAI.Log.warn('已暂停：这题没写进去，继续翻页会漏题。手动选好后在面板点「继续」');
+      }
+    } else {
+      CXAI.Log.ok(
+        `#${no} 已填 ${CXAI.U.escapeHtml(result.answerText)} · 页面 ${live || '?'} · ${Math.round((result.confidence || 0) * 100)}% · ${result.stage}`
+      );
+    }
+
+    if (CXAI.Cfg.get('apply.saveEach', false)) {
+      await CXAI.Apply.saveOne(q);
+    }
+
+    CXAI.UI.addQuestionCard(q, result, applied);
+    const rec = { index: q.index, no, qid: q.qid, type: q.type, stem: CXAI.U.truncate(q.stem, 80), result, applied };
+    st.results.push(rec);
+    // 面板上的"已处理"只算真正落盘的（applied.ok），失败的单独进 failed，
+    // 避免失败题被算进作答数，也避免"作答 0 个"这种看不出到底走了几步的统计。
+    recordQ(q, result, applied, applied && applied.ok ? 'ok' : 'fail');
+    CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
+    // 单题模式翻页是整页导航，finally 来不及执行；进度必须在这一题刚落盘时写盘，
+    // 否则下一页读回来的 done 永远是 0 —— 用户看到的就是"作答 0 个"。
+    saveSession(true);
+    return rec;
+  }
+
+  /* ---------------- 整卷模式 ---------------- */
+
+  async function runWholePage(page) {
+    let { questions } = CXAI.Scraper.collect();
+    CXAI.Log.info(`整卷模式：共 ${questions.length} 题`);
+    CXAI.UI.update({ total: questions.length, done: 0 });
+    if (!questions.length) {
+      CXAI.Log.warn('页面上没有找到题目，确认是否在考试/作业页面');
+      return;
+    }
+
+    for (let i = st.cursor; i < questions.length; i++) {
+      st.cursor = i;
+      await waitIfPaused();
+      // DOM 可能被页面重绘，逐题重新取一次引用
+      const fresh = CXAI.Scraper.collect().questions;
+      const q = fresh[i] || questions[i];
+      if (!q) continue;
+      try {
+        await handleQuestion(q, page.kind);
+      } catch (e) {
+        if (e.message === '__STOPPED__') throw e;
+        st.failed++;
+        CXAI.Log.error(`#${i + 1} 处理异常：${e.message}`);
+      }
+      if (i < questions.length - 1) await sleep(CXAI.Guard.pace(i));
+    }
+    CXAI.Log.ok(`整卷处理完毕：成功 ${appliedCount()} · 跳过 ${st.skipped} · 失败 ${st.failed}`);
+    await maybeSubmit();
+  }
+
+  // 真正落盘的题数（applied.ok）。st.results.length 含失败项，不能当"已作答"用。
+  function appliedCount() {
+    return st.baseDone + st.results.filter((r) => r.applied && r.applied.ok).length;
+  }
+
+  /* ---------------- 无刷新翻页 ----------------
+   * 超星单题模式的翻页链是：
+   *   getTheNextQuestion(1) → submitForm(true,false,cb)（ajax 保存，回调给 lastUpdateTime|remainTime|enc）
+   *                          → window.location.href = 下一页（整页重载）
+   * 整页重载会把脚本内存、面板、计时器一起清掉，用户看到的就是"刷新来刷新去"。
+   * 这里把后半段换成 fetch + 原地换 DOM：保存还是走页面自己的 submitForm（服务器视角完全一样），
+   * 只是不再整页重载。任何一步失败都自动回退到页面原生的「下一题」。
+   */
+
+  /** 调页面自己的 submitForm 走 ajax 保存，返回 'lastUpdateTime|remainTime|enc' */
+  function pageSubmitSave() {
+    return new Promise((resolve) => {
+      const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+      if (!w || typeof w.submitForm !== 'function') return resolve(null);
+      let done = false;
+      const wait = Math.max(2000, Number(CXAI.Cfg.get('engine.softNextTimeoutMs', 6000)) || 6000);
+      const timer = setTimeout(() => {
+        if (done) return;
+        done = true;
+        resolve(null);
+      }, wait);
+      try {
+        w.submitForm(true, false, function (data) {
+          if (done) return;
+          done = true;
+          clearTimeout(timer);
+          resolve(String(data == null ? '' : data));
+        });
+      } catch (e) {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(null);
+        }
+      }
+    });
+  }
+
+  /** 按页面自己的规则拼下一页地址：start+1，并带上保存回调给的 enc/remainTime */
+  function nextUrl(data) {
+    const url = new URL(location.href);
+    const cur = Number(url.searchParams.get('start') || 0);
+    url.searchParams.set('start', String(cur + 1));
+    const parts = String(data || '').split('|');
+    if (parts.length >= 3 && parts[0] && parts[1] && parts[2]) {
+      url.searchParams.set('relationAnswerLastUpdateTime', parts[0]);
+      url.searchParams.set('remainTimeParam', parts[1]);
+      url.searchParams.set('enc', parts[2]);
+    }
+    return url.toString();
+  }
+
+  /**
+   * @returns {Promise<{ok:boolean, why?:string, url?:string, fatal?:boolean}>}
+   *   ok    原地换题成功（调用方直接继续循环）
+   *   url   保存成功但必须真跳转（富文本页编辑器重建不了 / 已经到最后一题）
+   */
+  async function softNext() {
+    if (!CXAI.Cfg.get('engine.softNext', true)) return { ok: false, why: '已关闭' };
+    const page = CXAI.Scraper.detectPage();
+    if (page.readonly) return { ok: false, why: '浏览/预览页不记录作答' };
+    if (!document.querySelector('#submitTest')) return { ok: false, why: '页面上没有作答表单' };
+    if (typeof DOMParser !== 'function') return { ok: false, why: 'DOMParser 不可用' };
+
+    const data = await pageSubmitSave();
+    if (!data) return { ok: false, why: 'submitForm 保存回调超时' };
+    const url = nextUrl(data);
+    let html = '';
+    try {
+      const res = await fetch(url, { credentials: 'include' });
+      if (!res.ok) return { ok: false, why: '取下一页 HTTP ' + res.status };
+      html = await res.text();
+    } catch (e) {
+      return { ok: false, why: '取下一页失败：' + e.message };
+    }
+    const swapped = CXAI.Scraper.applyNextPage(html);
+    if (!swapped.ok) {
+      // 到底了：不跳转，交给主循环收尾（跳过去是"无效参数！"死页面）
+      if (swapped.end) return { ok: false, end: true, why: swapped.why || '已到最后一题' };
+      return { ok: false, why: swapped.why || '换题失败', url };
+    }
+    // 填空/简答：换完题块必须把 UEditor 重新挂起来（body 异步就绪，要等）
+    const editorsOk = CXAI.Scraper.ensureEditorsAsync ? await CXAI.Scraper.ensureEditorsAsync(3000) : true;
+    if (!editorsOk) return { ok: false, why: '富文本编辑器没能重建', url };
+    try {
+      history.replaceState(null, '', url);
+    } catch (e) {}
+    return { ok: true, url };
+  }
+
+  /* ---------------- 单题模式 ---------------- */
+
+  async function runSingleMode(page) {
+    const maxIter = CXAI.Cfg.get('engine.maxIterations', 200);
+    st.total = CXAI.Scraper.totalCount() || st.total;
+    const first = CXAI.Scraper.collect().questions[0];
+    CXAI.Log.info(
+      '单题模式：逐题作答并翻页（页面题目块 ' + CXAI.Scraper.collect().questions.length +
+        ' 个 · 本卷共 ' + (st.total || '?') + ' 题 · 无刷新翻页 ' + (CXAI.Cfg.get('engine.softNext', true) ? '开' : '关') + '）'
+    );
+    if (first && !first.answered) {
+      CXAI.UI.update({ current: CXAI.Scraper.currentIndex() || 1, pending: { index: CXAI.Scraper.currentIndex() || 1, stem: first.stem, typeLabel: first.typeLabel } });
+    }
+    for (let iter = 0; iter < maxIter; iter++) {
+      await waitIfPaused();
+      const { questions } = CXAI.Scraper.collect();
+      const q = questions[0];
+      if (!q) {
+        CXAI.Log.warn('当前页未识别到题目，可能已到最后一题');
+        break;
+      }
+      // 题号以页面 start 参数为准（单题模式下一题一块，不能拿数组下标当题号）
+      q.no = CXAI.Scraper.currentIndex() || (st.baseDone + iter + 1);
+      st.cursor = q.no;
+      // 同一道题反复出现 = 翻页在来回弹（典型原因：抓到了"上一题"按钮）
+      const vkey = q.qid || CXAI.U.normText(q.stem).slice(0, 60) || '#' + iter;
+      st.visited = st.visited || {};
+      st.visited[vkey] = (Number(st.visited[vkey]) || 0) + 1;
+      if (st.visited[vkey] > 3) {
+        CXAI.Log.error(
+          '同一道题已被处理 ' + st.visited[vkey] + ' 次（题号附近来回跳），已停止，避免整卷空转。'
+        );
+        break;
+      }
+      q.index = iter;
+      CXAI.UI.update({ total: st.total || st.baseDone + iter + 1, done: appliedCount() + st.skipped, current: q.no });
+      try {
+        await handleQuestion(q, page.kind);
+      } catch (e) {
+        if (e.message === '__STOPPED__') throw e;
+        CXAI.Log.error(`第 ${q.no} 题异常：${e.message}`);
+      }
+      await sleep(CXAI.Guard.pace(iter));
+      // 翻页前留落库窗口：超星在换题时会重建题目区，抢在它保存之前换题就丢答案。
+      await CXAI.Apply.settle(q);
+
+      // ① 无刷新翻页
+      const sn = await softNext();
+      if (sn.ok) {
+        let movedOk = false;
+        for (let w = 0; w < 12; w++) {
+          const cur = CXAI.Scraper.collect().questions[0];
+          if (cur && (CXAI.U.normText(cur.stem) !== CXAI.U.normText(q.stem) || (cur.qid && q.qid && cur.qid !== q.qid))) {
+            movedOk = true;
+            break;
+          }
+          await sleep(120);
+        }
+        if (movedOk) continue;
+        CXAI.Log.warn('无刷新翻页后题目没变，回退原生「下一题」');
+      } else if (sn.end) {
+        CXAI.Log.ok('已到最后一道题：' + (sn.why || ''));
+        break;
+      } else if (sn.url) {
+        // 富文本页编辑器实在重建不了：让页面自己跳一次并初始化（只跳这一次）
+        CXAI.Log.info('改为页面内跳转：' + (sn.why || ''));
+        location.href = sn.url;
+        return;
+      } else if (sn.why && sn.why !== '已关闭') {
+        CXAI.Log.info('无刷新翻页不可用（' + sn.why + '），改用原生「下一题」');
+      }
+
+      // ② 原生翻页（回退路径）：翻页前自检，页面没把这题记为已答就停下，别静默翻完整卷
+      if (!page.readonly) {
+        const cur = CXAI.Scraper.collect().questions[0];
+        const same = cur && CXAI.U.normText(cur.stem) === CXAI.U.normText(q.stem);
+        if (same && !cur.answered) {
+          st.failed++;
+          CXAI.Log.error(
+            `第 ${q.no} 题翻页前自检失败：页面仍是未答状态。已停止翻页，避免整卷记 0 题。`
+          );
+          CXAI.UI.update({ failed: st.failed });
+          break;
+        }
+      }
+      const moved = CXAI.Scraper.clickNext();
+      if (!moved) {
+        CXAI.Log.ok('没有"下一题"按钮，单题模式结束');
+        break;
+      }
+      await sleep(CXAI.U.randInt(900, 1800));
+      let waitCount = 0;
+      while (waitCount++ < 12) {
+        const cur = CXAI.Scraper.collect().questions[0];
+        if (cur && CXAI.U.normText(cur.stem) !== CXAI.U.normText(q.stem)) break;
+        await sleep(250);
+      }
+      const advanced = CXAI.Scraper.collect().questions[0];
+      if (advanced && CXAI.U.normText(advanced.stem) === CXAI.U.normText(q.stem)) {
+        CXAI.Log.warn('点了"下一题"但题目没变，可能已经是最后一题（或翻页按钮被遮住），停止单题循环');
+        break;
+      }
+    }
+    CXAI.Log.ok(`单题模式结束：成功 ${appliedCount()} · 跳过 ${st.skipped} · 失败 ${st.failed}`);
+    await maybeSubmit();
+  }
+
+  /* ---------------- 点一下 = 答一题 ---------------- */
+
+  /**
+   * 答"下一道还没答的题"（点小球一次 = 走一步）。
+   *   · 整卷/预览页：直接答当前页里第一道没答案的，答完停在那儿等你再点
+   *   · 单题页：答当前这道，然后翻到下一题（不自动连答）
+   * 有预取缓存就直接落盘，没有就现场判一次。
+   */
+  async function answerNext(opt) {
+    opt = opt || {};
+    if (st.running) {
+      CXAI.Log.warn('自动连答正在跑，先「停止」再用单题作答');
+      return { ok: false, reason: 'running' };
+    }
+    const page = CXAI.Scraper.detectPage();
+    const { questions } = CXAI.Scraper.collect();
+    if (!questions.length) {
+      CXAI.Log.warn('这一页没有识别到题目');
+      return { ok: false, reason: 'no-question' };
+    }
+    const whole = questions.length > 1;
+    const overwrite = CXAI.Cfg.get('apply.overwriteAnswered', false);
+    const isEmpty = (q) => !((CXAI.Scraper.pageValue(q) || {}).value || '');
+    const next = overwrite ? questions[0] : questions.filter(isEmpty)[0];
+    if (!next) {
+      CXAI.Log.ok('这一页的题都已经有答案了');
+      CXAI.UI.update({ doneAll: true });
+      return { ok: true, reason: 'all-answered', left: 0 };
+    }
+    const q = next;
+    q.no = whole ? questions.indexOf(q) + 1 : (CXAI.Scraper.currentIndex() || 1);
+    CXAI.UI.update({ current: q.no });
+
+    let result = stemResult(q) || cachedAnswer(q) || (st.cache.has(cacheKey(q)) ? st.cache.get(cacheKey(q)) : null);
+    if (result) {
+      CXAI.Log.info(`#${q.no} 用已缓存的判定 ${result.answerText}`);
+    } else {
+      CXAI.Log.info(`#${q.no} 现场判定 · ${q.typeLabel} · ${CXAI.U.truncate(q.stem || '', 30)}`);
+      result = await CXAI.AI.solve(q);
+      saveAnswer(q, result);
+      st.cache.set(cacheKey(q), result);
+    }
+
+    const applied = await CXAI.Apply.apply(q, result);
+    const live = (CXAI.Scraper.pageValue(q) || {}).value || applied.actual || '';
+    recordQ(q, result, applied, applied && applied.ok ? 'ok' : 'fail');
+    CXAI.UI.update({ doneAll: false });
+    if (applied && applied.ok) {
+      CXAI.Log.ok(`#${q.no} 已填 ${CXAI.U.escapeHtml(result.answerText)} · 页面 ${live || '?'}`);
+    } else {
+      CXAI.Log.error(`#${q.no} 写入失败：${applied && applied.error}`);
+    }
+    // 整卷/预览：把这题滚到视野里，方便你看着它落盘
+    if (whole && q.root && q.root.scrollIntoView) {
+      try {
+        q.root.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (e) {}
+    }
+    // 单题页：答完翻到下一题，下一次点击继续
+    if (!whole && opt.advance !== false && page.mode === 'single') {
+      await CXAI.Apply.settle(q);
+      const sn = await softNext();
+      if (sn.ok) {
+        // 已原地换到下一题，停在那儿等下一次点击
+      } else if (sn.url) {
+        // 富文本页等必须由页面自己初始化的场景：整页跳过去
+        location.href = sn.url;
+        return { ok: !!(applied && applied.ok), q: q.no, advance: 'reload' };
+      } else if (!sn.end) {
+        CXAI.Scraper.clickNext();
+      }
+    }
+    const left = CXAI.Scraper.collect().questions.filter(isEmpty).length;
+    if (!left) CXAI.UI.update({ doneAll: true, running: false });
+    return { ok: !!(applied && applied.ok), q: q.no, left };
+  }
+
+  /* ---------------- 预取答案（后台跑，不碰页面） ---------------- */
+
+  /**
+   * 把当前页每道"还没答案"的题先判一遍，结果按 qid 存起来。
+   * 只写存储，不动 DOM —— 之后点一下球就是"读缓存 + 落盘"，秒出。
+   */
+  async function prefetch(opt) {
+    opt = opt || {};
+    if (st.prefetching) return st.prefetchPromise || 0;
+    st.prefetching = true;
+    const concurrency = Math.max(1, Math.min(4, Number(CXAI.Cfg.get('engine.prefetchConcurrency', 2)) || 2));
+    const overwrite = CXAI.Cfg.get('apply.overwriteAnswered', false);
+    let queue = [];
+    try {
+      queue = (CXAI.Scraper.collect().questions || []).filter((q) => {
+        if (stemResult(q) || cachedAnswer(q) || st.cache.has(cacheKey(q))) return false;
+        if (!overwrite && (CXAI.Scraper.pageValue(q) || {}).value) return false;
+        return true;
+      });
+    } catch (e) {
+      queue = [];
+    }
+    if (!queue.length) {
+      st.prefetching = false;
+      return 0;
+    }
+    CXAI.Log.info(`开始预取 ${queue.length} 道题的答案（并发 ${concurrency}），期间你可以随时点小球答一题`);
+    let done = 0;
+    let stopped = false;
+    const worker = async () => {
+      while (queue.length && !stopped && !st.stopped) {
+        const q = queue.shift();
+        try {
+          const r = await CXAI.AI.solve(q);
+          saveAnswer(q, r);
+          st.cache.set(cacheKey(q), r);
+          done++;
+          CXAI.Log.ok(`预取 ${done}/${done + queue.length} · #${(Number(q.index) || 0) + 1} ${CXAI.U.truncate(q.stem || '', 24)} → ${r.answerText}`);
+          CXAI.UI.update({ prefetched: done });
+        } catch (e) {
+          CXAI.Log.warn('预取失败：' + e.message);
+        }
+      }
+    };
+    st.prefetchPromise = Promise.all(Array.from({ length: concurrency }, worker)).then(() => {
+      st.prefetching = false;
+      CXAI.Log.ok(`预取完成：${done} 道题已缓存，点小球即可逐题落盘`);
+      return done;
+    });
+    return st.prefetchPromise;
+  }
+
+  /* ---------------- 用页面现状给清单打底 ---------------- */
+
+  /**
+   * 把"页面上已经存在的答案"读进清单：整卷/预览模式下 10 道题可能早就答过了，
+   * 面板不能一片"未答"。这些行进 status='skip'（已答·原有），AI 答案留空——
+   * 我们并不知道用户当时选了什么，不猜。
+   */
+  function primeFromPage() {
+    try {
+      const qs = CXAI.Scraper.collect().questions || [];
+      if (!qs.length) return 0;
+      const whole = qs.length > 1;
+      const base = whole ? 0 : (CXAI.Scraper.currentIndex() || 1) - 1;
+      // 已经有 AI 结论的行不要被"打底"覆盖掉（否则刚答完的题会变成"AI 未参与"）
+      const existing = {};
+      try {
+        (CXAI.UI.getQList() || []).forEach((r) => {
+          if (r && r.key) existing[r.key] = r;
+        });
+      } catch (e) {}
+      let n = 0;
+      qs.forEach((q, i) => {
+        const pv = (CXAI.Scraper.pageValue(q) || {}).value || '';
+        if (!pv) return;
+        const no = whole ? i + 1 : base + 1;
+        const rowKey = q.qid ? 'qid:' + q.qid : 'stem:' + (CXAI.U.normText(q.stem || '').slice(0, 40));
+        const prev = existing[rowKey];
+        if (prev && prev.answer) return; // 留着 AI 的结论
+        CXAI.UI.pushQuestion({
+          index: no,
+          qid: q.qid || '',
+          type: q.type || '',
+          typeLabel: q.typeLabel || '',
+          stem: CXAI.U.truncate(q.stem || '', 240),
+          options: (q.options || []).slice(0, 10).map((o) => ({ k: o.key, t: CXAI.U.truncate(o.text || '', 60), a: !!o.answered })),
+          answer: '',
+          actual: pv,
+          status: 'skip',
+          stage: 'stored',
+          key: rowKey
+        });
+        n++;
+      });
+      if (n) CXAI.Log.info('页面上已有 ' + n + ' 道题的答案，已填入清单（标为"已答·原有"）');
+      return n;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /* ---------------- 清单点行跳转 ---------------- */
+
+  /**
+   * 跳到第 n 题（n = 面板上显示的题号，从 1 起）。
+   * 超星页面自己的 getTheQuestionByStart(start) 收的是 URL 里的 start 值，等于题号-1。
+   */
+  function jumpTo(n) {
+    const target = Math.max(0, Number(n) || 0) - 1;
+    const cur = CXAI.Scraper.currentIndex();
+    if (cur && target === cur - 1) {
+      CXAI.Log.info('已经在第 ' + n + ' 题');
+      return;
+    }
+    const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
+    try {
+      if (typeof w.getTheQuestionByStart === 'function') {
+        CXAI.Log.info('跳转到第 ' + n + ' 题');
+        w.getTheQuestionByStart(target);
+        return;
+      }
+    } catch (e) {}
+    try {
+      const url = new URL(location.href);
+      url.searchParams.set('start', String(target));
+      location.href = url.toString();
+    } catch (e) {
+      CXAI.Log.warn('跳转失败：' + e.message);
+    }
+  }
+
+  /* ---------------- 交卷 ---------------- */
+
+  async function maybeSubmit() {
+    if (!CXAI.Cfg.get('apply.autoSubmit', false)) {
+      CXAI.Log.warn('未开启自动交卷。请人工复核标黄题目后再手动交卷。');
+      return;
+    }
+    const btn = CXAI.Apply.findSubmitButton();
+    if (!btn) {
+      CXAI.Log.warn('未找到交卷按钮，请手动提交');
+      return;
+    }
+    CXAI.Log.warn('10 秒后自动交卷，需要中止请点「停止」');
+    await sleep(10000);
+    if (st.stopped) return;
+    await CXAI.Apply.humanClick(btn, { nativeFallback: true });
+    CXAI.Log.ok('已点击交卷');
+  }
+
+  /* ---------------- 对外 ---------------- */
+
+  async function start() {
+    if (st.running) return;
+    const providers = CXAI.Cfg.activeProviders();
+    if (!providers.length) {
+      CXAI.Log.error('还没有配置模型：点右上角 ⚙ 填入 Base URL / API Key / 模型名');
+      CXAI.UI.openConfig();
+      return;
+    }
+
+    st.running = true;
+    st.stopped = false;
+    st.paused = false;
+    st.cursor = 0;
+    // 整页导航会把内存清零，续跑时把上一页的累计进度接回来
+    st.baseDone = 0;
+    try {
+      const prev = CXAI.Store.get(SESSION_KEY, null);
+      const winMs = (Number(CXAI.Cfg.get('engine.resumeWindowMin', 20)) || 20) * 60000;
+      if (prev && prev.running && Date.now() - (Number(prev.at) || 0) < winMs) {
+        st.baseDone = Number(prev.done) || 0;
+        st.visited = prev.visited || {};
+        st.previewTried = !!prev.previewTried;
+        if (st.baseDone > 0) CXAI.Log.info('接着上次进度：已完成 ' + st.baseDone + ' 题');
+      }
+    } catch (e) {}
+    st.results = [];
+    st.skipped = 0;
+    st.failed = 0;
+    st.startedAt = Date.now();
+    let _n = 0;
+    try {
+      st.total = CXAI.Scraper.totalCount() || 0;
+      _n = st.total || CXAI.Scraper.collect().questions.length;
+    } catch (e) {}
+    // 面板清单跨页保留：先把上次的记录摆回面板，"已处理"从清单里的成功条数起算
+    let prevList = [];
+    try {
+      prevList = CXAI.UI.getQList ? CXAI.UI.getQList() : [];
+    } catch (e) {}
+    st.baseDone = prevList.filter((x) => x && x.status === 'ok').length;
+    // 整卷/预览模式下先把"页面上已经答过的题"读进清单，别让面板一片未答
+    try {
+      primeFromPage();
+    } catch (e) {}
+    CXAI.UI.update({
+      running: true,
+      doneAll: false,
+      paused: false,
+      providers: providers.length,
+      done: appliedCount() + st.skipped,
+      total: _n,
+      qlist: prevList,
+      current: CXAI.Scraper.currentIndex() || 1
+    });
+    saveSession(true);
+
+    try {
+      const page = CXAI.Scraper.detectPage();
+      CXAI.UI.update({ pageKind: page.kind });
+      CXAI.Log.info(`页面识别：${page.kind} · ${page.title || location.pathname}`);
+      if (page.kind === 'unknown') {
+        CXAI.Log.error('当前页面不是学习通考试/作业页，脚本待机');
+        return;
+      }
+      if (page.readonly) {
+        CXAI.Log.warn(
+          '⚠ 当前是试卷浏览/预览页（' + location.pathname + '）：这里点选项只有本地高亮，超星不会记录作答。' +
+            '要真正落库请进正式考试或作业页面（/exam-ans/exam/test/... 或 /work/dowork）。'
+        );
+      }
+      // 有「整卷预览」入口就先切过去：一页装下全部题目，答题全程不用翻页
+      // （ocsjs 也是这么干的）。只在单题模式下尝试，且一程只尝试一次，失败自动回退。
+      if (
+        page.kind !== 'chapter' &&
+        page.mode === 'single' &&
+        !st.previewTried &&
+        CXAI.Cfg.get('answer.preferPreview', true)
+      ) {
+        const entry = CXAI.Scraper.previewEntry();
+        if (entry) {
+          st.previewTried = true;
+          saveSession(true);
+          CXAI.Log.info('发现「整卷预览」入口：先切到整卷模式（一页装下全部题目，不必逐题翻页）');
+          await sleep(CXAI.U.randInt(400, 900));
+          const entered = CXAI.Scraper.enterPreview();
+          if (entered) {
+            st.handoff = true;
+            CXAI.Log.info('已点击整卷预览，页面切换后会自动继续答题');
+            return;
+          }
+          CXAI.Log.warn('整卷预览入口点不动，继续用单题模式');
+        }
+      }
+      // 整卷预览页刚切过来时题块可能还没渲染完，先等它出现（最多 12s），别一上来就判"没有题目"
+      if (!CXAI.Scraper.collect().questions.length) {
+        const deadline = Date.now() + 12000;
+        while (Date.now() < deadline) {
+          await sleep(400);
+          if (CXAI.Scraper.collect().questions.length) break;
+        }
+      }
+      if (page.kind === 'chapter') await runWholePage(page);
+      else if (page.mode === 'single') await runSingleMode(page);
+      else await runWholePage(page);
+      CXAI.UI.update({ doneAll: true });
+    } catch (e) {
+      if (e.message === '__STOPPED__') CXAI.Log.warn('已手动停止');
+      else CXAI.Log.error('运行中断：' + e.message);
+    } finally {
+      if (st.handoff) {
+        // 交接给下一页：**先**在 st.running 还是 true 的时候写盘（saveSession 会与 st.running 取与），
+        // 再把内存状态放下。顺序反了就会写成 running:false，新页面永远不会自动开始。
+        saveSession(true);
+        st.running = false;
+        st.handoff = false;
+        CXAI.Log.info('已切到整卷预览，等新页面加载后自动接着答');
+      } else {
+        const cost = Math.round((Date.now() - st.startedAt) / 1000);
+        CXAI.Log.info(`总耗时 ${cost}s · 成功 ${appliedCount()} · 跳过 ${st.skipped} · 失败 ${st.failed}`);
+        st.running = false;
+        st.paused = false;
+        saveSession(false);
+      }
+      CXAI.UI.update({ running: false, paused: false });
+    }
+  }
+
+  function togglePause() {
+    if (!st.running) return;
+    st.paused = !st.paused;
+    CXAI.Log.warn(st.paused ? '已暂停' : '继续');
+    CXAI.UI.update({ paused: st.paused });
+  }
+
+  function stop() {
+    if (!st.running) return;
+    st.stopped = true;
+    st.paused = false;
+    saveSession(false);
+    CXAI.Log.warn('停止中…');
+  }
+
+  return { start, togglePause, stop, jumpTo, softNext, primeFromPage, answerNext, prefetch, st, saveSession };
+})();
+
+/* ---------------- 启动 ---------------- */
+
+(function boot() {
+  function ready() {
+    try {
+      // 只在"真正能作答的考试/作业页"出现：课程首页、讨论区、已交卷回看页一律不挂界面，
+      // 连环境伪装都不装（那是全局副作用，不该出现在普通页面）。
+      const gate = (function () {
+        try {
+          return CXAI.Scraper.detectPage();
+        } catch (e) {
+          return null;
+        }
+      })();
+      if (!gate || !gate.answerable) {
+        try {
+          console.log(
+            '[CX-AI] 当前页面不是考试作答页，脚本不出现：' +
+              (gate ? gate.kind + (gate.finished ? ' · 已交卷/回看页' : '') : '页面未识别')
+          );
+        } catch (e) {}
+        return;
+      }
+      CXAI.Cfg.load();
+      if (CXAI.Cfg.get('guard.enabled', true)) CXAI.Guard.install();
+      CXAI.UI.mount();
+      // 交卷/跳到回看页之后，界面自己收掉（用户点交卷、或页面自己跳转都能兜住）
+      setInterval(function () {
+        try {
+          if (!document.getElementById('cx-ai-host')) return;
+          const p2 = CXAI.Scraper.detectPage();
+          if (p2.finished) {
+            CXAI.Log.info('检测到已交卷，界面已自动隐藏');
+            CXAI.UI.unmount();
+          }
+        } catch (e) {}
+      }, 2000);
+      try {
+        // 清单必须第一时间从存储恢复：单题模式每翻一页整页重载，面板不能跟着从 0 开始
+        const rows0 = CXAI.UI.getQList ? CXAI.UI.getQList() : [];
+        CXAI.UI.update({ qlist: rows0 });
+        CXAI.UI.update({
+          done: rows0.filter((x) => x && x.status === 'ok').length,
+          total: CXAI.Scraper.totalCount(),
+          current: CXAI.Scraper.currentIndex()
+        });
+      } catch (e) {}
+      // 超星的题块常常晚于 DOMContentLoaded 才渲染（ajax 回填），
+      // v1.4.6 只抓一次，于是面板永远显示"题目 0、已处理 0"。这里轮询补抓。
+      (function pollQuestions() {
+        const deadline = Date.now() + (Number(CXAI.Cfg.get('engine.bootstrapPollMs', 15000)) || 15000);
+        let tries = 0;
+        const tick = () => {
+          tries++;
+          let n = 0;
+          let total = 0;
+          try {
+            n = CXAI.Scraper.collect().questions.length;
+            total = CXAI.Scraper.totalCount();
+          } catch (e) {}
+          if (n > 0) {
+            CXAI.UI.update({ total: total || n, current: CXAI.Scraper.currentIndex() });
+            try {
+              CXAI.Engine.primeFromPage();
+            } catch (e) {}
+            // 后台预取：先把答案判好缓存下来，之后点小球就是"读缓存 + 落盘"，几乎不用等
+            try {
+              if (CXAI.Cfg.get('engine.prefetch', true)) {
+                setTimeout(function () {
+                  try {
+                    CXAI.Engine.prefetch();
+                  } catch (e) {}
+                }, Math.max(500, Number(CXAI.Cfg.get('engine.prefetchDelayMs', 2000)) || 2000));
+              }
+            } catch (e) {}
+            const first = CXAI.Scraper.collect().questions[0];
+            if (first) {
+              CXAI.UI.update({ pending: { index: CXAI.Scraper.currentIndex() || 1, stem: first.stem, typeLabel: first.typeLabel } });
+            }
+            return;
+          }
+          if (Date.now() < deadline) setTimeout(tick, Math.min(1200, 250 + tries * 150));
+        };
+        setTimeout(tick, 300);
+      })();
+      CXAI.UI.update({
+        providers: CXAI.Cfg.activeProviders().length,
+        pageKind: (function () {
+          try {
+            return CXAI.Scraper.detectPage().kind;
+          } catch (e) {
+            return '-';
+          }
+        })()
+      });
+      CXAI.Log.ok('脚本已加载 · Ctrl+Shift+X 呼出面板');
+      // 上次答到一半被页面刷新打断 → 自动接着答
+      try {
+        const ss = CXAI.Store.get('session', null);
+        if (ss && ss.running) {
+          const winMs = (Number(CXAI.Cfg.get('engine.resumeWindowMin', 20)) || 20) * 60000;
+          const page = CXAI.Scraper.detectPage();
+          const fresh = Date.now() - (Number(ss.at) || 0) < winMs;
+          if (fresh && page.kind !== 'unknown' && CXAI.Cfg.get('engine.autoResume', true)) {
+            CXAI.Log.warn('上次作答被页面刷新打断（已完成 ' + (Number(ss.done) || 0) + ' 题），3 秒后自动接着答');
+            setTimeout(function () {
+              try {
+                CXAI.Engine.start();
+              } catch (e) {
+                CXAI.Log.error('自动续跑失败：' + e.message);
+              }
+            }, 3000);
+          } else {
+            CXAI.Store.remove('session');
+          }
+        }
+      } catch (e) {}
+      // 本域第一次跑（或配置没跟着过来）时，直接把设置面板和导入框摆在眼前
+      var np = (CXAI.Cfg.get('ai.providers', []) || []).length;
+      if (!np) {
+        CXAI.Log.warn(
+          '当前域名还没有配置（存储后端：' + CXAI.Store.backend + '）。在别的站点配过的，把那份 JSON 粘到设置面板底部「配置备份」里点导入即可'
+        );
+        try {
+          CXAI.UI.openConfig();
+          var io = document.getElementById('cx-ai-host').shadowRoot.querySelector('#cfg-io');
+          if (io) io.focus();
+        } catch (e) {}
+      }
+      if (typeof GM_registerMenuCommand === 'function') {
+        GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
+        GM_registerMenuCommand('开始答题', () => CXAI.Engine.start());
+      }
+    } catch (e) {
+      console.error('[CX-AI] 启动失败', e);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(ready, 400));
+  } else {
+    setTimeout(ready, 400);
+  }
+})();
+
+/* 暴露给控制台调试 */
+try {
+  (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window).CXAI = CXAI;
+} catch (e) {
+  window.CXAI = CXAI;
+}
+})();
