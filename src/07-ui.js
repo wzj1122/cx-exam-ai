@@ -2,6 +2,9 @@
 
 CXAI.UI = (function () {
   let host = null;
+
+  /** 独立设置中心的默认地址（换部署位时改这里，或用配置项 ui.settingsURL 覆盖） */
+  const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings.html';
   let root = null;
   let state = { running: false, paused: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
 
@@ -277,6 +280,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           <div class="db" id="cfg-body"></div>
         </div>
         <div class="df">
+          <button class="b" data-act="cfg-page" title="在独立网页里配置，同一份配置，改完考试页直接生效">独立设置页 ↗</button>
           <button class="b" data-act="cfg-test">测试连接</button>
           <button class="b primary" data-act="cfg-save">保存</button>
         </div>
@@ -360,6 +364,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           break;
         case 'cfg-import':
           importConfig();
+          break;
+        case 'cfg-page':
+          openSettingsPage();
           break;
         case 'run':
           CXAI.Engine.start();
@@ -1554,6 +1561,26 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     return out;
   }
 
+  /** 独立设置中心的地址（配置项 ui.settingsURL 可覆盖，方便自建部署 / 本地调试） */
+  function settingsURL() {
+    try {
+      const u = CXAI.Cfg.get('ui.settingsURL', '');
+      if (u) return String(u);
+    } catch (e) {}
+    return DEFAULT_SETTINGS_URL;
+  }
+
+  /** 新标签打开设置中心：同一份 GM 存储，改完回考试页直接生效 */
+  function openSettingsPage() {
+    const url = settingsURL();
+    try {
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      location.href = url;
+    }
+    CXAI.Log.info('已打开设置中心：' + url);
+  }
+
   function closeConfig() {
     const m = $('#mask');
     if (m) m.classList.remove('show');
@@ -1606,6 +1633,8 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     CXAI.Cfg.set('apply.overwriteAnswered', val('#cfg-force').checked);
     CXAI.Cfg.set('apply.saveEach', val('#cfg-save').checked);
     CXAI.Cfg.set('apply.submit', val('#cfg-submit').checked);
+    // 引擎（08）与 guard（06）实际读的是 apply.autoSubmit，两个字段一起写，避免开关只改一半
+    CXAI.Cfg.set('apply.autoSubmit', val('#cfg-submit').checked);
     const wrote = CXAI.Cfg.save();
     if (!silent) {
       CXAI.Log.ok(
@@ -1717,5 +1746,5 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div class="lg">Ctrl+Shift+X 呼出面板；交卷只在显式开启时自动点</div>`;
   }
 
-  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, openConfig, closeConfig, getQList, saveQList, state };
+  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, openConfig, closeConfig, getQList, saveQList, settingsURL, openSettingsPage, state };
 })();

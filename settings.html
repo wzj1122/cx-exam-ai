@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-cxai-settings>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CX 考试 AI 大脑 · 设置中心</title>
+<meta name="description" content="CX 考试 AI 大脑的独立设置中心：配置模型、判题强度、读图策略、运行节奏，改完即写入油猴存储，考试页直接生效。">
+<meta name="robots" content="noindex">
+<style id="cs-boot-style">
+  :root{
+    --bg:#0b1020; --card:#151c33; --card2:#1b2444; --line:#2a3559;
+    --txt:#e8ecf8; --dim:#9aa7c7; --acc:#6d8bff; --acc2:#9d6bff; --ok:#3ddc97;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:56px 20px 72px; background:
+      radial-gradient(900px 500px at 15% -10%, #1d2a5c 0%, transparent 60%),
+      radial-gradient(800px 480px at 90% 0%, #3a1f63 0%, transparent 55%),
+      var(--bg);
+    color:var(--txt); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    line-height:1.65; text-align:center;
+  }
+  .wrap{max-width:760px; margin:0 auto}
+  h1{font-size:clamp(24px,4vw,34px); margin:0 0 10px}
+  h1 .spark{background:linear-gradient(135deg,var(--acc),var(--acc2)); -webkit-background-clip:text; background-clip:text; color:transparent}
+  .sub{color:var(--dim); font-size:15px; margin:0 auto 30px; max-width:560px}
+  .card{
+    background:linear-gradient(180deg,var(--card),var(--card2)); border:1px solid var(--line);
+    border-radius:16px; padding:24px 26px; margin:0 auto 18px; text-align:left;
+    box-shadow:0 18px 40px rgba(0,0,0,.35);
+  }
+  .card h2{font-size:13px; margin:0 0 14px; color:var(--dim); font-weight:600; letter-spacing:.6px; text-transform:uppercase}
+  ol,ul{margin:0; padding-left:20px}
+  li{margin:8px 0; font-size:14.5px; color:#cfd8f2}
+  code{background:#0d1430; border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:13px; color:#c9d6ff}
+  a{color:var(--acc)}
+  .warn{border-left:3px solid #ffb454; padding:11px 14px; background:rgba(255,180,84,.08); border-radius:8px; font-size:13.5px; color:#ffd9a8; margin-top:14px}
+  .btns{display:flex; gap:10px; flex-wrap:wrap; margin-top:18px}
+  .btn{display:inline-flex; align-items:center; gap:7px; text-decoration:none; color:var(--txt);
+    background:#101736; border:1px solid var(--line); border-radius:10px; padding:10px 16px; font-size:14px;
+    transition:.18s}
+  .btn:hover{border-color:var(--acc); transform:translateY(-2px)}
+  .btn.pri{background:linear-gradient(135deg,rgba(109,139,255,.25),rgba(157,107,255,.2)); border-color:#4a5fae}
+  .spin{width:14px; height:14px; border:2px solid rgba(109,139,255,.3); border-top-color:var(--acc); border-radius:50%;
+    display:inline-block; animation:sp .8s linear infinite; vertical-align:-2px; margin-right:8px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  footer{margin-top:30px; font-size:12.5px; color:#7b88a8; line-height:1.8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🧠 CX 考试 AI 大脑 <span class="spark">·</span> 设置中心</h1>
+  <p class="sub">
+    <span class="spin"></span>正在等脚本接管这个页面……
+  </p>
+
+  <div class="card">
+    <h2>看到这一页说明脚本还没接管</h2>
+    <p style="margin:0 0 10px; color:#cfd8f2; font-size:14.5px">
+      设置中心不是普通网页 —— 它要直接读写<strong>油猴存储</strong>（和考试页共用同一份配置），所以必须由脚本把界面渲染进来。
+      正常情况下，打开这个地址后 1 秒内会自动变成带左侧导航的设置页。
+    </p>
+    <ol>
+      <li>确认已安装 <b>CX 考试 AI 大脑</b> 脚本，且版本 <code>≥ 1.8.0</code>（旧版不认识这个页面）。</li>
+      <li>确认脚本管理器（Tampermonkey / Violentmonkey）里这个脚本是<b>启用</b>状态，并且允许在 <code>cx-exam-ai.pages.dev</code> 上运行。</li>
+      <li>如果用的是本地文件调试，需要在管理器里打开「允许访问文件网址」。</li>
+      <li>还是不行就刷新一次；脚本是 <code>document-start</code> 注入的，刷新后才会重新匹配。</li>
+    </ol>
+    <div class="btns">
+      <a class="btn pri" href="/dist/cx-exam-ai.user.js">安装 / 更新脚本</a>
+      <a class="btn" href="https://greasyfork.org/zh-CN/scripts/605687">Greasy Fork</a>
+      <a class="btn" href="/">返回安装页</a>
+    </div>
+    <div class="warn">
+      不用脚本也能改配置：在考试页里按 <code>Ctrl+Shift+X</code> 呼出控制台 → ⚙ 设置，
+      配好之后在「备份」页签导出 JSON，再粘到另一台机器上导入即可。
+    </div>
+  </div>
+
+  <footer>
+    本页只有一份静态骨架，界面、样式与逻辑全部由脚本注入 · 不收集任何数据<br>
+    <a href="https://github.com/wzj1122/cx-exam-ai">github.com/wzj1122/cx-exam-ai</a>
+  </footer>
+</div>
+</body>
+</html>

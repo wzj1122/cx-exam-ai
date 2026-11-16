@@ -16,7 +16,7 @@ const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT = path.join(ROOT, '.site');
-const FILES = ['index.html'];
+const FILES = ['index.html', 'settings.html'];
 const DIRS = ['dist', 'images'];
 
 function walk(dir) {

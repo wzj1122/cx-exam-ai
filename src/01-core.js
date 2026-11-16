@@ -248,7 +248,9 @@ CXAI.DEFAULT_CONFIG = {
   ui: {
     x: 24,
     y: 96,
-    collapsed: false
+    collapsed: false,
+    /** 独立设置中心地址；留空 = 用脚本内置的官方地址（换部署位时才需要填） */
+    settingsURL: ''
   }
 };
 

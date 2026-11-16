@@ -154,7 +154,7 @@ CXAI.Guard = (function () {
         // 交卷 / 提交试卷这类确认，脚本自己没在跑自动交卷时**不要替用户点掉**：
         // 该看到的提示要能看到（用户明确提过"有些弹窗可能是我们需要的"）。
         const risky = /交卷|提交试卷|提交答案|结束考试|确认提交/.test(text);
-        const auto = CXAI.Cfg.get('apply.autoSubmit', false);
+        const auto = CXAI.Cfg.get('apply.autoSubmit', false) || CXAI.Cfg.get('apply.submit', false);
         if (risky && !auto) {
           CXAI.Log.warn('这是交卷确认，交给你自己点：' + text.slice(0, 80));
           try {

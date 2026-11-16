@@ -728,7 +728,8 @@ CXAI.Engine = (function () {
   /* ---------------- 交卷 ---------------- */
 
   async function maybeSubmit() {
-    if (!CXAI.Cfg.get('apply.autoSubmit', false)) {
+    // v1.8.0：考试页面板与设置中心写的是 apply.submit，旧代码读的是 apply.autoSubmit —— 两个都认，别让开关只生效一半
+    if (!CXAI.Cfg.get('apply.autoSubmit', false) && !CXAI.Cfg.get('apply.submit', false)) {
       CXAI.Log.warn('未开启自动交卷。请人工复核标黄题目后再手动交卷。');
       return;
     }
@@ -896,6 +897,15 @@ CXAI.Engine = (function () {
 (function boot() {
   function ready() {
     try {
+      // 独立设置中心（/settings.html）：整页接管，不跑任何考试逻辑、不装环境伪装、不挂浮球
+      if (CXAI.Settings && CXAI.Settings.isHere()) {
+        try {
+          CXAI.Settings.mount();
+        } catch (e) {
+          console.error('[CX-AI] 设置中心渲染失败', e);
+        }
+        return;
+      }
       // 只在"真正能作答的考试/作业页"出现：课程首页、讨论区、已交卷回看页一律不挂界面，
       // 连环境伪装都不装（那是全局副作用，不该出现在普通页面）。
       const gate = (function () {
@@ -1023,6 +1033,14 @@ CXAI.Engine = (function () {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
         GM_registerMenuCommand('开始答题', () => CXAI.Engine.start());
+        GM_registerMenuCommand('打开设置中心（配置模型）', () => {
+          const url = CXAI.UI && CXAI.UI.settingsURL ? CXAI.UI.settingsURL() : 'https://cx-exam-ai.pages.dev/settings.html';
+          try {
+            window.open(url, '_blank', 'noopener');
+          } catch (e) {
+            location.href = url;
+          }
+        });
       }
     } catch (e) {
       console.error('[CX-AI] 启动失败', e);

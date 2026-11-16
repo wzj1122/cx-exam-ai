@@ -1,4 +1,4 @@
-> 最后更新：2026-11-16 ｜ 当前版本：1.7.1（`package.json`）
+> 最后更新：2026-11-16 ｜ 当前版本：1.8.0（`package.json`）
 
 # MAINTENANCE
 
@@ -28,7 +28,8 @@ cx-exam-ai/
 ├── MAINTENANCE.md            本文件
 ├── CLAUDE.md                 仓库规则（文件权限、发布流程、禁止操作）
 ├── LICENSE                   MIT 许可证
-├── index.html                落地页（Cloudflare Pages 一键安装入口）
+├── index.html                落地页（Cloudflare Pages 一键安装入口 + 设置中心入口）
+├── settings.html             独立设置中心骨架（脚本接管后整页渲染设置界面，未接管时给排查指引）
 ├── .gitignore                运行期产物与浏览器 profile 的排除清单
 ├── wrangler.jsonc            Cloudflare Workers 静态资源部署配置（可选通道）
 ├── images/                   收款码（alipay.png / wechat_pay.png）
@@ -42,7 +43,8 @@ cx-exam-ai/
 │   ├── 05-apply.js           拟人化点选、填空写入、保存/交卷按钮定位
 │   ├── 06-guard.js           环境伪装、弹窗确认、节奏控制
 │   ├── 07-ui.js              Shadow DOM 控制台（面板/设置/题目卡片）
-│   └── 08-main.js            主编排引擎 + boot
+│   ├── 08-main.js            主编排引擎 + boot
+│   └── 09-settings.js        独立设置中心（网页版配置页，整页接管 /settings.html）
 ├── tools/
 │   ├── check.js              语法与模块契约自检
 │   ├── test-dom.js           离线集成测试（自建 DOM 垫片 + fetch 模拟）
@@ -55,7 +57,7 @@ cx-exam-ai/
 
 | 文件 | 对外接口 | 职责 | 依赖 |
 |---|---|---|---|
-| `src/00-header.js` | — | `@match`/`@grant`/`@connect` 元数据；`@run-at document-start` | 无 |
+| `src/00-header.js` | — | `@match`/`@grant`/`@connect` 元数据（v1.8.0 起含 `cx-exam-ai.pages.dev` / `github.io` / `127.0.0.1`，设置中心要用）；`@run-at document-start` | 无 |
 | `src/01-core.js` | `CXAI.DEFAULT_CONFIG` `CXAI.PRESETS` `CXAI.isLocalURL` `CXAI.normalizeProvider` `CXAI.Store` `CXAI.Cfg` `CXAI.Log` `CXAI.U` | 默认配置（judge 参数 + `ai.vision` 对象 + 3 个预置 provider）、10 条接入预设（deepseek/qwen-vl/qwen/glm/kimi/openai/ollama/lmstudio/magpie/custom）、provider 归一化（apiStyle/role/keyOptional/maxTokens/extraBody/extraHeaders）、GM_* 存储回退 localStorage、`U.{sleep,rand,randInt,uid,clamp,mergeDeep,deepGet,safeJson,normText,similarity,escapeHtml,truncate,withTimeout}` | 无 |
 | `src/02-font.js` | `CXAI.Font` | 抽取 head 内 base64 字体 → canvas 360px 渲染 → 积分图盒式降采样 → 与 FRB2 特征表算汉明距离，输出 glyph→char 映射 | `CXAI.U` |
 | `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页） | `CXAI.U` |
@@ -63,14 +65,16 @@ cx-exam-ai/
 | `src/04-ai.js` | `CXAI.AI.{solve,ping,listModels,callProvider,buildRequest,extractText,parseModelResult,resolveAnswerKeys,resolveVision,tally,buildPanel}` + 内部 `httpMethod(method,url,headers,body,timeout)`（`httpJson` 是它的 POST 快捷方式） | 三风格请求体构建（openai/anthropic/gemini，含 system 提升、图片块、extraBody/extraHeaders 深合并）、响应文本抽取、**`listModels` 拉取各家 `/models`**（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models?key=` 并过滤非 generateContent）、三套 Prompt + 读图上下文注入、答案归一化、加权投票、三级收敛 | `CXAI.Cfg` `CXAI.Vision` `CXAI.U` `CXAI.Log` |
 | `src/05-apply.js` | `CXAI.Apply.{humanClick,apply,answerChoice,answerBlank,clickOne,isChecked,saveOne,findSubmitButton,typeInto}` | 指针事件序列 + 随机落点；点后轮询选中态；失败逐级扩大候选元素重试；填空支持 textarea/input/contenteditable iframe | `CXAI.U` `CXAI.Cfg` |
 | `src/06-guard.js` | `CXAI.Guard.{install,uninstall,pace,dismissDialogs}` | `document.hidden`/`visibilityState`/`hasFocus` 伪装、吞掉 `visibilitychange`/`blur`、`confirm` 自动 true、弹窗白名单点击、题间节奏（含每 N 题长停顿与 3% 概率犹豫） | `CXAI.Cfg` `CXAI.U` `CXAI.Log` |
-| `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（`deepseek`/`custom`/`magpie`）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
-| `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导 | 全部模块 |
-| `index.html` | — | Cloudflare Pages 落地页：三处一键安装入口（本站 `/dist/cx-exam-ai.user.js`、GitHub raw、Greasy Fork）、四件事、三步上手、收款码。样式全内联，无外部依赖；改版式只动这一个文件 | `dist/cx-exam-ai.user.js`（下载路径）、`images/*.png` |
+| `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（`deepseek`/`custom`/`magpie`）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行；`settingsURL()` / `openSettingsPage()` 打开独立设置中心，设置面板底部「独立设置页 ↗」 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
+| `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导；v1.8.0 起 `ready()` 先问 `CXAI.Settings.isHere()`，命中就整页接管设置中心并 return | 全部模块 |
+| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html` 整页接管，六栏（模型/判题/读图/运行/备份/诊断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取 + `AI.ping` 单卡测试；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
+| `index.html` | — | Cloudflare Pages 落地页：三处一键安装入口（本站 `/dist/cx-exam-ai.user.js`、GitHub raw、Greasy Fork）、四件事、独立设置中心入口、三步上手、收款码。样式全内联，无外部依赖；改版式只动这一个文件 | `dist/cx-exam-ai.user.js`（下载路径）、`images/*.png` |
+| `settings.html` | — | 设置中心骨架：深色兜底页（含未接管时的排查步骤）+ `<html data-cxai-settings>` 标记。body 会被脚本清空后整页渲染，所以这里**只放兜底与标记，别指望它自己渲染表单** | `src/09-settings.js`（渲染方）、`index.html`（入口） |
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
 | `LICENSE` | — | MIT，版权人 `wzj1122` | 无 |
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
 | `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main` | `tools/build-site.js` |
-| `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
+| `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` 与 `settings.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
 
@@ -163,6 +167,25 @@ Engine.start()
 结束：可选 maybeSubmit()（找不到交卷按钮只告警）
 ```
 
+### 5b. 独立设置中心（09-settings）
+
+`settings.html` 只是一份深色骨架 + `<html data-cxai-settings>` 标记。脚本的 `08-main.ready()` 一进来先问
+`CXAI.Settings.isHere()`（看 HTML 属性 → 路径 `/settings(.html)` → `?cxai=settings` / `?settings=1` → Pages 域名根路径），
+命中就 `CXAI.Settings.mount()` 并 `return`：**不跑考试逻辑、不装 guard、不挂浮球**，整页交给设置中心。
+
+- `mount()`：注入 CSS（有 `GM_addStyle` 就用它）→ 删掉骨架的 `#cs-boot-style`（深色样式会污染浅色的 `code`/`a`）→
+  `document.body.innerHTML=''` → 渲染 `id="cx-ai-settings"`。
+- 六栏：`model`（provider 卡片 CRUD / 预设联动 / `AI.listModels` 拉取 / `AI.ping` 单卡测试 / 上移下移）、
+  `judge`、`vision`、`run`、`backup`（导出/导入/下载/上传/恢复默认）、`diag`（`CXAI.diag()` 原始输出）。
+- 字段写入：provider 字段走 `data-f` + `data-i`，全局字段走 `data-path`（点分路径，MB 换算走 `data-path-x`）。
+  所有改动走 `touch()` → 280ms 防抖 → `CXAI.Cfg.save()`，没有「保存」按钮。
+- **`syncVisionRoles()`**：`ai.vision.ocrProviderId` / `judgeToo` 一变，就同步所有 provider 的 `role`
+  （选中者 `vision`/`both`，其余 `judge`）。少了这步，会出现"读图下拉改了但 `visionProviders()` 还按旧角色挑模型"。
+  只配了一个模型时自动把 `judgeToo` 打开（否则判题面板为空）。
+- 深链：`?tab=judge` 直接落到指定栏；`S.tab` 取值即上述六栏 id。
+- 设置页与考试页共享配置的前提是 `CXAI.Store.backend === 'gm'`（同一脚本跨域名）。降级 localStorage 时顶部胶囊会标出来，
+  并提示用「备份 → 导出」搬运。
+
 ### 5. 状态与配置
 
 - 配置全部落 `CXAI.Store`（GM_getValue/setValue，回退 localStorage），键 `CXAI.CONFIG_KEY`
@@ -202,6 +225,27 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.0（2026-11-16）独立设置中心（网页版配置页）
+
+- 新增 `src/09-settings.js`（`CXAI.Settings`，~1270 行）：整页接管 `/settings.html`，六栏配置
+  （模型 / 判题 / 读图 / 运行 / 备份 / 诊断），改动 280ms 防抖后写 `CXAI.Cfg`。模型卡支持预设联动、
+  `AI.listModels` 拉取、`AI.ping` 单卡测试、权重/温度/输出上限、上移下移删除；读图栏改动通过
+  `syncVisionRoles()` 同步所有 provider 的 `role`，避免"下拉变了但挑模型的逻辑没变"。
+- 新增 `settings.html`：深色静态骨架 + 未接管时的排查指引；用 `<html data-cxai-settings>` 做页面识别，
+  不把域名硬编码进 `isHere()` 的主要判断。
+- `src/00-header.js`：`@match` 增加 `cx-exam-ai.pages.dev` / `wzj1122.github.io/cx-exam-ai` / `127.0.0.1`；版本 1.8.0。
+- `src/08-main.js`：`ready()` 最前面加设置页分支（整页接管、不跑考试逻辑）；GM 菜单加「打开设置中心（配置模型）」。
+- `src/07-ui.js`：设置面板底部加「独立设置页 ↗」（`settingsURL()` 读 `ui.settingsURL`，默认官方地址）。
+- `src/01-core.js`：`DEFAULT_CONFIG.ui` 新增 `settingsURL`（空 = 用内置官方地址）。
+- **BUGFIX（真 bug）**：`apply.submit`（面板写）与 `apply.autoSubmit`（`08-main`/`06-guard` 读）字段不一致，
+  面板里的「自动交卷」开关一直不生效。现在 `saveConfig` 与设置中心双写，`08-main.maybeSubmit()` /
+  `06-guard` 的 confirm 判断双认。
+- `tools/check.js` 契约加 `09-settings.js`；`tools/build-site.js` 发布 `settings.html`；
+  `index.html` 加「独立设置中心」入口卡片。
+- 验证：`node tools/check.js` 11 模块通过；`node tools/test-dom.js` 111 通过 / 0 失败；
+  无头 Chrome 实测整页渲染、六栏切换、添加模型（3→4）、全部收起、导出 JSON（3948 字符含 `providers`）、
+  诊断输出（1349 字符含版本）、`?tab=` 深链。
 
 ### v1.7.1（2026-11-16）Greasy Fork 上线 + Webhook 自动同步
 

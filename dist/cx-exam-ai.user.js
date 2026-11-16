@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.7.1
+// @version      1.8.0
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -11,6 +11,9 @@
 // @downloadURL  https://update.greasyfork.org/scripts/605687/CX%20%E8%80%83%E8%AF%95%20AI%20%E5%A4%A7%E8%84%91%20%C2%B7%20%E5%AD%A6%E4%B9%A0%E9%80%9A%E8%80%83%E8%AF%95%E8%87%AA%E5%8A%A8%E7%AD%94%E9%A2%98.user.js
 // @match        *://*.chaoxing.com/*
 // @match        *://*.edu.cn/*
+// @match        https://cx-exam-ai.pages.dev/*
+// @match        https://wzj1122.github.io/cx-exam-ai/*
+// @match        http://127.0.0.1/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_getValue
 // @grant        GM_setValue
@@ -26,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.7.1";
-CXAI.__builtAt = "2026-11-15T19:53:07.158Z";
+CXAI.__version = "1.8.0";
+CXAI.__builtAt = "2026-11-16T15:22:03.016Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -280,7 +283,9 @@ CXAI.DEFAULT_CONFIG = {
   ui: {
     x: 24,
     y: 96,
-    collapsed: false
+    collapsed: false,
+    /** 独立设置中心地址；留空 = 用脚本内置的官方地址（换部署位时才需要填） */
+    settingsURL: ''
   }
 };
 
@@ -4297,7 +4302,7 @@ CXAI.Guard = (function () {
         // 交卷 / 提交试卷这类确认，脚本自己没在跑自动交卷时**不要替用户点掉**：
         // 该看到的提示要能看到（用户明确提过"有些弹窗可能是我们需要的"）。
         const risky = /交卷|提交试卷|提交答案|结束考试|确认提交/.test(text);
-        const auto = CXAI.Cfg.get('apply.autoSubmit', false);
+        const auto = CXAI.Cfg.get('apply.autoSubmit', false) || CXAI.Cfg.get('apply.submit', false);
         if (risky && !auto) {
           CXAI.Log.warn('这是交卷确认，交给你自己点：' + text.slice(0, 80));
           try {
@@ -4368,6 +4373,9 @@ CXAI.Guard = (function () {
 
 CXAI.UI = (function () {
   let host = null;
+
+  /** 独立设置中心的默认地址（换部署位时改这里，或用配置项 ui.settingsURL 覆盖） */
+  const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings.html';
   let root = null;
   let state = { running: false, paused: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
 
@@ -4643,6 +4651,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           <div class="db" id="cfg-body"></div>
         </div>
         <div class="df">
+          <button class="b" data-act="cfg-page" title="在独立网页里配置，同一份配置，改完考试页直接生效">独立设置页 ↗</button>
           <button class="b" data-act="cfg-test">测试连接</button>
           <button class="b primary" data-act="cfg-save">保存</button>
         </div>
@@ -4726,6 +4735,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           break;
         case 'cfg-import':
           importConfig();
+          break;
+        case 'cfg-page':
+          openSettingsPage();
           break;
         case 'run':
           CXAI.Engine.start();
@@ -5920,6 +5932,26 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     return out;
   }
 
+  /** 独立设置中心的地址（配置项 ui.settingsURL 可覆盖，方便自建部署 / 本地调试） */
+  function settingsURL() {
+    try {
+      const u = CXAI.Cfg.get('ui.settingsURL', '');
+      if (u) return String(u);
+    } catch (e) {}
+    return DEFAULT_SETTINGS_URL;
+  }
+
+  /** 新标签打开设置中心：同一份 GM 存储，改完回考试页直接生效 */
+  function openSettingsPage() {
+    const url = settingsURL();
+    try {
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      location.href = url;
+    }
+    CXAI.Log.info('已打开设置中心：' + url);
+  }
+
   function closeConfig() {
     const m = $('#mask');
     if (m) m.classList.remove('show');
@@ -5972,6 +6004,8 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     CXAI.Cfg.set('apply.overwriteAnswered', val('#cfg-force').checked);
     CXAI.Cfg.set('apply.saveEach', val('#cfg-save').checked);
     CXAI.Cfg.set('apply.submit', val('#cfg-submit').checked);
+    // 引擎（08）与 guard（06）实际读的是 apply.autoSubmit，两个字段一起写，避免开关只改一半
+    CXAI.Cfg.set('apply.autoSubmit', val('#cfg-submit').checked);
     const wrote = CXAI.Cfg.save();
     if (!silent) {
       CXAI.Log.ok(
@@ -6083,7 +6117,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div class="lg">Ctrl+Shift+X 呼出面板；交卷只在显式开启时自动点</div>`;
   }
 
-  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, openConfig, closeConfig, getQList, saveQList, state };
+  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, openConfig, closeConfig, getQList, saveQList, settingsURL, openSettingsPage, state };
 })();
 
 /* ==================== 08-main.js ==================== */
@@ -6817,7 +6851,8 @@ CXAI.Engine = (function () {
   /* ---------------- 交卷 ---------------- */
 
   async function maybeSubmit() {
-    if (!CXAI.Cfg.get('apply.autoSubmit', false)) {
+    // v1.8.0：考试页面板与设置中心写的是 apply.submit，旧代码读的是 apply.autoSubmit —— 两个都认，别让开关只生效一半
+    if (!CXAI.Cfg.get('apply.autoSubmit', false) && !CXAI.Cfg.get('apply.submit', false)) {
       CXAI.Log.warn('未开启自动交卷。请人工复核标黄题目后再手动交卷。');
       return;
     }
@@ -6985,6 +7020,15 @@ CXAI.Engine = (function () {
 (function boot() {
   function ready() {
     try {
+      // 独立设置中心（/settings.html）：整页接管，不跑任何考试逻辑、不装环境伪装、不挂浮球
+      if (CXAI.Settings && CXAI.Settings.isHere()) {
+        try {
+          CXAI.Settings.mount();
+        } catch (e) {
+          console.error('[CX-AI] 设置中心渲染失败', e);
+        }
+        return;
+      }
       // 只在"真正能作答的考试/作业页"出现：课程首页、讨论区、已交卷回看页一律不挂界面，
       // 连环境伪装都不装（那是全局副作用，不该出现在普通页面）。
       const gate = (function () {
@@ -7112,6 +7156,14 @@ CXAI.Engine = (function () {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
         GM_registerMenuCommand('开始答题', () => CXAI.Engine.start());
+        GM_registerMenuCommand('打开设置中心（配置模型）', () => {
+          const url = CXAI.UI && CXAI.UI.settingsURL ? CXAI.UI.settingsURL() : 'https://cx-exam-ai.pages.dev/settings.html';
+          try {
+            window.open(url, '_blank', 'noopener');
+          } catch (e) {
+            location.href = url;
+          }
+        });
       }
     } catch (e) {
       console.error('[CX-AI] 启动失败', e);
@@ -7131,4 +7183,1319 @@ try {
 } catch (e) {
   window.CXAI = CXAI;
 }
+
+/* ==================== 09-settings.js ==================== */
+/* ---------------- 独立设置中心（网页版配置页） ----------------
+ * 考试页里的 ⚙ 面板只有进了考试才点得开，配模型要点几十下、还得先有考试。
+ * 这里把同一份 CXAI.Cfg 配置搬到一张独立网页上：
+ *   https://cx-exam-ai.pages.dev/settings.html   （或任意部署位 /settings.html）
+ * 打开就能像普通网站设置页那样改模型、判题、读图、运行参数、备份、诊断，
+ * 改完立刻写回存储，回到 chaoxing.com 的考试页直接生效。
+ *
+ * 存储关键点：油猴的 GM 存储是「同一脚本跨域名共享」的（CXAI.Store.backend === 'gm'），
+ * 所以在设置页保存的配置，考试页读到的就是同一份，不用再搬 JSON。
+ * 若用户脚本管理器不支持 GM 存储（backend === 'local'），配置只在本域生效，
+ * 页面顶部会明确标出来，并引导用「备份 → 导出」搬到考试页。
+ *
+ * 本模块顶层零副作用：不在设置页时它只是一堆函数，绝不会往考试页插东西。
+ */
+
+CXAI.Settings = (function () {
+  let host = null;
+  let saveTimer = null;
+  let mounted = false;
+  const S = {
+    tab: 'model',
+    /** 每个 provider 卡片是否展开 */
+    open: {},
+    /** 拉取到的模型清单：provider.id -> [{id,label}] */
+    models: {},
+    /** 拉取/测试的进行中标记 */
+    busy: {},
+    /** 诊断输出 */
+    diag: null
+  };
+
+  /* ---------------- 小工具 ---------------- */
+
+  function esc(s) {
+    return CXAI.U.escapeHtml(s == null ? '' : String(s));
+  }
+
+  function q(sel) {
+    return host ? host.querySelector(sel) : null;
+  }
+
+  function qa(sel) {
+    return host ? Array.from(host.querySelectorAll(sel)) : [];
+  }
+
+  function storeInfo() {
+    try {
+      return CXAI.Store.info(CXAI.CONFIG_KEY);
+    } catch (e) {
+      return { backend: 'mem', scope: '-', bytes: 0, ok: false };
+    }
+  }
+
+  function backendText() {
+    const info = storeInfo();
+    if (info.backend === 'gm') return { tag: '油猴存储 · 跨域名共享', cls: 'ok', hint: '在这里保存的配置，考试页直接生效' };
+    if (info.backend === 'local') return { tag: '仅本源 localStorage', cls: 'warn', hint: '配置只在本域名有效，请用「备份」导出 JSON 带到考试页' };
+    return { tag: '内存（未持久化）', cls: 'bad', hint: '刷新就丢，检查脚本管理器是否禁用了存储' };
+  }
+
+  function cfg() {
+    if (!CXAI.Cfg.data) CXAI.Cfg.load();
+    return CXAI.Cfg.data;
+  }
+
+  /** 写盘：合并 300ms 内的连续改动，避免拖一次滑杆写十几次 GM */
+  function persist(msg) {
+    const ok = CXAI.Cfg.save();
+    if (msg !== false) toast(ok === false ? '保存失败：存储被禁用或空间不足' : msg || '已保存', ok === false ? 'bad' : 'ok');
+    refreshMeta();
+    return ok;
+  }
+
+  function touch(msg) {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => persist(msg), 280);
+  }
+
+  function toast(text, kind) {
+    const box = q('#cs-toast');
+    if (!box) return;
+    box.textContent = text;
+    box.className = 'cs-toast show ' + (kind || '');
+    clearTimeout(box._t);
+    box._t = setTimeout(() => {
+      box.className = 'cs-toast ' + (kind || '');
+    }, 2600);
+  }
+
+  /* ---------------- 预设联动 ---------------- */
+
+  /** 反推一个 provider 用的是哪个预设（和 07-ui 里的同名逻辑保持一致） */
+  function presetOf(p) {
+    if (p && p.preset) return p.preset;
+    const host = String((p && p.baseURL) || '').toLowerCase();
+    if (/api\.deepseek\.com/.test(host)) return 'deepseek';
+    if (/dashscope\.aliyuncs\.com/.test(host)) return 'qwen';
+    if (/open\.bigmodel\.cn/.test(host)) return 'glm';
+    if (/api\.moonshot\.cn/.test(host)) return 'kimi';
+    if (/api\.openai\.com/.test(host)) return 'openai';
+    if (/127\.0\.0\.1:3425|magpie/.test(host)) return 'magpie';
+    if (/127\.0\.0\.1:11434|localhost:11434|ollama/.test(host)) return 'ollama';
+    if (/127\.0\.0\.1:1234|localhost:1234/.test(host)) return 'lmstudio';
+    return 'custom';
+  }
+
+  function presets() {
+    return CXAI.PRESETS || [];
+  }
+
+  function presetOptions(cur) {
+    return presets()
+      .map((p) => '<option value="' + esc(p.id) + '"' + (p.id === cur ? ' selected' : '') + '>' + esc(p.label) + '</option>')
+      .join('');
+  }
+
+  function presetById(id) {
+    return presets().filter((p) => p.id === id)[0] || null;
+  }
+
+  /* ---------------- 页面识别 ---------------- */
+
+  /**
+   * 是不是「设置中心」页面。
+   * 优先看 <html data-cxai-settings>（settings.html 自带，换域名/换部署位都不用改代码），
+   * 其次看路径与查询参数，最后看站点根目录是不是本项目的 Pages 域名。
+   */
+  function isHere() {
+    try {
+      const d = document.documentElement;
+      if (d && d.hasAttribute && d.hasAttribute('data-cxai-settings')) return true;
+      const p = String(location.pathname || '').replace(/\/+$/, '');
+      if (/\/settings(\.html)?$/i.test(p)) return true;
+      const s = String(location.search || '') + String(location.hash || '');
+      if (/[?&#](cxai|settings)=(settings|1)\b/i.test(s)) return true;
+      if (/^cx-exam-ai\.pages\.dev$/i.test(location.host) && /^\/(settings)?(\.html)?$/i.test(location.pathname)) return true;
+    } catch (e) {}
+    return false;
+  }
+
+  /* ---------------- 样式 ---------------- */
+
+  const CSS = `
+.cs-root { text-align:left; --blue:#2563eb; --ink:#111827; --sub:#6b7280; --line:#e5e8ef; --bg:#f6f7fb;
+  position:fixed; inset:0; z-index:2147483000; overflow:auto; background:var(--bg); color:var(--ink);
+  font:13px/1.55 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.cs-root * { box-sizing:border-box; }
+.cs-root a { color:var(--blue); text-decoration:none; }
+.cs-root a:hover { text-decoration:underline; }
+.cs-root ::-webkit-scrollbar { width:8px; height:8px; }
+.cs-root ::-webkit-scrollbar-thumb { background:#ccd2dd; border-radius:8px; }
+.cs-root ::-webkit-scrollbar-track { background:transparent; }
+
+.cs-top { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:12px;
+  padding:12px 22px; background:rgba(255,255,255,.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
+.cs-logo { width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,#2563eb,#60a5fa);
+  color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; letter-spacing:.5px; }
+.cs-title { font-size:15px; font-weight:600; }
+.cs-title small { font-weight:400; color:var(--sub); font-size:12px; margin-left:8px; }
+.cs-top .spacer { flex:1; }
+.cs-pill { font-size:11.5px; padding:3px 9px; border-radius:999px; border:1px solid var(--line); color:var(--sub); background:#fff; }
+.cs-pill.ok { color:#15803d; border-color:#bbf7d0; background:#f0fdf4; }
+.cs-pill.warn { color:#b45309; border-color:#fde68a; background:#fffbeb; }
+.cs-pill.bad { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
+
+.cs-layout { display:grid; grid-template-columns:190px minmax(0,1fr); gap:22px; max-width:1180px; margin:0 auto; padding:22px; }
+.cs-nav { position:sticky; top:78px; align-self:start; display:flex; flex-direction:column; gap:2px; }
+.cs-nav .hd { font-size:11px; color:#9aa3b2; padding:0 10px 6px; letter-spacing:.4px; }
+.cs-nav .it { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:9px; cursor:pointer;
+  color:#4b5563; font-size:12.5px; transition:.14s; user-select:none; }
+.cs-nav .it .ic { width:16px; text-align:center; color:#9aa3b2; font-size:12px; }
+.cs-nav .it:hover { background:#eef1f7; color:#111827; }
+.cs-nav .it.on { background:#e8efff; color:var(--blue); font-weight:600; }
+.cs-nav .it.on .ic { color:var(--blue); }
+.cs-nav .foot { margin-top:14px; padding:10px; font-size:11px; color:#9aa3b2; line-height:1.7; border-top:1px dashed var(--line); }
+
+.cs-main { min-width:0; display:flex; flex-direction:column; gap:16px; padding-bottom:80px; }
+.cs-card { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px 18px; box-shadow:0 1px 2px rgba(16,24,40,.03); }
+.cs-card > h2 { margin:0 0 2px; font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; }
+.cs-card > h2 .tag { font-size:11px; font-weight:400; color:var(--sub); }
+.cs-card > .desc { font-size:11.5px; color:var(--sub); margin:0 0 14px; line-height:1.7; }
+.cs-grid { display:grid; gap:12px; grid-template-columns:repeat(2,minmax(0,1fr)); }
+.cs-grid.g3 { grid-template-columns:repeat(3,minmax(0,1fr)); }
+@media (max-width: 860px) { .cs-grid, .cs-grid.g3 { grid-template-columns:1fr; } .cs-layout { grid-template-columns:1fr; } .cs-nav { position:static; flex-direction:row; flex-wrap:wrap; } }
+
+.cs-fld { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.cs-fld > label { font-size:11.5px; color:#4b5563; font-weight:500; }
+.cs-fld .hint { font-size:11px; color:#9aa3b2; line-height:1.5; }
+.cs-in, .cs-sel, .cs-ta { width:100%; padding:7px 10px; border:1px solid #dfe3ea; border-radius:9px; background:#fff;
+  font:12.5px/1.5 inherit; color:var(--ink); outline:none; transition:.14s; }
+.cs-in:focus, .cs-sel:focus, .cs-ta:focus { border-color:#a8c2f7; box-shadow:0 0 0 3px rgba(37,99,235,.1); }
+.cs-ta { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11.5px; line-height:1.6; resize:vertical; }
+.cs-row { display:flex; gap:8px; align-items:center; }
+.cs-row > .cs-in { flex:1; min-width:0; }
+
+.cs-btn { padding:7px 13px; border:1px solid #dfe3ea; border-radius:9px; background:#fff; color:#374151;
+  font:12.5px/1.4 inherit; cursor:pointer; transition:.14s; white-space:nowrap; }
+.cs-btn:hover { border-color:#c3cee0; background:#f8fafc; }
+.cs-btn:active { transform:translateY(.5px); }
+.cs-btn.pri { background:var(--blue); border-color:var(--blue); color:#fff; font-weight:500; }
+.cs-btn.pri:hover { background:#1d4ed8; }
+.cs-btn.danger { color:#b91c1c; border-color:#fecaca; background:#fff7f7; }
+.cs-btn.danger:hover { background:#fef2f2; }
+.cs-btn.mini { padding:4px 9px; font-size:11.5px; border-radius:7px; }
+.cs-btn[disabled] { opacity:.55; cursor:not-allowed; }
+
+.cs-chk { display:flex; align-items:center; gap:7px; font-size:12.5px; color:#374151; cursor:pointer; padding:5px 0; }
+.cs-chk input { width:14px; height:14px; accent-color:var(--blue); }
+
+/* ---- 模型卡 ---- */
+.cs-pv { border:1px solid var(--line); border-radius:12px; margin-bottom:10px; background:#fff; overflow:hidden; transition:.16s; }
+.cs-pv.off { opacity:.62; background:#fcfcfd; }
+.cs-pv:hover { border-color:#d3dbe8; }
+.cs-ph { display:flex; align-items:center; gap:9px; padding:10px 12px; cursor:pointer; user-select:none; }
+.cs-ph .dot { width:7px; height:7px; border-radius:50%; background:#cbd5e1; flex:none; }
+.cs-pv:not(.off) .dot { background:#22c55e; box-shadow:0 0 0 3px rgba(34,197,94,.14); }
+.cs-ph .nm { font-weight:600; font-size:12.5px; color:#374151; flex:none; }
+.cs-ph .pm { color:#6b7280; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.cs-ph .chip { font-size:10.5px; padding:1px 7px; border-radius:999px; background:#eef4ff; color:#2563eb; flex:none; }
+.cs-ph .chip.v { background:#f5f0ff; color:#7c3aed; }
+.cs-ph .del { font-size:11.5px; color:#b91c1c; padding:2px 6px; border-radius:6px; flex:none; }
+.cs-ph .del:hover { background:#fef2f2; }
+.cs-pb { display:none; padding:0 12px 12px; border-top:1px solid #f1f4f9; }
+.cs-pv[data-open="1"] .cs-pb { display:block; }
+.cs-pv .cs-grid { margin-top:12px; }
+
+/* ---- 列表 / 输出 ---- */
+.cs-out { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; line-height:1.7; color:#374151;
+  background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px 12px; max-height:260px; overflow:auto; }
+.cs-out .ok { color:#15803d; }
+.cs-out .bad { color:#b91c1c; }
+.cs-out .mid { color:#6b7280; }
+
+.cs-toast { position:fixed; right:22px; top:70px; z-index:5; padding:9px 15px; border-radius:10px; background:#111827; color:#fff;
+  font-size:12.5px; opacity:0; transform:translateY(-6px); transition:.2s; pointer-events:none; max-width:340px; }
+.cs-toast.show { opacity:.95; transform:translateY(0); }
+.cs-toast.bad { background:#b91c1c; }
+.cs-toast.warn { background:#b45309; }
+
+.cs-note { font-size:11.5px; line-height:1.7; color:#6b7280; background:#f8fafc; border:1px dashed var(--line);
+  border-radius:10px; padding:10px 12px; }
+.cs-note b { color:#374151; }
+.cs-note code, .cs-card code { background:#eef2f9; border:1px solid var(--line); border-radius:4px;
+  padding:0 4px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:#334155; }
+.cs-kv { display:grid; grid-template-columns:120px minmax(0,1fr); gap:6px 10px; font-size:12px; }
+.cs-kv .k { color:#9aa3b2; }
+.cs-kv .v { color:#374151; word-break:break-all; }
+.cs-line { height:1px; background:var(--line); margin:14px 0; }
+`;
+
+  /* ---------------- 顶部 / 导航 ---------------- */
+
+  function topbar() {
+    const st = backendText();
+    const n = (cfg().ai.providers || []).filter((p) => p.enabled).length;
+    return `
+<div class="cs-top">
+  <div class="cs-logo">CX</div>
+  <div class="cs-title">考试 AI 大脑 <small>设置中心</small></div>
+  <span class="cs-pill ${st.cls}" id="cs-pill-store" title="${esc(st.hint)}">${esc(st.tag)}</span>
+  <span class="cs-pill" id="cs-pill-count">${n} 个已启用模型</span>
+  <div class="spacer"></div>
+  <a class="cs-btn" href="/" target="_self" title="回到安装 / 说明页">安装页</a>
+  <a class="cs-btn" href="https://greasyfork.org/zh-CN/scripts/605687" target="_blank" rel="noopener">检查更新</a>
+  <span class="cs-pill" id="cs-pill-ver">v${esc(CXAI.__version)}</span>
+</div>`;
+  }
+
+  function nav() {
+    const items = [
+      ['model', '◈', '模型'],
+      ['judge', '◉', '判题'],
+      ['vision', '▣', '读图'],
+      ['run', '▷', '运行'],
+      ['backup', '⇅', '备份'],
+      ['diag', '◎', '诊断']
+    ];
+    return `
+<nav class="cs-nav">
+  <div class="hd">配置分类</div>
+  ${items
+    .map(
+      ([id, ic, label]) =>
+        `<div class="it${S.tab === id ? ' on' : ''}" data-act="tab" data-tab="${id}"><span class="ic">${ic}</span>${label}</div>`
+    )
+    .join('')}
+  <div class="foot">
+    <b>Ctrl+Shift+X</b> 呼出考试面板<br>
+    改动即时保存<br>
+    <a href="https://github.com/wzj1122/cx-exam-ai" target="_blank" rel="noopener">项目主页</a> ·
+    <a href="https://greasyfork.org/zh-CN/scripts/605687" target="_blank" rel="noopener">Greasy Fork</a>
+  </div>
+</nav>`;
+  }
+
+  /** 顶部两个状态胶囊跟着配置变化刷新 */
+  function refreshMeta() {
+    try {
+      const st = backendText();
+      const pill = q('#cs-pill-store');
+      if (pill) {
+        pill.className = 'cs-pill ' + st.cls;
+        pill.textContent = st.tag;
+        pill.title = st.hint;
+      }
+      const cnt = q('#cs-pill-count');
+      if (cnt) cnt.textContent = (cfg().ai.providers || []).filter((p) => p.enabled).length + ' 个已启用模型';
+    } catch (e) {}
+  }
+
+  /* ---------------- 模型面板 ---------------- */
+
+  function styleLabel(s) {
+    return s === 'anthropic' ? 'Anthropic（/v1/messages）' : s === 'gemini' ? 'Gemini（generateContent）' : 'OpenAI 兼容';
+  }
+
+  function modelPickerHtml(list, i) {
+    if (!list.length) return '<div class="hint">端点没有返回模型清单，手填即可</div>';
+    return `<select class="cs-sel" data-act="pick-model" data-i="${i}" style="margin-top:6px">
+      <option value="">从拉取到的 ${list.length} 个模型里选…</option>
+      ${list.map((m) => '<option value="' + esc(m.id) + '">' + esc(m.label || m.id) + '</option>').join('')}
+    </select>`;
+  }
+
+  function providerCard(p, i) {
+    const pr = presetOf(p);
+    const open = S.open[p.id] === undefined ? i === 0 : !!S.open[p.id];
+    const badge = p.role === 'vision' ? '读图' : p.role === 'both' ? '读图+判题' : '';
+    const list = S.models[p.id] || null;
+    const busy = S.busy['test' + i] ? ' disabled' : '';
+    return `
+<div class="cs-pv${p.enabled === false ? ' off' : ''}" data-pv="${i}" data-id="${esc(p.id)}" data-open="${open ? 1 : 0}">
+  <div class="cs-ph" data-act="pv-toggle" data-i="${i}">
+    <span class="dot"></span>
+    <span class="nm">模型 ${i + 1}</span>
+    <span class="pm">${esc(p.model || '(未填模型名)')}</span>
+    ${badge ? '<span class="chip v">' + badge + '</span>' : ''}
+    <span class="chip">${esc(pr)}</span>
+    <label class="cs-chk" style="padding:0"><input type="checkbox" data-f="enabled" data-i="${i}"${p.enabled !== false ? ' checked' : ''}>启用</label>
+    <span class="del" data-act="pv-del" data-i="${i}">删除</span>
+  </div>
+  <div class="cs-pb">
+    <div class="cs-grid g3">
+      <div class="cs-fld"><label>预设</label>
+        <select class="cs-sel" data-f="preset" data-i="${i}">${presetOptions(pr)}</select></div>
+      <div class="cs-fld"><label>显示名</label>
+        <input class="cs-in" data-f="label" data-i="${i}" value="${esc(p.label)}" placeholder="随便写，只用于界面显示"></div>
+      <div class="cs-fld"><label>权重</label>
+        <input class="cs-in" type="number" min="0.1" max="5" step="0.1" data-f="weight" data-i="${i}" value="${p.weight == null ? 1 : p.weight}">
+        <div class="hint">越高越容易被选进议会</div></div>
+    </div>
+    <div class="cs-grid">
+      <div class="cs-fld"><label>Base URL</label>
+        <input class="cs-in" data-f="baseURL" data-i="${i}" value="${esc(p.baseURL)}" placeholder="https://api.deepseek.com/v1"></div>
+      <div class="cs-fld"><label>API Key</label>
+        <input class="cs-in" type="password" data-f="apiKey" data-i="${i}" value="${esc(p.apiKey)}" placeholder="本地网关可留空" autocomplete="off"></div>
+    </div>
+    <div class="cs-grid">
+      <div class="cs-fld"><label>模型名</label>
+        <div class="cs-row">
+          <input class="cs-in" data-f="model" data-i="${i}" value="${esc(p.model)}" placeholder="deepseek-chat / qwen-vl-max …">
+          <button class="cs-btn mini" data-act="fetch" data-i="${i}"${busy}>拉取</button>
+        </div>
+        ${list ? modelPickerHtml(list, i) : ''}
+      </div>
+      <div class="cs-fld"><label>接口协议</label>
+        <select class="cs-sel" data-f="apiStyle" data-i="${i}">
+          ${['openai', 'anthropic', 'gemini']
+            .map((s) => '<option value="' + s + '"' + (p.apiStyle === s ? ' selected' : '') + '>' + styleLabel(s) + '</option>')
+            .join('')}
+        </select>
+        <div class="hint">绝大多数兼容端点选 OpenAI</div></div>
+    </div>
+    <div class="cs-grid g3">
+      <div class="cs-fld"><label>温度</label>
+        <input class="cs-in" type="number" min="0" max="2" step="0.1" data-f="temperature" data-i="${i}" value="${p.temperature == null ? 0.2 : p.temperature}"></div>
+      <div class="cs-fld"><label>最大输出 tokens</label>
+        <input class="cs-in" type="number" min="64" max="8192" step="64" data-f="maxTokens" data-i="${i}" value="${p.maxTokens == null ? 700 : p.maxTokens}"></div>
+      <div class="cs-fld"><label>允许空 Key</label>
+        <label class="cs-chk"><input type="checkbox" data-f="keyOptional" data-i="${i}"${p.keyOptional ? ' checked' : ''}>本地网关 / 免鉴权</label></div>
+    </div>
+    <div class="cs-row" style="margin-top:12px">
+      <button class="cs-btn mini" data-act="test-one" data-i="${i}"${busy}>测试这个</button>
+      <button class="cs-btn mini" data-act="pv-up" data-i="${i}">上移</button>
+      <button class="cs-btn mini" data-act="pv-down" data-i="${i}">下移</button>
+      <div style="flex:1"></div>
+      <span class="hint" data-testout="${i}"></span>
+    </div>
+  </div>
+</div>`;
+  }
+
+  function paneModel() {
+    const ps = cfg().ai.providers || [];
+    return `
+<section class="cs-card">
+  <h2>模型 <span class="tag">判题与读图都从这里配</span></h2>
+  <p class="desc">每个模型 = 一条 OpenAI 兼容端点。填 Base URL + Key + 模型名即可；本地网关（magpie / Ollama / LM Studio）可以留空 Key。
+  点「拉取」会向端点要一遍模型清单，直接选一个填进去，省得手打。</p>
+  <div id="cs-pvbox">${ps.map((p, i) => providerCard(p, i)).join('') || '<div class="cs-note">还没有模型。点下面「添加模型」，选个预设就填好了。</div>'}</div>
+  <div class="cs-row" style="margin-top:14px">
+    <button class="cs-btn pri" data-act="pv-add">+ 添加模型</button>
+    <button class="cs-btn" data-act="test-all">测试全部连接</button>
+    <button class="cs-btn" data-act="pv-collapse">全部收起</button>
+    <div style="flex:1"></div>
+    <a class="cs-btn" href="https://greasyfork.org/zh-CN/scripts/605687" target="_blank" rel="noopener" title="看各家的 Key 在哪申请">去哪拿 Key？</a>
+  </div>
+  <div class="cs-out" id="cs-testout" style="display:none;margin-top:12px"></div>
+</section>`;
+  }
+
+  /* ---------------- 判题面板 ---------------- */
+
+  function strengthNow(j) {
+    if (j.mode === 'single') return 'single';
+    if (j.mode === 'fast') return 'fast';
+    return j.enableArbiter ? 'max' : 'council';
+  }
+
+  function paneJudge() {
+    const j = cfg().ai.judge || {};
+    const st = strengthNow(j);
+    return `
+<section class="cs-card">
+  <h2>判题 <span class="tag">一道题怎么收敛出一个答案</span></h2>
+  <p class="desc">默认「标准」就够用。往下一档更准，但更慢、更费 token。</p>
+  <div class="cs-grid">
+    <div class="cs-fld">
+      <label>判定强度</label>
+      <select class="cs-sel" data-act="strength">
+        <option value="single"${st === 'single' ? ' selected' : ''}>省 token · 单模型直接作答</option>
+        <option value="fast"${st === 'fast' ? ' selected' : ''}>快速 · 单模型采样 3 次自一致</option>
+        <option value="council"${st === 'council' ? ' selected' : ''}>标准 · 多模型议会投票（推荐）</option>
+        <option value="max"${st === 'max' ? ' selected' : ''}>严格 · 议会 + 交叉复核 + 仲裁</option>
+      </select>
+      <div class="hint">改这一项会同时改下面的模式 / 参与模型数 / 复核 / 仲裁</div>
+    </div>
+    <div class="cs-fld">
+      <label>判定模式</label>
+      <select class="cs-sel" data-path="ai.judge.mode">
+        <option value="council"${j.mode === 'council' ? ' selected' : ''}>议会（多模型投票）</option>
+        <option value="fast"${j.mode === 'fast' ? ' selected' : ''}>快速（单模型多次采样）</option>
+        <option value="single"${j.mode === 'single' ? ' selected' : ''}>单模型</option>
+      </select>
+      <div class="hint">council 至少要有 2 个启用模型才有意义</div>
+    </div>
+  </div>
+  <div class="cs-grid g3" style="margin-top:12px">
+    <div class="cs-fld"><label>参与模型数</label>
+      <input class="cs-in" type="number" min="1" max="6" data-path="ai.judge.panelSize" value="${j.panelSize || 3}"></div>
+    <div class="cs-fld"><label>一致率阈值</label>
+      <input class="cs-in" type="number" min="0.3" max="1" step="0.05" data-path="ai.judge.voteThreshold" value="${j.voteThreshold == null ? 0.7 : j.voteThreshold}">
+      <div class="hint">达到就直接采纳，不再升级</div></div>
+    <div class="cs-fld"><label>最低置信度</label>
+      <input class="cs-in" type="number" min="0" max="1" step="0.05" data-path="ai.judge.minConfidence" value="${j.minConfidence == null ? 0.55 : j.minConfidence}">
+      <div class="hint">低于它标黄，仍作答</div></div>
+  </div>
+  <div class="cs-grid g3" style="margin-top:12px">
+    <div class="cs-fld"><label>单题并发</label>
+      <input class="cs-in" type="number" min="1" max="6" data-path="ai.judge.concurrency" value="${j.concurrency || 3}"></div>
+    <div class="cs-fld"><label>单次超时 (ms)</label>
+      <input class="cs-in" type="number" min="5000" max="300000" step="1000" data-path="ai.judge.timeoutMs" value="${j.timeoutMs || 90000}"></div>
+    <div class="cs-fld"><label>失败重试</label>
+      <input class="cs-in" type="number" min="0" max="5" data-path="ai.judge.retries" value="${j.retries == null ? 1 : j.retries}"></div>
+  </div>
+  <div class="cs-grid" style="margin-top:12px">
+    <label class="cs-chk"><input type="checkbox" data-path="ai.judge.enableCritique"${j.enableCritique ? ' checked' : ''}>交叉复核（Round 2）：让别的模型审阅并改判</label>
+    <label class="cs-chk"><input type="checkbox" data-path="ai.judge.enableArbiter"${j.enableArbiter ? ' checked' : ''}>仲裁（Round 3）：分歧时由最高权重模型裁决</label>
+  </div>
+</section>`;
+  }
+
+  /* ---------------- 读图面板 ---------------- */
+
+  function paneVision() {
+    const v = cfg().ai.vision || {};
+    const ps = (cfg().ai.providers || []).filter((p) => p.enabled !== false);
+    const cur = v.ocrProviderId || '';
+    return `
+<section class="cs-card">
+  <h2>读图 <span class="tag">图片题怎么处理</span></h2>
+  <p class="desc">学习通的图片挂在 mooc1 上，模型厂商的服务器常常拉不到；这里统一本地抓图 → 缩放压缩 → 要么直传视觉模型，要么先转成文字再判。</p>
+  <label class="cs-chk" style="margin-bottom:10px"><input type="checkbox" data-path="ai.vision.enabled"${v.enabled ? ' checked' : ''}>启用读图（关掉后题目图片一律忽略）</label>
+  <div class="cs-grid">
+    <div class="cs-fld">
+      <label>处理策略</label>
+      <select class="cs-sel" data-path="ai.vision.strategy">
+        <option value="auto"${v.strategy === 'auto' ? ' selected' : ''}>自动：有视觉模型就直传，否则先转文字</option>
+        <option value="inline"${v.strategy === 'inline' ? ' selected' : ''}>直传：图片塞给视觉模型</option>
+        <option value="ocr"${v.strategy === 'ocr' ? ' selected' : ''}>转写：先读成文字再判（最省 token）</option>
+        <option value="off"${v.strategy === 'off' ? ' selected' : ''}>关闭</option>
+      </select>
+    </div>
+    <div class="cs-fld">
+      <label>读图模型</label>
+      <select class="cs-sel" data-path="ai.vision.ocrProviderId">
+        <option value="">自动挑（按权重选 enabled 且带视觉的）</option>
+        ${ps.map((p) => '<option value="' + esc(p.id) + '"' + (p.id === cur ? ' selected' : '') + '>' + esc(p.label || p.model || p.id) + ' · ' + esc(p.model || '') + '</option>').join('')}
+      </select>
+      <div class="hint">选中后它会变成「读图」角色，从判题议会里退出</div>
+    </div>
+  </div>
+  <label class="cs-chk" style="margin-top:10px"><input type="checkbox" data-path="ai.vision.judgeToo"${v.judgeToo ? ' checked' : ''}>读图模型同时参与判题（只配了一个模型时必须勾）</label>
+  <div class="cs-line"></div>
+  <div class="cs-grid g3">
+    <div class="cs-fld"><label>单题最多几张图</label>
+      <input class="cs-in" type="number" min="1" max="9" data-path="ai.vision.maxImages" value="${v.maxImages == null ? 3 : v.maxImages}"></div>
+    <div class="cs-fld"><label>缩放最长边 (px)</label>
+      <input class="cs-in" type="number" min="600" max="2400" step="100" data-path="ai.vision.maxEdge" value="${v.maxEdge || 1400}">
+      <div class="hint">越小越省 token，1400 基本够看清公式</div></div>
+    <div class="cs-fld"><label>JPEG 质量</label>
+      <input class="cs-in" type="number" min="0.1" max="1" step="0.02" data-path="ai.vision.quality" value="${v.quality == null ? 0.82 : v.quality}"></div>
+  </div>
+  <div class="cs-grid g3" style="margin-top:12px">
+    <div class="cs-fld"><label>单题图片总大小上限 (MB)</label>
+      <input class="cs-in" type="number" min="0.5" max="20" step="0.5" data-path-x="ai.vision.maxTotalBytes" value="${((v.maxTotalBytes || 4194304) / 1048576).toFixed(1)}"></div>
+    <div class="cs-fld"><label>拉图超时 (ms)</label>
+      <input class="cs-in" type="number" min="3000" max="60000" step="1000" data-path="ai.vision.fetchTimeoutMs" value="${v.fetchTimeoutMs || 15000}"></div>
+    <div class="cs-fld"><label>本地缓存条数</label>
+      <input class="cs-in" type="number" min="0" max="300" data-path="ai.vision.cacheSize" value="${v.cacheSize == null ? 60 : v.cacheSize}"></div>
+  </div>
+</section>`;
+  }
+
+  /* ---------------- 运行面板 ---------------- */
+
+  function chk(path, on, label, hint) {
+    return `<label class="cs-chk" title="${esc(hint || '')}"><input type="checkbox" data-path="${path}"${on ? ' checked' : ''}>${esc(label)}</label>`;
+  }
+
+  function num(path, value, min, max, step, label, hint) {
+    return `<div class="cs-fld"><label>${esc(label)}</label>
+      <input class="cs-in" type="number"${min != null ? ' min="' + min + '"' : ''}${max != null ? ' max="' + max + '"' : ''}${step ? ' step="' + step + '"' : ''} data-path="${path}" value="${value}">
+      ${hint ? '<div class="hint">' + esc(hint) + '</div>' : ''}</div>`;
+  }
+
+  function paneRun() {
+    const a = cfg().answer || {};
+    const g = cfg().guard || {};
+    const ap = cfg().apply || {};
+    const en = cfg().engine || {};
+    return `
+<section class="cs-card">
+  <h2>运行 <span class="tag">什么时候答、答完做什么</span></h2>
+  <p class="desc">这些参数决定脚本在考试页上的动作节奏。不确定就别动，默认值是照「看起来像人在做」调的。</p>
+
+  <div class="cs-grid">
+    <div class="cs-fld">
+      <label>翻页模式</label>
+      <select class="cs-sel" data-path="answer.pageMode">
+        <option value="auto"${a.pageMode === 'auto' ? ' selected' : ''}>自动识别</option>
+        <option value="whole"${a.pageMode === 'whole' ? ' selected' : ''}>整卷（一页看完全部题）</option>
+        <option value="single"${a.pageMode === 'single' ? ' selected' : ''}>单题（一次一题，自动下一题）</option>
+      </select>
+    </div>
+    ${num('answer.intervalMs', a.intervalMs == null ? 900 : a.intervalMs, 0, 20000, 100, '题间间隔 (ms)')}
+  </div>
+  <div class="cs-grid" style="margin-top:12px">
+    ${num('guard.minDelay', g.minDelay == null ? 1400 : g.minDelay, 0, 60000, 100, '题间最短间隔 (ms)')}
+    ${num('guard.maxDelay', g.maxDelay == null ? 4200 : g.maxDelay, 0, 120000, 100, '题间最长间隔 (ms)')}
+  </div>
+  <div class="cs-grid g3" style="margin-top:12px">
+    ${num('guard.longBreakEvery', g.longBreakEvery == null ? 6 : g.longBreakEvery, 0, 50, 1, '每 N 题长停顿', '0 = 不停')}
+    ${num('guard.dialogDelaySec', g.dialogDelaySec == null ? 10 : g.dialogDelaySec, 0, 120, 1, '弹窗自动关闭 (秒)', '0 = 永不自动关')}
+    ${num('engine.maxIterations', en.maxIterations || 200, 10, 2000, 10, '单次最多处理题数')}
+  </div>
+
+  <div class="cs-line"></div>
+  <div class="cs-grid g3">
+    ${chk('answer.humanize', a.humanize, '拟人化点选', '完整指针事件 + 随机坐标/延迟')}
+    ${chk('answer.fillText', a.fillText !== false, '自动填写填空/简答')}
+    ${chk('answer.skipAnswered', a.skipAnswered !== false, '跳过已作答的题')}
+    ${chk('answer.autoNext', a.autoNext !== false, '答完自动下一题')}
+    ${chk('guard.enabled', g.enabled, '环境伪装总开关', '前台保持 + 自动确认弹窗 + 节奏控制')}
+    ${chk('guard.autoConfirm', g.autoConfirm !== false, '自动点掉确认弹窗')}
+    ${chk('apply.overwriteAnswered', ap.overwriteAnswered, '重做已答题目')}
+    ${chk('apply.saveEach', ap.saveEach, '每题点保存')}
+    ${chk('apply.clearExtra', ap.clearExtra !== false, '清掉与答案不符的已选项')}
+    ${chk('apply.stopOnFail', ap.stopOnFail !== false, '落盘失败就停下等人处理')}
+    ${chk('engine.softNext', en.softNext !== false, '无刷新翻页', '失败自动回退原生翻页')}
+    ${chk('engine.prefetch', en.prefetch !== false, '进页面后台预取答案', '点「答一题」时几乎不用等')}
+  </div>
+
+  <div class="cs-line"></div>
+  <div class="cs-note">
+    <b>自动交卷</b>：默认关闭。开启后全部答完会先等 10 秒反悔窗口再点交卷 —— 交卷不可撤销，低置信度的题建议人工过一遍。
+    这个开关与考试页面板里的「自动交卷」是同一个（保存时同时写 <code>apply.submit</code> 与 <code>apply.autoSubmit</code>，兼容旧版）。
+  </div>
+  <div class="cs-grid" style="margin-top:10px">
+    ${chk('apply.submit', ap.submit === true || ap.autoSubmit === true, '全部答完后自动交卷（慎用）')}
+  </div>
+
+  <div class="cs-line"></div>
+  <div class="cs-grid g3">
+    ${num('apply.verifyMs', ap.verifyMs == null ? 1100 : ap.verifyMs, 200, 5000, 100, '点后等选中态 (ms)')}
+    ${num('apply.retries', ap.retries == null ? 2 : ap.retries, 0, 5, 1, '落盘失败重试次数')}
+    ${num('engine.resumeWindowMin', en.resumeWindowMin || 20, 1, 180, 1, '断点续跑有效期 (分钟)')}
+  </div>
+  <div class="cs-grid g3" style="margin-top:12px">
+    ${num('engine.bootstrapPollMs', en.bootstrapPollMs || 15000, 1000, 60000, 500, '等题块渲染上限 (ms)')}
+    ${num('engine.prefetchConcurrency', en.prefetchConcurrency || 2, 1, 8, 1, '预取并发')}
+    ${num('engine.prefetchDelayMs', en.prefetchDelayMs == null ? 2000 : en.prefetchDelayMs, 0, 30000, 500, '预取前等待 (ms)')}
+  </div>
+</section>`;
+  }
+
+  /* ---------------- 备份面板 ---------------- */
+
+  function paneBackup() {
+    const info = storeInfo();
+    return `
+<section class="cs-card">
+  <h2>备份 <span class="tag">换浏览器 / 换域名时搬配置</span></h2>
+  <p class="desc">配置里只有模型地址和参数，不含任何账号信息。导出的 JSON 可以直接贴进考试页面板的「设置 → 备份」，也可以用来在另一台电脑上恢复。</p>
+  <div class="cs-row" style="margin-bottom:10px">
+    <button class="cs-btn pri" data-act="export-text">导出到下面文本框</button>
+    <button class="cs-btn" data-act="download">下载 .json 文件</button>
+    <button class="cs-btn" data-act="copy">复制到剪贴板</button>
+    <div style="flex:1"></div>
+    <label class="cs-btn" style="cursor:pointer">从文件导入<input type="file" accept="application/json,.json" data-act="upload" style="display:none"></label>
+  </div>
+  <textarea class="cs-ta" id="cs-io" rows="10" placeholder="点「导出到下面文本框」把当前配置变成 JSON；在别的机器上把 JSON 粘进来点「导入」"></textarea>
+  <div class="cs-row" style="margin-top:10px">
+    <button class="cs-btn" data-act="import-text">导入文本框里的配置</button>
+    <button class="cs-btn danger" data-act="reset">恢复默认设置</button>
+    <div style="flex:1"></div>
+    <span class="hint" id="cs-iohint"></span>
+  </div>
+  <div class="cs-line"></div>
+  <div class="cs-kv">
+    <div class="k">存储后端</div><div class="v">${esc(info.backend === 'gm' ? '油猴 GM（跨域名共享）' : info.backend === 'local' ? 'localStorage（仅本域）' : '内存')}</div>
+    <div class="k">配置体积</div><div class="v">${info.bytes || 0} 字节</div>
+    <div class="k">当前站点</div><div class="v">${esc(location.host || 'file://')}</div>
+    <div class="k">存储键</div><div class="v">${esc(CXAI.CONFIG_KEY)}</div>
+  </div>
+</section>`;
+  }
+
+  /* ---------------- 诊断面板 ---------------- */
+
+  function paneDiag() {
+    const info = storeInfo();
+    const st = backendText();
+    const diag = S.diag;
+    return `
+<section class="cs-card">
+  <h2>诊断 <span class="tag">出问题时先看这一页</span></h2>
+  <p class="desc">这里的信息和考试页控制台里执行 <code>CXAI.diag()</code> 得到的一致。</p>
+  <div class="cs-kv">
+    <div class="k">脚本版本</div><div class="v">v${esc(CXAI.__version)} · 构建 ${esc(CXAI.__builtAt || '-')}</div>
+    <div class="k">存储</div><div class="v">${esc(st.tag)} · ${info.bytes || 0} 字节 —— ${esc(st.hint)}</div>
+    <div class="k">模型</div><div class="v">${(cfg().ai.providers || []).map((p) => esc(p.label || p.model || p.id) + (p.enabled === false ? '(停用)' : '')).join('、') || '未配置'}</div>
+    <div class="k">用户脚本管理器</div><div class="v">${esc(detectManager())}</div>
+    <div class="k">页面地址</div><div class="v">${esc(location.href)}</div>
+  </div>
+  <div class="cs-row" style="margin-top:14px">
+    <button class="cs-btn pri" data-act="diag">重新采集诊断信息</button>
+    <button class="cs-btn" data-act="test-all">测试全部连接</button>
+    <button class="cs-btn" data-act="copy-diag">复制诊断信息</button>
+  </div>
+  <div class="cs-out" id="cs-testout" style="display:none;margin-top:12px"></div>
+  <div class="cs-out" id="cs-diagout" style="margin-top:12px">${diag ? esc(diag) : '点上面「重新采集」生成。'}</div>
+</section>`;
+  }
+
+  function detectManager() {
+    try {
+      if (typeof GM_info !== 'undefined' && GM_info && GM_info.scriptHandler) {
+        return GM_info.scriptHandler + ' ' + (GM_info.version || '');
+      }
+    } catch (e) {}
+    return truthyGM() ? '支持 GM_* 但不报名字' : '无 GM_* 接口（降级 localStorage）';
+  }
+
+  function truthyGM() {
+    try {
+      return typeof GM_getValue === 'function';
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* ---------------- 渲染 ---------------- */
+
+  function paneHtml(tab) {
+    switch (tab) {
+      case 'judge':
+        return paneJudge();
+      case 'vision':
+        return paneVision();
+      case 'run':
+        return paneRun();
+      case 'backup':
+        return paneBackup();
+      case 'diag':
+        return paneDiag();
+      default:
+        return paneModel();
+    }
+  }
+
+  /** 整页骨架（只在 mount 时渲染一次） */
+  function frame() {
+    return `${topbar()}
+<div class="cs-layout">
+  ${nav()}
+  <main class="cs-main" id="cs-main"></main>
+</div>
+<div class="cs-toast" id="cs-toast"></div>`;
+  }
+
+  /** 只重建右栏：切页签 / 模型增删后调用 */
+  function renderMain() {
+    const main = q('#cs-main');
+    if (!main) return;
+    main.innerHTML = paneHtml(S.tab);
+    // 页签高亮
+    qa('.cs-nav .it').forEach((el) => el.classList.toggle('on', el.getAttribute('data-tab') === S.tab));
+    refreshMeta();
+    if (S.tab === 'diag' && !S.diag) collectDiag();
+  }
+
+  /* ---------------- 字段读写 ---------------- */
+
+  const NUM_FIELDS = { weight: 1, temperature: 1, maxTokens: 1 };
+
+  function updProvider(i, field, raw) {
+    const ps = cfg().ai.providers || [];
+    const p = ps[i];
+    if (!p) return;
+    if (field === 'enabled' || field === 'keyOptional') p[field] = !!raw;
+    else if (NUM_FIELDS[field]) p[field] = Number(raw) || (field === 'weight' ? 1 : 0);
+    else p[field] = raw;
+    // 预设一旦手改地址/模型名就不再是那个「预设」了，但保留 preset 字段用于显示
+    if (field === 'baseURL' || field === 'model') {
+      const best = detectPresetByURL(p.baseURL);
+      p.preset = best;
+    }
+    CXAI.Cfg.data.ai.providers = ps.map((x, k) => CXAI.normalizeProvider(x, k));
+    touch('已保存');
+  }
+
+  function detectPresetByURL(url) {
+    const h = String(url || '').toLowerCase();
+    const hit = presets().filter((x) => x.baseURL && String(x.baseURL).toLowerCase() === h)[0];
+    return hit ? hit.id : 'custom';
+  }
+
+  function setPath(path, value) {
+    const parts = String(path).split('.');
+    let cur = cfg();
+    for (let i = 0; i < parts.length - 1; i++) {
+      if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+      cur = cur[parts[i]];
+    }
+    cur[parts[parts.length - 1]] = value;
+    touch('已保存');
+  }
+
+  function readField(el) {
+    const type = el.getAttribute('type') || '';
+    if (type === 'checkbox') return el.checked;
+    if (type === 'number') return el.value === '' ? 0 : Number(el.value);
+    return el.value;
+  }
+
+  /* ---------------- 读图模型与 role 联动 ----------------
+   * 读图模型是用 role 表达的（vision / both），不是单独字段。
+   * 改了「读图模型」下拉或「同时参与判题」就必须同步所有 provider 的 role，
+   * 否则 visionProviders() / activeProviders() 仍然按旧角色挑模型。
+   */
+  function syncVisionRoles() {
+    const c = cfg();
+    const v = c.ai.vision || {};
+    const vid = v.ocrProviderId || '';
+    const both = !!v.judgeToo;
+    (c.ai.providers || []).forEach((p) => {
+      if (vid && p.id === vid) {
+        p.role = both ? 'both' : 'vision';
+        p.vision = true;
+      } else if (vid) {
+        p.role = 'judge';
+        p.vision = false;
+      } else {
+        // 取消读图：角色收回判题，但保留模型自带的视觉能力标记（auto 策略还要用）
+        p.role = 'judge';
+      }
+    });
+    CXAI.Cfg.data.ai.providers = c.ai.providers.map((x, i) => CXAI.normalizeProvider(x, i));
+    // 只配了一个模型时，它必须兼任判题，否则判题面板会空
+    if (vid && (c.ai.providers || []).filter((p) => p.enabled !== false && p.role !== 'vision').length === 0) {
+      c.ai.vision.judgeToo = true;
+      (c.ai.providers || []).forEach((p) => {
+        if (p.id === vid) p.role = 'both';
+      });
+    }
+  }
+
+  /* ---------------- 模型动作 ---------------- */
+
+  function addProvider() {
+    const c = cfg();
+    const list = c.ai.providers || [];
+    const fresh = CXAI.normalizeProvider(
+      {
+        id: CXAI.U.uid('p'),
+        label: '新模型 ' + (list.length + 1),
+        preset: 'custom',
+        baseURL: 'https://api.openai.com/v1',
+        apiStyle: 'openai',
+        model: 'gpt-4o-mini',
+        apiKey: '',
+        weight: 1,
+        temperature: 0.2,
+        maxTokens: 700,
+        enabled: true,
+        vision: false,
+        role: 'judge'
+      },
+      list.length
+    );
+    list.push(fresh);
+    c.ai.providers = list;
+    S.open[fresh.id] = true;
+    persist('已添加模型，填好 Key 后点「拉取」');
+    renderMain();
+  }
+
+  function delProvider(i) {
+    const c = cfg();
+    const list = c.ai.providers || [];
+    const p = list[i];
+    if (!p) return;
+    if (list.length <= 1) {
+      toast('至少要留一个模型', 'warn');
+      return;
+    }
+    if (!confirm('删除模型「' + (p.label || p.model || p.id) + '」？')) return;
+    list.splice(i, 1);
+    c.ai.providers = list;
+    if (c.ai.vision && c.ai.vision.ocrProviderId === p.id) c.ai.vision.ocrProviderId = '';
+    persist('已删除');
+    renderMain();
+  }
+
+  function moveProvider(i, dir) {
+    const c = cfg();
+    const list = c.ai.providers || [];
+    const j = i + dir;
+    if (j < 0 || j >= list.length) return;
+    const t = list[i];
+    list[i] = list[j];
+    list[j] = t;
+    c.ai.providers = list;
+    persist(false);
+    renderMain();
+  }
+
+  function applyPresetTo(i, id) {
+    const pre = presetById(id);
+    const c = cfg();
+    const p = (c.ai.providers || [])[i];
+    if (!p) return;
+    if (!pre) {
+      p.preset = 'custom';
+      persist(false);
+      renderMain();
+      return;
+    }
+    p.preset = pre.id;
+    if (pre.baseURL) p.baseURL = pre.baseURL;
+    if (pre.model) p.model = pre.model;
+    if (pre.apiStyle) p.apiStyle = pre.apiStyle;
+    if (pre.label) p.label = pre.label;
+    if (pre.keyOptional) p.keyOptional = true;
+    p.vision = !!pre.vision || p.vision;
+    persist('已套用预设 ' + pre.label);
+    renderMain();
+  }
+
+  async function fetchModels(i) {
+    const p = (cfg().ai.providers || [])[i];
+    if (!p) return;
+    S.busy['fetch' + i] = true;
+    const btn = q('[data-act="fetch"][data-i="' + i + '"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '拉取中…';
+    }
+    try {
+      const list = await CXAI.AI.listModels(p);
+      S.models[p.id] = list || [];
+      if (!list || !list.length) toast('端点没返回模型清单，手填模型名即可', 'warn');
+      else toast('拉到 ' + list.length + ' 个模型', 'ok');
+      renderMain();
+    } catch (e) {
+      toast('拉取失败：' + (e && e.message ? e.message : e), 'bad');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = '拉取';
+      }
+    } finally {
+      S.busy['fetch' + i] = false;
+    }
+  }
+
+  function outBox() {
+    const box = q('#cs-testout');
+    if (!box) return null;
+    box.style.display = 'block';
+    return box;
+  }
+
+  async function testOne(i) {
+    const p = (cfg().ai.providers || [])[i];
+    if (!p) return;
+    const line = q('[data-testout="' + i + '"]');
+    const btn = q('[data-act="test-one"][data-i="' + i + '"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '测试中…';
+    }
+    if (line) line.textContent = '正在请求…';
+    try {
+      const t0 = Date.now();
+      const r = await CXAI.AI.ping(p);
+      const ms = (r && r.ms) || Date.now() - t0;
+      const txt = CXAI.U.truncate(String((r && r.text) || '').replace(/\s+/g, ' '), 40);
+      if (line) line.innerHTML = '<span style="color:#15803d">✓ ' + ms + 'ms · ' + esc(txt) + '</span>';
+      toast('连通 · ' + ms + 'ms', 'ok');
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      if (line) line.innerHTML = '<span style="color:#b91c1c">✗ ' + esc(msg) + '</span>';
+      toast('失败：' + msg, 'bad');
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '测试这个';
+    }
+  }
+
+  async function testAll() {
+    const box = outBox();
+    const list = (cfg().ai.providers || []).filter((p) => p.enabled !== false);
+    if (!list.length) {
+      toast('没有启用的模型', 'warn');
+      return;
+    }
+    if (box) box.innerHTML = '<div class="mid">正在测试 ' + list.length + ' 个模型…</div>';
+    const lines = [];
+    let ok = 0;
+    for (let k = 0; k < list.length; k++) {
+      const p = list[k];
+      const head = (p.role === 'vision' ? '[读图] ' : p.role === 'both' ? '[读图+判题] ' : '[判题] ') +
+        (p.label || p.id) + ' · ' + (p.model || '(未填模型)');
+      lines.push('<div class="mid">… ' + esc(head) + '</div>');
+      if (box) box.innerHTML = lines.join('');
+      try {
+        const t0 = Date.now();
+        const r = await CXAI.AI.ping(p);
+        ok++;
+        lines[lines.length - 1] =
+          '<div class="ok">✓ ' + esc(head) + ' · ' + ((r && r.ms) || Date.now() - t0) + 'ms · ' +
+          esc(CXAI.U.truncate(String((r && r.text) || '').replace(/\s+/g, ' '), 40)) + '</div>';
+      } catch (e) {
+        lines[lines.length - 1] = '<div class="bad">✗ ' + esc(head) + ' · ' + esc(e && e.message ? e.message : e) + '</div>';
+      }
+      if (box) box.innerHTML = lines.join('');
+    }
+    lines.push('<div class="' + (ok === list.length ? 'ok' : 'bad') + '">完成：' + ok + '/' + list.length + ' 连通</div>');
+    if (box) box.innerHTML = lines.join('');
+    toast('连通 ' + ok + '/' + list.length, ok === list.length ? 'ok' : 'warn');
+  }
+
+  /* ---------------- 备份动作 ---------------- */
+
+  function exportText() {
+    const ta = q('#cs-io');
+    if (!ta) return;
+    ta.value = CXAI.Cfg.json();
+    const hint = q('#cs-iohint');
+    if (hint) hint.textContent = '已导出 ' + ta.value.length + ' 字符';
+    toast('已导出 ' + ta.value.length + ' 字符', 'ok');
+  }
+
+  function importText(raw) {
+    const txt = String(raw == null ? (q('#cs-io') || {}).value || '' : raw).trim();
+    if (!txt) {
+      toast('文本框是空的', 'warn');
+      return;
+    }
+    try {
+      CXAI.Cfg.importJSON(txt);
+      S.models = {};
+      persist('配置已导入');
+      renderMain();
+      toast('导入成功 · 模型 ' + (cfg().ai.providers || []).length + ' 个', 'ok');
+    } catch (e) {
+      toast('导入失败：' + (e && e.message ? e.message : e), 'bad');
+    }
+  }
+
+  function downloadJSON() {
+    try {
+      const blob = new Blob([CXAI.Cfg.json()], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'cx-exam-ai-config-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 800);
+      toast('已下载配置文件', 'ok');
+    } catch (e) {
+      toast('下载失败：' + e.message, 'bad');
+    }
+  }
+
+  async function copyText(text, okMsg) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast(okMsg || '已复制', 'ok');
+    } catch (e) {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed;left:-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        toast(okMsg || '已复制', 'ok');
+      } catch (e2) {
+        toast('复制失败，请手动全选复制', 'warn');
+      }
+      ta.remove();
+    }
+  }
+
+  function resetConfig() {
+    if (!confirm('恢复默认设置？当前配置会被清掉（模型、Key、参数全部重置）')) return;
+    try {
+      CXAI.Cfg.importJSON(JSON.stringify(CXAI.DEFAULT_CONFIG));
+      S.models = {};
+      renderMain();
+      toast('已恢复默认', 'ok');
+    } catch (e) {
+      toast('重置失败：' + e.message, 'bad');
+    }
+  }
+
+  /* ---------------- 诊断动作 ---------------- */
+
+  function collectDiag() {
+    let d = null;
+    try {
+      d = CXAI.diag();
+    } catch (e) {
+      d = { error: String(e && e.message ? e.message : e) };
+    }
+    S.diag = JSON.stringify(d, null, 2);
+    const box = q('#cs-diagout');
+    if (box) box.textContent = S.diag;
+    return S.diag;
+  }
+
+  /* ---------------- 事件 ---------------- */
+
+  function onClick(e) {
+    const el = e.target.closest ? e.target.closest('[data-act]') : null;
+    if (!el) return;
+    const act = el.getAttribute('data-act');
+    const i = Number(el.getAttribute('data-i'));
+    switch (act) {
+      case 'tab':
+        S.tab = el.getAttribute('data-tab') || 'model';
+        renderMain();
+        break;
+      case 'pv-toggle':
+        if (e.target.closest && e.target.closest('input, label, select, button, .del')) return;
+        {
+          const card = el.closest('.cs-pv');
+          if (!card) return;
+          const open = card.getAttribute('data-open') === '1';
+          card.setAttribute('data-open', open ? '0' : '1');
+          S.open[card.getAttribute('data-id')] = !open;
+        }
+        break;
+      case 'pv-add':
+        addProvider();
+        break;
+      case 'pv-del':
+        delProvider(i);
+        break;
+      case 'pv-up':
+        moveProvider(i, -1);
+        break;
+      case 'pv-down':
+        moveProvider(i, 1);
+        break;
+      case 'pv-collapse':
+        qa('.cs-pv').forEach((c) => {
+          c.setAttribute('data-open', '0');
+          S.open[c.getAttribute('data-id')] = false;
+        });
+        break;
+      case 'fetch':
+        fetchModels(i);
+        break;
+      case 'test-one':
+        testOne(i);
+        break;
+      case 'test-all':
+        testAll();
+        break;
+      case 'export-text':
+        exportText();
+        break;
+      case 'download':
+        downloadJSON();
+        break;
+      case 'copy':
+        copyText(CXAI.Cfg.json(), '配置 JSON 已复制');
+        break;
+      case 'import-text':
+        importText();
+        break;
+      case 'reset':
+        resetConfig();
+        break;
+      case 'diag':
+        collectDiag();
+        toast('诊断信息已刷新', 'ok');
+        break;
+      case 'copy-diag':
+        copyText(collectDiag() || '', '诊断信息已复制');
+        break;
+    }
+  }
+
+  function onChange(e) {
+    const t = e.target;
+    if (!t || !t.getAttribute) return;
+    const act = t.getAttribute('data-act');
+
+    // 拉取到的模型清单里选一个填进去
+    if (act === 'pick-model') {
+      const i = Number(t.getAttribute('data-i'));
+      const val = t.value;
+      if (val) {
+        updProvider(i, 'model', val);
+        renderMain();
+        toast('模型名已填入', 'ok');
+      }
+      return;
+    }
+
+    // 判定强度：一次改四个字段
+    if (act === 'strength') {
+      const MAP = {
+        single: { mode: 'single', panelSize: 1, enableCritique: false, enableArbiter: false },
+        fast: { mode: 'fast', panelSize: 1, enableCritique: false, enableArbiter: false },
+        council: { mode: 'council', panelSize: 3, enableCritique: true, enableArbiter: false },
+        max: { mode: 'council', panelSize: 3, enableCritique: true, enableArbiter: true }
+      };
+      const m = MAP[t.value];
+      if (m) {
+        Object.keys(m).forEach((k) => (cfg().ai.judge[k] = m[k]));
+        persist('判定强度已切换');
+        renderMain();
+      }
+      return;
+    }
+
+    // provider 字段
+    const f = t.getAttribute('data-f');
+    if (f != null && t.hasAttribute('data-i')) {
+      const i = Number(t.getAttribute('data-i'));
+      updProvider(i, f, readField(t));
+      // 预设改变要重渲染整张卡（会换掉 baseURL / 模型名）
+      if (f === 'preset') {
+        applyPresetTo(i, t.value);
+        return;
+      }
+      if (f === 'enabled') {
+        const card = t.closest('.cs-pv');
+        if (card) card.classList.toggle('off', !t.checked);
+        refreshMeta();
+      }
+      return;
+    }
+
+    // 全局字段
+    const path = t.getAttribute('data-path');
+    if (path) {
+      const val = readField(t);
+      setPath(path, val);
+      // 交卷开关：引擎与 guard 读旧字段，两个都写
+      if (path === 'apply.submit') setPath('apply.autoSubmit', val);
+      // 读图模型 / 兼任判题：要同步所有 provider 的 role，否则挑模型的逻辑还按旧角色走
+      if (path === 'ai.vision.ocrProviderId' || path === 'ai.vision.judgeToo') {
+        syncVisionRoles();
+        renderMain();
+        toast('读图模型已更新', 'ok');
+      }
+      return;
+    }
+    const mb = t.getAttribute('data-path-x');
+    if (mb === 'ai.vision.maxTotalBytes') {
+      setPath('ai.vision.maxTotalBytes', Math.round((Number(t.value) || 4) * 1048576));
+    }
+  }
+
+  /** 输入框边打边存（防抖），不等失焦 */
+  function onInput(e) {
+    const t = e.target;
+    if (!t || !t.getAttribute) return;
+    if (!t.getAttribute('data-path') && !t.getAttribute('data-f')) return;
+    const type = t.getAttribute('type') || 'text';
+    if (type === 'checkbox') return;
+    const path = t.getAttribute('data-path');
+    if (path) {
+      setPath(path, readField(t));
+      return;
+    }
+    const f = t.getAttribute('data-f');
+    if (f != null && t.hasAttribute('data-i')) updProvider(Number(t.getAttribute('data-i')), f, readField(t));
+  }
+
+  function onUpload(e) {
+    const t = e.target;
+    if (!t || t.getAttribute('data-act') !== 'upload') return;
+    const file = t.files && t.files[0];
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = () => {
+      const ta = q('#cs-io');
+      if (ta) ta.value = String(fr.result || '');
+      importText(String(fr.result || ''));
+    };
+    fr.onerror = () => toast('读文件失败', 'bad');
+    fr.readAsText(file);
+  }
+
+  /* ---------------- 挂载 ---------------- */
+
+  function injectCSS() {
+    try {
+      if (typeof GM_addStyle === 'function') {
+        GM_addStyle(CSS);
+        return;
+      }
+    } catch (e) {}
+    const st = document.createElement('style');
+    st.id = 'cs-style';
+    st.textContent = CSS;
+    (document.head || document.documentElement).appendChild(st);
+  }
+
+  function mount() {
+    if (mounted) return true;
+    injectCSS();
+    // 骨架页自带的深色样式接管后就没用了，留着会污染 code / a 等继承样式
+    const bootStyle = document.getElementById('cs-boot-style');
+    if (bootStyle) bootStyle.remove();
+    document.title = 'CX 考试 AI 大脑 · 设置中心';
+
+    // 整页接管：settings.html 只是骨架，真正的界面由脚本渲染
+    host = document.createElement('div');
+    host.id = 'cx-ai-settings';
+    host.className = 'cs-root';
+    const body = document.body || document.documentElement;
+    body.innerHTML = '';
+    body.appendChild(host);
+    host.innerHTML = frame();
+
+    CXAI.Cfg.load();
+    // 支持 /settings.html?tab=judge 直接落到指定栏（排查 / 收藏夹直达都方便）
+    const wantTab = (function () {
+      try {
+        const m = /[?&]tab=([a-z]+)/i.exec(String(location.search || ''));
+        return m ? m[1].toLowerCase() : '';
+      } catch (e) {
+        return '';
+      }
+    })();
+    S.tab = ['model', 'judge', 'vision', 'run', 'backup', 'diag'].indexOf(wantTab) >= 0 ? wantTab : 'model';
+    renderMain();
+
+    host.addEventListener('click', onClick);
+    host.addEventListener('change', onChange);
+    host.addEventListener('input', onInput);
+    host.addEventListener('change', onUpload);
+
+    mounted = true;
+    try {
+      CXAI.Log.info('设置中心已就绪 · 存储后端 ' + CXAI.Store.backend + ' · 配置 ' + storeInfo().bytes + ' 字节');
+    } catch (e) {}
+    return true;
+  }
+
+  function unmount() {
+    if (!mounted) return;
+    host = null;
+    mounted = false;
+    const el = document.getElementById('cx-ai-settings');
+    if (el) el.remove();
+  }
+
+  return { isHere, mount, unmount, collectDiag };
+})();
 })();
