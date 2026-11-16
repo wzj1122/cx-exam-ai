@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.9.1（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.9.2（`package.json`）
 
 # MAINTENANCE
 
@@ -247,6 +247,28 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.9.2（2026-11-17）整卷填空自动落盘 + 脚本内设置面板下线
+
+- **BUGFIX（用户实测）**：整卷预览下填空题填完不点「保存」，内容会被页面清掉，超星还会拦住继续填下一题。
+  `08-main.handleQuestion()` 的落盘条件改为：`apply.saveEach` 或（整卷 且 该题有输入框/填空类题型）→ 一定点保存。
+  判断放宽到 `q.inputs` 非空，因为不同皮肤下 `type` 映射不可靠。
+- **BUGFIX（隐藏很久）**：`05-apply.saveOne()` 的选择器命中的常是外层容器 `div.savebtndiv`，
+  点容器不会触发内部 `<a onclick="saveQuestion(…)">` —— 表现就是"点了但没保存"。现在若命中容器，
+  会往下找 `[onclick], a, button, input[type=button|submit]` 再点。
+- **UI 精简**：删除脚本内整套设置面板（`07-ui.js` 1742 → 983 行，dist 402KB → 365KB）：
+  删掉 `openConfig/closeConfig/saveConfig/exportConfig/importConfig/testProviders/renderProviders/readRow/readProviders/
+  renderPickerList/ensurePicker/openModelPicker/wireProviderBox/applyPreset/refreshVisionSelect/syncVisionHint/showTab/showHelp`
+  等 24 个函数与 `#mask` 模板块；顶栏 ⚙ → **⇅ 云同步**（`data-act="syncmask"`），新加 `openSync/closeSync` 与
+  `#syncmask` 小窗（同步码输入 + 拉取 + 打开设置中心）。
+- `08-main`：无模型时 `UI.openConfig()` → `UI.openSync()`；GM 菜单加「输入同步码（云同步）」。
+- `07-ui` 的 `sync-pull`：同时支持 `#sync-code2`（小窗）与 `#sync-code`（提示条），取**非空**的那个
+  （早先优先读小窗，用户粘在提示条里会被忽略）。
+- E2E 扩到 **30 项**：新增 D 段（`tools/fixtures/exam-mock-whole.html` + 本地 mock 模型服务），
+  真跑整卷两题，断言 `filled=2 / results=2 / saveCount=2`。mock 的 CORS 必须回显 Origin + allow-credentials
+  （脚本请求走 `credentials:'include'`，`ACAO:*` 会被浏览器拒）。
+- 测试基建：`verify-cdp.mjs` 启动时自校验 `.site/dist` 与 `dist/` 一致（否则自动 build-site），
+  `inject()` 前清掉旧 host/CXAI（同一文档重复注入会变成两套 UI —— 测试环境特有）。
 
 ### v1.9.1（2026-11-17）云同步入口提到顶栏
 

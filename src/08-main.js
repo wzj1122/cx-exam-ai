@@ -266,8 +266,28 @@ CXAI.Engine = (function () {
       );
     }
 
-    if (CXAI.Cfg.get('apply.saveEach', false)) {
-      await CXAI.Apply.saveOne(q);
+    // 落盘策略：整卷预览 / 章节测验里每道填空·简答都有自己的「保存」按钮，
+    // 不点的话内容会在失焦或页面重绘时被清掉，超星还会拦住"继续填下一题"。
+    // 所以这类题在整卷场景下一律自动点保存；其余情况仍按 apply.saveEach 走。
+    const wholePage = (function () {
+      try {
+        return document.querySelectorAll('.questionLi, .TiMu').length > 1;
+      } catch (e) {
+        return false;
+      }
+    })();
+    // 判断依据放宽到"有没有输入框"：填空/简答靠 input/textarea/iframe 承载答案，
+    // 而题型映射在不同皮肤上不一定可靠（有的页面 type 值不同）。整卷里有输入框就落一次盘。
+    const hasInput = !!(q.inputs && q.inputs.some(function (el) {
+      return el && el.isConnected;
+    }));
+    const blankLike =
+      hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
+    if (CXAI.Cfg.get('apply.saveEach', false) || (wholePage && blankLike)) {
+      const saved = await CXAI.Apply.saveOne(q);
+      if (wholePage && blankLike && !saved) {
+        CXAI.Log.warn(`#${no} 是${q.typeLabel || '填空'}题，但没找到该题的「保存」按钮，内容可能会丢`);
+      }
     }
 
     CXAI.UI.addQuestionCard(q, result, applied);
@@ -751,8 +771,8 @@ CXAI.Engine = (function () {
     if (st.running) return;
     const providers = CXAI.Cfg.activeProviders();
     if (!providers.length) {
-      CXAI.Log.error('还没有配置模型：点右上角 ⚙ 填入 Base URL / API Key / 模型名');
-      CXAI.UI.openConfig();
+      CXAI.Log.error('还没有配置模型：点面板右上角 ⇅ 粘同步码拉取，或在设置中心（网页版）配好后生成同步码');
+      if (CXAI.UI.openSync) CXAI.UI.openSync();
       return;
     }
 
@@ -1065,7 +1085,7 @@ CXAI.Engine = (function () {
       if (!np) {
         CXAI.Log.warn(
           '本域还没有模型配置（存储后端：' + CXAI.Store.backend + '）。' +
-            '去设置中心配好后点「同步到学习通」，或把配置码粘到面板「备份 → 导入」'
+            '去设置中心配好后点右上角「生成同步码并上传」，再把同步码粘到面板里 ⇅ 拉取一次（之后自动同步）'
         );
         try {
           CXAI.UI.update({ needSetup: true });
@@ -1082,6 +1102,11 @@ CXAI.Engine = (function () {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
         GM_registerMenuCommand('开始答题', () => CXAI.Engine.start());
+        GM_registerMenuCommand('输入同步码（云同步）', () => {
+          try {
+            CXAI.UI.openSync();
+          } catch (e) {}
+        });
         GM_registerMenuCommand('打开设置中心（配置模型）', () => {
           const url = CXAI.UI && CXAI.UI.settingsURL ? CXAI.UI.settingsURL() : 'https://cx-exam-ai.pages.dev/settings.html';
           try {

@@ -782,11 +782,16 @@ CXAI.Apply = (function () {
 
   /** 单题保存（部分考试页每题都有保存按钮） */
   async function saveOne(q) {
-    const btn =
-      (q.root && q.root.querySelector('[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]')) ||
-      document.querySelector('[onclick*="saveQuestion"]');
-    if (!btn) return false;
-    await clickOnce(btn);
+    const SEL = '[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]';
+    let node = (q.root && q.root.querySelector(SEL)) || document.querySelector(SEL);
+    if (!node) return false;
+    // 命中的常常是外层容器（超星整卷预览是 <div class="savebtndiv"><a onclick="saveQuestion(...)">保存</a></div>），
+    // 直接点容器不会触发内部按钮的行为 —— 早先就是这样"点了但没保存"。这里往下找真正可点的那个。
+    if (!node.hasAttribute('onclick') && !/^(A|BUTTON|INPUT)$/i.test(node.tagName)) {
+      const inner = node.querySelector('[onclick], a, button, input[type="button"], input[type="submit"]');
+      if (inner) node = inner;
+    }
+    await clickOnce(node);
     await sleep(CXAI.U.randInt(200, 500));
     return true;
   }

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.9.1
+// @version      1.9.2
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.9.1";
-CXAI.__builtAt = "2026-11-16T18:44:40.049Z";
+CXAI.__version = "1.9.2";
+CXAI.__builtAt = "2026-11-16T20:39:24.331Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -4164,11 +4164,16 @@ CXAI.Apply = (function () {
 
   /** 单题保存（部分考试页每题都有保存按钮） */
   async function saveOne(q) {
-    const btn =
-      (q.root && q.root.querySelector('[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]')) ||
-      document.querySelector('[onclick*="saveQuestion"]');
-    if (!btn) return false;
-    await clickOnce(btn);
+    const SEL = '[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]';
+    let node = (q.root && q.root.querySelector(SEL)) || document.querySelector(SEL);
+    if (!node) return false;
+    // 命中的常常是外层容器（超星整卷预览是 <div class="savebtndiv"><a onclick="saveQuestion(...)">保存</a></div>），
+    // 直接点容器不会触发内部按钮的行为 —— 早先就是这样"点了但没保存"。这里往下找真正可点的那个。
+    if (!node.hasAttribute('onclick') && !/^(A|BUTTON|INPUT)$/i.test(node.tagName)) {
+      const inner = node.querySelector('[onclick], a, button, input[type="button"], input[type="submit"]');
+      if (inner) node = inner;
+    }
+    await clickOnce(node);
     await sleep(CXAI.U.randInt(200, 500));
     return true;
   }
@@ -4669,7 +4674,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   <div class="panel" id="panel">
     <div class="hd">
       <div class="t">CX 考试 AI 大脑</div>
-      <div class="x cfg" data-act="cfg" title="设置">⚙</div>
+      <div class="x cfg" data-act="syncmask" title="云同步 · 输入同步码">⇅</div>
       <div class="x close" data-act="hide" title="收起面板">✕</div>
     </div>
     <div class="stat">
@@ -4694,23 +4699,20 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     <div class="qdetail" id="qdetail"></div>
     <div class="logs" id="logs"></div>
     <div class="ft">Ctrl+Shift+X 呼出/隐藏<span class="lg-toggle" data-act="logs" title="展开/收起日志">日志</span><span id="s-state" class="ftstate">待机</span></div>
-    <div class="mask" id="mask">
-      <div class="dlg">
-        <div class="dh">设置<div class="x" data-act="cfg-close">✕</div></div>
-        <div class="dbody">
-          <div class="dnav" id="cfg-nav">
-            <div class="navhd">分类</div>
-            <div class="ntab on" data-act="tab" data-tab="model"><span class="ic">◈</span>模型</div>
-            <div class="ntab" data-act="tab" data-tab="judge"><span class="ic">◉</span>判题</div>
-            <div class="ntab" data-act="tab" data-tab="run"><span class="ic">▷</span>运行</div>
-            <div class="ntab" data-act="tab" data-tab="bak"><span class="ic">⇅</span>备份</div>
+    <div class="mask" id="syncmask">
+      <div class="dlg" style="max-width:360px">
+        <div class="dh">云同步<div class="x" data-act="syncmask-close">✕</div></div>
+        <div class="dbody" style="display:block;padding:14px 16px">
+          <p style="margin:0 0 10px;font-size:11.5px;line-height:1.7;color:#6b7280">
+            脚本里不再放设置面板。模型 / 判题 / 读图都在<b>网页版设置中心</b>配，这里只需要粘一次同步码。
+          </p>
+          <input id="sync-code2" placeholder="同步码 abc123.xyz…" spellcheck="false" autocomplete="off"
+            style="width:100%;padding:6px 9px;border:1px solid #dfe3ea;border-radius:8px;font:11px/1.5 ui-monospace,Menlo,monospace;outline:none">
+          <div class="row2" style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <button class="b" data-act="sync-pull" style="margin-top:0">拉取配置</button>
+            <button class="b" data-act="open-settings" style="margin-top:0">打开设置中心</button>
           </div>
-          <div class="db" id="cfg-body"></div>
-        </div>
-        <div class="df">
-          <button class="b" data-act="cfg-page" title="在独立网页里配置，同一份配置，改完考试页直接生效">独立设置页 ↗</button>
-          <button class="b" data-act="cfg-test">测试连接</button>
-          <button class="b primary" data-act="cfg-save">保存</button>
+          <div class="help" id="syncmask-hint" style="margin-top:8px;font-size:10.5px;line-height:1.6;color:#8a93a3"></div>
         </div>
       </div>
     </div>
@@ -4775,33 +4777,21 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         case 'hide':
           togglePanel(false);
           break;
-        case 'cfg':
-          openConfig();
-          break;
-        case 'cfg-close':
-          closeConfig();
-          break;
-        case 'cfg-save':
-          saveConfig();
-          break;
-        case 'cfg-test':
-          testProviders();
-          break;
-        case 'cfg-export':
-          exportConfig();
-          break;
-        case 'cfg-import':
-          importConfig();
-          break;
-        case 'cfg-page':
-          openSettingsPage();
-          break;
         case 'open-settings':
           openSettingsPage();
           break;
+        case 'syncmask':
+          openSync();
+          break;
+        case 'syncmask-close':
+          closeSync();
+          break;
         case 'sync-pull': {
-          const inp = $('#sync-code');
-          const code = inp ? String(inp.value || '').trim() : '';
+          // 两个输入框都可能用：提示条里的 #sync-code（无配置时）和小窗里的 #sync-code2。
+          // 取"非空的那个"，否则用户在小窗里粘了码、提示条还空着就会读不到。
+          const a = $('#sync-code2');
+          const b = $('#sync-code');
+          const code = String((a && a.value) || (b && b.value) || '').trim();
           if (!code) {
             toast('先粘同步码');
             break;
@@ -4816,33 +4806,6 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
             .catch(function (e) {
               toast('拉取失败');
               CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
-            });
-          break;
-        }
-        case 'cfg-sync-pull': {
-          const inp = $('#cfg-sync-code');
-          const code = inp ? String(inp.value || '').trim() : '';
-          CXAI.Sync.pullInto(code || CXAI.Sync.savedCode())
-            .then(function (obj) {
-              const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
-              CXAI.Log.ok('已从云端同步 · 模型 ' + n + ' 个');
-              update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
-              openConfig();
-            })
-            .catch(function (e) {
-              CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
-            });
-          break;
-        }
-        case 'cfg-sync-new': {
-          CXAI.Sync.newCode()
-            .then(function (code) {
-              const inp = $('#cfg-sync-code');
-              if (inp) inp.value = code;
-              CXAI.Log.ok('云同步已开启 · 把同步码抄到别的设备：' + code);
-            })
-            .catch(function (e) {
-              CXAI.Log.error('生成同步码失败：' + (e && e.message ? e.message : e));
             });
           break;
         }
@@ -4861,9 +4824,6 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         case 'stop':
           CXAI.Engine.stop();
           break;
-        case 'help':
-          showHelp();
-          break;
         case 'pick': {
           const row = e.target.closest ? e.target.closest('.qcard') : null;
           const n = Number((actEl && actEl.getAttribute('data-i')) || e.target.getAttribute('data-i') || (row && row.getAttribute('data-i')) || 0) || 0;
@@ -4871,24 +4831,6 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
             state.sel = n;
             render();
           }
-          break;
-        }
-        case 'tab': {
-          const t = e.target.closest ? e.target.closest('.ntab') : null;
-          if (t) showTab(t.getAttribute('data-tab'));
-          break;
-        }
-        case 'pv-toggle': {
-          // 点行头展开/收起；但行头里的勾选框、删除、下拉不该触发
-          if (e.target.closest && e.target.closest('input, label, select, button, .del, a, [data-del], [data-fetch], [data-pick]')) break;
-          const card = e.target.closest ? e.target.closest('.pv') : null;
-          if (!card) break;
-          card.setAttribute('data-open', card.getAttribute('data-open') === '1' ? '0' : '1');
-          break;
-        }
-        case 'pv-all': {
-          const want = e.target.getAttribute('data-open') === '1' ? '1' : '0';
-          Array.from(root.querySelectorAll('.pv')).forEach((c) => c.setAttribute('data-open', want));
           break;
         }
         case 'logs': {
@@ -5416,641 +5358,6 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
    * 旧版本存过 preset:'deepseek'，用户后来把 Base URL 改成 magpie 网关，
    * 下拉还显示 DeepSeek —— 就是这个原因。这里按 Base URL 反查，查不到再退回存的值。
    */
-  function guessPreset(p) {
-    const list = CXAI.PRESETS || [];
-    const norm = (u) => String(u || '').replace(/\/+$/, '').toLowerCase();
-    const hit = list.filter((x) => x.baseURL && norm(x.baseURL) === norm(p && p.baseURL))[0];
-    if (hit) return hit.id;
-    if (p && p.preset && list.some((x) => x.id === p.preset)) return p.preset;
-    // 本地网关已无专属预设（magpie 已删）：命中 ollama / lmstudio 的地址上面就返回了，其余算自定义
-    return 'custom';
-  }
-
-  function presetOptions(cur) {
-    const list = CXAI.PRESETS || [];
-    const known = list.some((p) => p.id === cur);
-    return (
-      (cur && !known ? `<option value="${CXAI.U.escapeHtml(cur)}" selected>${CXAI.U.escapeHtml(cur)}</option>` : '') +
-      list.map((p) => `<option value="${p.id}"${p.id === cur ? ' selected' : ''}>${CXAI.U.escapeHtml(p.label)}</option>`).join('')
-    );
-  }
-
-  function setHint(el, text, bad) {
-    if (!el) return;
-    el.textContent = text || '';
-    el.style.color = bad ? '#ff8f8f' : '';
-  }
-
-  /** 拉取某个 provider 的模型列表，填进该行的 datalist */
-  async function fetchModels(i) {
-    const row = root.querySelector('.pv[data-i="' + i + '"]');
-    if (!row) return;
-    const btn = row.querySelector('[data-fetch]');
-    const hint = row.querySelector('.mhint');
-    const p = readRow(row, i);
-    if (!p.baseURL) return setHint(hint, '先填 Base URL', true);
-    if (!p.apiKey && !p.keyOptional) return setHint(hint, '先填 API Key', true);
-    const label = btn ? btn.textContent : '';
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '…';
-    }
-    setHint(hint, '正在拉取 ' + p.baseURL + ' 的模型列表…');
-    try {
-      const list = await CXAI.AI.listModels(p);
-      row.__models = list;
-      const mEl = row.querySelector('.f-model');
-      if (mEl && !mEl.value.trim() && list.length) mEl.value = list[0].id;
-      refreshVisionSelect();
-      setHint(hint, list.length ? '拉到 ' + list.length + ' 个模型 · 点 ▾ 选择（可输入过滤）' : '接口没返回模型', !list.length);
-      CXAI.Log.info('[模型] ' + (p.label || p.baseURL) + ' → ' + list.length + ' 个可用模型');
-    } catch (err) {
-      setHint(hint, '拉取失败：' + (err && err.message ? err.message : String(err)), true);
-      CXAI.Log.warn('[模型] 拉取失败：' + (err && err.message ? err.message : err));
-    } finally {
-      if (btn) {
-        btn.disabled = false;
-        btn.textContent = label || '拉取';
-      }
-    }
-  }
-
-  /* ---------- 模型选择浮层（原生 datalist 只展示前几项，127 个没法用） ---------- */
-
-  let picker = null;
-
-  function hidePicker() {
-    if (picker && picker.el) picker.el.style.display = 'none';
-  }
-
-  function renderPickerList() {
-    if (!picker) return;
-    const row = root.querySelector('.pv[data-i="' + picker.i + '"]');
-    const all = (row && row.__models) || [];
-    const q = (picker.filter.value || '').trim().toLowerCase();
-    const hit = q ? all.filter((m) => (m.id + ' ' + (m.label || '')).toLowerCase().indexOf(q) >= 0) : all;
-    const cur = row && row.querySelector('.f-model') ? row.querySelector('.f-model').value.trim() : '';
-    picker.list.innerHTML = hit.length
-      ? hit
-          .slice(0, 400)
-          .map(
-            (m) =>
-              `<div class="mi${m.id === cur ? ' on' : ''}" data-id="${CXAI.U.escapeHtml(m.id)}">${CXAI.U.escapeHtml(m.label || m.id)}</div>`
-          )
-          .join('')
-      : '<div class="mi-empty">没有匹配的模型</div>';
-    picker.count.textContent = hit.length + ' / ' + all.length;
-  }
-
-  function ensurePicker() {
-    if (picker) return picker;
-    const el = document.createElement('div');
-    el.id = 'mpop';
-    el.innerHTML =
-      '<div class="mph"><input type="text" class="mpf" placeholder="输入关键词过滤…"><span class="mpc"></span></div><div class="mpl"></div>';
-    root.appendChild(el);
-    picker = { el: el, filter: el.querySelector('.mpf'), list: el.querySelector('.mpl'), count: el.querySelector('.mpc'), i: -1 };
-    el.addEventListener('click', (e) => {
-      const t = e.target;
-      if (!t || !t.classList || !t.classList.contains('mi')) return;
-      const id = t.getAttribute('data-id');
-      const row = root.querySelector('.pv[data-i="' + picker.i + '"]');
-      if (row && id != null) {
-        const mEl = row.querySelector('.f-model');
-        if (mEl) mEl.value = id;
-        setHint(row.querySelector('.mhint'), '已选 ' + id);
-        // 关键：浮层点选后必须重画读图下拉，否则那里还显示上一个模型的名字
-        refreshVisionSelect();
-      }
-      hidePicker();
-    });
-    picker.filter.addEventListener('input', renderPickerList);
-    document.addEventListener(
-      'mousedown',
-      (e) => {
-        if (!picker || picker.el.style.display !== 'block') return;
-        const path = e.composedPath ? e.composedPath() : [];
-        if (path.indexOf(picker.el) >= 0) return;
-        const isPickBtn = path.some((n) => n && n.getAttribute && n.getAttribute('data-pick') != null);
-        if (isPickBtn) return;
-        hidePicker();
-      },
-      true
-    );
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') hidePicker();
-    });
-    return picker;
-  }
-
-  async function openModelPicker(i) {
-    let row = root.querySelector('.pv[data-i="' + i + '"]');
-    if (!row) return;
-    if (!row.__models || !row.__models.length) {
-      await fetchModels(i);
-      row = root.querySelector('.pv[data-i="' + i + '"]');
-    }
-    const list = (row && row.__models) || [];
-    if (!list.length) return;
-    const pk = ensurePicker();
-    pk.i = i;
-    pk.filter.value = '';
-    renderPickerList();
-    const btn = row.querySelector('[data-pick]') || row;
-    const r = btn.getBoundingClientRect();
-    const w = Math.max(260, Math.min(460, (r.width || 200) + 200));
-    pk.el.style.width = w + 'px';
-    pk.el.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
-    const h = 320;
-    pk.el.style.top = (r.bottom + h + 8 > window.innerHeight ? Math.max(8, r.top - h - 6) : r.bottom + 6) + 'px';
-    pk.el.style.display = 'block';
-    pk.el.style.zIndex = '30';
-    pk.filter.focus();
-  }
-
-  /** 事件只绑一次：点「拉取」；改 Key/Base/预设且模型名为空时自动拉一次 */
-  function wireProviderBox(box) {
-    if (box.__wired) return;
-    box.__wired = 1;
-    box.addEventListener('click', (e) => {
-      const t = e.target;
-      if (!t || !t.getAttribute) return;
-      const del = t.getAttribute('data-del');
-      if (del != null) {
-        e.preventDefault();
-        const list = readProviders();
-        const at = Number(del);
-        list.splice(at, 1);
-        renderProviders(list);
-        CXAI.Log.info('已删除模型 ' + (at + 1) + '（保存后生效）');
-        return;
-      }
-      const idx = t.getAttribute('data-fetch');
-      if (idx != null) {
-        e.preventDefault();
-        fetchModels(Number(idx));
-        return;
-      }
-      const pk = t.getAttribute('data-pick');
-      if (pk != null) {
-        e.preventDefault();
-        openModelPicker(Number(pk));
-      }
-    });
-    let syncTimer = 0;
-    const syncSoon = () => {
-      clearTimeout(syncTimer);
-      syncTimer = setTimeout(refreshVisionSelect, 160);
-    };
-    box.addEventListener('input', (e) => {
-      const t = e.target;
-      if (!t || !t.classList) return;
-      if (t.classList.contains('f-model') || t.classList.contains('f-base')) syncSoon();
-    });
-    box.addEventListener('change', (e) => {
-      const t = e.target;
-      if (!t || !t.classList) return;
-      if (
-        !t.classList.contains('f-key') &&
-        !t.classList.contains('f-base') &&
-        !t.classList.contains('f-preset') &&
-        !t.classList.contains('f-model') &&
-        !t.classList.contains('f-enabled')
-      )
-        return;
-      refreshVisionSelect();
-      const row = t.closest ? t.closest('.pv') : null;
-      if (!row) return;
-      const mEl = row.querySelector('.f-model');
-      if (mEl && !mEl.value.trim()) fetchModels(Number(row.getAttribute('data-i')));
-    });
-  }
-
-  /** 把预设值填进某个 provider 行 */
-  function applyPreset(box, id) {
-    const pre = (CXAI.PRESETS || []).filter((p) => p.id === id)[0];
-    if (!pre || !box) return;
-    box.setAttribute('data-preset', id);
-    const setVal = (sel, v) => {
-      const el = box.querySelector(sel);
-      if (el && v != null) el.value = v;
-    };
-    if (pre.baseURL != null) setVal('.f-base', pre.baseURL);
-    if (pre.apiKey != null) setVal('.f-key', pre.apiKey);
-    if (pre.model != null) setVal('.f-model', pre.model);
-    setVal('.f-style', pre.apiStyle || 'openai');
-    const styleBox = box.querySelector('.stylebox');
-    if (styleBox) styleBox.style.display = id === 'custom' ? '' : 'none';
-    const hint = box.querySelector('.mhint');
-    if (hint) setHint(hint, pre.hint || '');
-    box.__models = null;
-  }
-
-  /** 取某个 provider 行的真实名字（模型名优先；绝不用预设名冒充模型名） */
-  function rowName(box, i) {
-    const model = ((box.querySelector('.f-model') || {}).value || '').trim();
-    const presetId = box.querySelector('.f-preset') ? box.querySelector('.f-preset').value : '';
-    const pre = (CXAI.PRESETS || []).filter((x) => x.id === presetId)[0] || null;
-    const base = ((box.querySelector('.f-base') || {}).value || '').trim();
-    let host = '';
-    try {
-      host = base ? new URL(base).host : '';
-    } catch (e) {
-      host = base.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    }
-    return { model: model, presetLabel: pre ? pre.label : '', presetModel: pre ? pre.model || '' : '', base: base, host: host };
-  }
-
-  /**
-   * 读图模型下拉：把所有行列出来，选中谁就让谁读图。
-   * 显示顺序固定为「真实模型名 → 行号 → 主机」，模型名为空时明确写「未填模型名」，
-   * 预设名只作为末尾的次要信息出现 —— 之前把预设名当模型名显示，导致下拉里全是 "DeepSeek"。
-   */
-  function refreshVisionSelect() {
-    const sel = $('#cfg-vmodel');
-    if (!sel) return;
-    const cur = sel.value;
-    const esc = (x) => CXAI.U.escapeHtml(x == null ? '' : String(x));
-    const opts = ['<option value="">不用读图（纯文字题目）</option>'];
-    const ids = [];
-    root.querySelectorAll('.pv').forEach((box, i) => {
-      const r = rowName(box, i);
-      const id = box.getAttribute('data-id') || 'p' + i;
-      ids.push(id);
-      const name = r.model || '（未填模型名）';
-      const tail = [];
-      if (r.host) tail.push(r.host);
-      // 模型名才是唯一可信的东西；只有模型名为空时才拿预设名兜底，避免下拉里塞满厂商名
-      if (r.presetLabel && !r.model) tail.push('预设 ' + r.presetLabel);
-      const enabled = box.querySelector('.f-enabled') ? box.querySelector('.f-enabled').checked : true;
-      if (!enabled) tail.push('已停用');
-      const text = `${name} · 模型 ${i + 1}` + (tail.length ? ' · ' + tail.join(' · ') : '');
-      opts.push(`<option value="${esc(id)}" title="${esc(r.base || '未填 Base URL')}">${esc(text)}</option>`);
-    });
-    sel.innerHTML = opts.join('');
-    // 只有当前值还在列表里才还原，否则退回「不用读图」，避免下拉显示空白/错位
-    sel.value = cur && ids.indexOf(cur) >= 0 ? cur : '';
-    syncVisionHint();
-  }
-
-  function syncVisionHint() {
-    const sel = $('#cfg-vmodel');
-    const hint = $('#vmodel-hint');
-    if (!hint) return;
-    const id = sel ? sel.value : '';
-    const c = $('#cfg-vjudge');
-    const both = !!(c && c.checked);
-    const n = root.querySelectorAll('.pv').length;
-    if (!id) {
-      hint.textContent = both ? '' : '选「不用读图」时，带图的题会当成纯文字去猜';
-      return;
-    }
-    if (both) {
-      hint.textContent =
-        n <= 1
-          ? '就这一个模型：图片先转成文字，再由它自己作答、自己投票 —— 单模型也能跑完整套流程'
-          : '图片先由它转成文字，然后它也会进议会投票（相当于多一票）';
-    } else {
-      hint.textContent =
-        n <= 1
-          ? '它只负责把图转成文字，不投票；现在是唯一的模型，判题会没有模型可用 —— 建议勾上上面那个框'
-          : '题目图片先交给这个模型转成文字，再交给下面的判题模型；它自己不投票';
-    }
-  }
-
-  function openConfig() {
-    const body = $('#cfg-body');
-    if (!body) return;
-    const c = CXAI.Cfg.data || CXAI.Cfg.load();
-    const providers = c.ai.providers || [];
-    const v = c.ai.vision || {};
-    // 老配置或半截配置可能缺段，逐段兜底，避免渲染时抛异常导致面板打不开
-    const D = CXAI.DEFAULT_CONFIG || {};
-    const g = Object.assign({}, D.guard || {}, c.guard || {});
-    const ap = Object.assign({}, D.apply || {}, c.apply || {});
-    const strength =
-      c.ai.judge.mode === 'single' ? 'single' : c.ai.judge.mode === 'fast' ? 'fast' : c.ai.judge.enableArbiter ? 'max' : 'council';
-    body.innerHTML = `
-      <div class="pane show" data-pane="model">
-        <div class="fld">
-          <label>读图模型（题目带图时先由它把图转成文字）</label>
-          <select id="cfg-vmodel"></select>
-          <label class="chk"><input type="checkbox" id="cfg-vjudge"${v.judgeToo ? ' checked' : ''}> 这个模型也参与判题（它读图 + 自己投票；只配 1 个模型时必须勾）</label>
-          <div class="help" id="vmodel-hint"></div>
-        </div>
-        <div class="fld">
-          <div class="pvbar">
-            <span class="t">判题模型（至少一个；可加多个投票）</span>
-            <button class="mini" data-act="pv-all" data-open="1">全部展开</button>
-            <button class="mini" data-act="pv-all" data-open="0">全部收起</button>
-          </div>
-          <div id="cfg-providers"></div>
-          <button class="addrow" data-act="cfg-add" id="cfg-add">+ 添加模型</button>
-        </div>
-        <div class="fld">
-          <label>连通性测试</label>
-          <button class="b" data-act="cfg-test" id="cfg-test2" style="width:100%;margin-top:0">测试连接</button>
-          <div class="testout" id="cfg-testout">点了才会测：逐个 ping 每个模型，结果直接显示在这里</div>
-        </div>
-      </div>
-
-      <div class="pane" data-pane="judge">
-        <div class="fld">
-          <label>判定强度</label>
-          <select id="cfg-strength">
-            <option value="single"${strength === 'single' ? ' selected' : ''}>省 token · 单模型直接作答</option>
-            <option value="fast"${strength === 'fast' ? ' selected' : ''}>快速 · 单模型采样 3 次自一致</option>
-            <option value="council"${strength === 'council' ? ' selected' : ''}>标准 · 多模型议会投票（推荐）</option>
-            <option value="max"${strength === 'max' ? ' selected' : ''}>严格 · 议会 + 交叉复核 + 仲裁</option>
-          </select>
-          <div class="help">答得准就别动它。越往下越慢、越费 token。</div>
-        </div>
-        <div class="row2">
-          <div class="fld"><label>判定模式</label>
-            <select id="cfg-mode">
-              <option value="council"${c.ai.judge.mode === 'council' ? ' selected' : ''}>议会（多模型投票）</option>
-              <option value="fast"${c.ai.judge.mode === 'fast' ? ' selected' : ''}>快速（单模型多次采样）</option>
-              <option value="single"${c.ai.judge.mode === 'single' ? ' selected' : ''}>单模型</option>
-            </select></div>
-          <div class="fld"><label>参与模型数</label><input type="number" id="cfg-panel" min="1" max="6" value="${c.ai.judge.panelSize}"></div>
-        </div>
-        <div class="row2">
-          <div class="fld"><label>一致率阈值</label><input type="number" id="cfg-vote" min="0.3" max="1" step="0.05" value="${c.ai.judge.voteThreshold}"></div>
-          <div class="fld"><label>最低置信度</label><input type="number" id="cfg-minconf" min="0" max="1" step="0.05" value="${c.ai.judge.minConfidence}"></div>
-        </div>
-        <div class="fld"><label>单题并发</label><input type="number" id="cfg-conc" min="1" max="6" value="${c.ai.judge.concurrency}"></div>
-        <div class="fld">
-          <label>复核与仲裁</label>
-          <label class="chk"><input type="checkbox" id="cfg-critique"${c.ai.judge.enableCritique ? ' checked' : ''}> 交叉复核（Round 2）</label>
-          <label class="chk"><input type="checkbox" id="cfg-arbiter"${c.ai.judge.enableArbiter ? ' checked' : ''}> 仲裁（Round 3）</label>
-        </div>
-      </div>
-
-      <div class="pane" data-pane="run">
-        <div class="row2">
-          <div class="fld"><label>题间最短间隔(ms)</label><input type="number" id="cfg-dmin" value="${g.minDelay}"></div>
-          <div class="fld"><label>题间最长间隔(ms)</label><input type="number" id="cfg-dmax" value="${g.maxDelay}"></div>
-        </div>
-        <div class="row2">
-          <div class="fld">
-            <label>弹窗自动关闭(秒)</label>
-            <input type="number" id="cfg-dlg" min="0" max="120" value="${Number(g.dialogDelaySec != null ? g.dialogDelaySec : 10)}">
-            <div class="help">弹窗出现后等这么多秒才自动关；期间你手动关掉就不动它。0 = 永不自动关。</div>
-          </div>
-          <div class="fld">
-            <label>日志保留行数</label>
-            <input type="number" id="cfg-logmax" min="50" max="2000" value="${Number(CXAI.Cfg.get('ui.logMax', 300))}">
-            <div class="help">面板「日志」区的上限，超出从头丢。</div>
-          </div>
-        </div>
-        <div class="fld">
-          <label>落盘行为</label>
-          <label class="chk"><input type="checkbox" id="cfg-guard"${g.enabled ? ' checked' : ''}> 环境伪装（前台保持 + 自动确认弹窗）</label>
-          <label class="chk"><input type="checkbox" id="cfg-force"${ap.overwriteAnswered ? ' checked' : ''}> 重做已答题目</label>
-          <label class="chk"><input type="checkbox" id="cfg-save"${ap.saveEach ? ' checked' : ''}> 每题点保存按钮</label>
-          <label class="chk"><input type="checkbox" id="cfg-submit"${ap.submit === true || ap.autoSubmit === true ? ' checked' : ''}> 全部答完后自动交卷（慎用）</label>
-        </div>
-        <div class="fld">
-          <label>答案预取</label>
-          <button class="b" data-act="prefetch" style="width:100%;margin-top:0">立即预取当前页答案</button>
-          <div class="help">进考试页时已默认在后台预取（每道题先判一遍存起来）。这里只是手动再跑一次，点小球答一题时就不用等模型。</div>
-        </div>
-      </div>
-
-      <div class="pane" data-pane="bak">
-        <div class="fld">
-          <label>配置备份 · 换浏览器 / 换域名时用它搬</label>
-          <div class="row2">
-            <button class="b" data-act="cfg-export" style="margin-top:0">导出到文本框</button>
-            <button class="b" data-act="cfg-import" style="margin-top:0">从文本框导入</button>
-          </div>
-          <textarea id="cfg-io" rows="8" style="height:180px;font-family:ui-monospace,monospace;font-size:11px" placeholder="点「导出到文本框」把当前配置变成 JSON；在另一台电脑 / 另一个域名粘贴进来点「从文本框导入」"></textarea>
-          <div class="help" id="cfg-iohint"></div>
-        </div>
-        <div class="fld">
-          <label>云同步（跨子域 / 跨设备）</label>
-          <input id="cfg-sync-code" class="f-input" placeholder="粘同步码，或点下面「生成」" spellcheck="false" autocomplete="off"
-            value="" style="font-family:ui-monospace,monospace;font-size:11px">
-          <div class="row2" style="margin-top:6px">
-            <button class="b" data-act="cfg-sync-pull" style="margin-top:0">拉取云端配置</button>
-            <button class="b" data-act="cfg-sync-new" style="margin-top:0">生成同步码并上传</button>
-          </div>
-          <div class="help" id="cfg-synchint">超星有多个子域，浏览器存储按域隔离 —— 云同步把配置加密后放 Cloudflare KV，考试页粘一次码之后自动拉。密钥不上传。</div>
-        </div>
-        <div class="fld">
-          <label>存储状态</label>
-          <div class="testout" id="cfg-storeinfo"></div>
-        </div>
-      </div>`;
-    renderProviders(providers);
-    const vsel0 = $('#cfg-vmodel');
-    if (vsel0) {
-      const saved = providers.filter((p) => p.vision && (p.role === 'vision' || p.role === 'both'))[0];
-      // 只配了一个模型时，读书+判题都只能靠它：默认就选它读图、并勾上「也参与判题」
-      const only = providers.length === 1 ? providers[0] : null;
-      const preOne = only ? (CXAI.PRESETS || []).filter((x) => x.id === (only.preset || ''))[0] : null;
-      // 只有一个模型、且它看起来能读图（预设带视觉 / 本地网关 / 已勾视觉）→ 默认让它读图并兼任判题
-      const onlyVision = !!(
-        only &&
-        (only.vision ||
-          only.role === 'vision' ||
-          only.role === 'both' ||
-          (preOne && preOne.vision) ||
-          CXAI.isLocalURL(only.baseURL))
-      );
-      const autoBoth = !!(only && !saved && onlyVision);
-      vsel0.value = v.ocrProviderId || (saved ? saved.id : '') || (autoBoth ? only.id : '') || '';
-      const vj = $('#cfg-vjudge');
-      if (vj) vj.checked = saved ? saved.role === 'both' : autoBoth ? true : !!v.judgeToo;
-      syncVisionHint();
-    }
-    $('#cfg-add').addEventListener('click', () => {
-      const list = readProviders();
-      list.push(
-        CXAI.normalizeProvider(
-          { id: CXAI.U.uid('p'), label: '新模型', baseURL: 'https://api.openai.com/v1', model: 'gpt-4o-mini', weight: 1 },
-          list.length
-        )
-      );
-      renderProviders(list);
-    });
-    // 判定强度：一次改四个高级字段，普通用户只碰这一个下拉
-    const stSel = $('#cfg-strength');
-    if (stSel) {
-      stSel.addEventListener('change', () => {
-        const MAP = {
-          single: { mode: 'single', panel: 1, critique: false, arbiter: false },
-          fast: { mode: 'fast', panel: 1, critique: false, arbiter: false },
-          council: { mode: 'council', panel: 3, critique: true, arbiter: false },
-          max: { mode: 'council', panel: 3, critique: true, arbiter: true }
-        };
-        const cfg = MAP[stSel.value];
-        if (!cfg) return;
-        const setV = (sel, val) => {
-          const el = $(sel);
-          if (el) el.value = String(val);
-        };
-        const setC = (sel, on) => {
-          const el = $(sel);
-          if (el) el.checked = !!on;
-        };
-        setV('#cfg-mode', cfg.mode);
-        setV('#cfg-panel', cfg.panel);
-        setC('#cfg-critique', cfg.critique);
-        setC('#cfg-arbiter', cfg.arbiter);
-      });
-    }
-    const storeInfo = $('#cfg-storeinfo');
-    if (storeInfo) {
-      try {
-        const info = CXAI.Store.info(CXAI.CONFIG_KEY);
-        storeInfo.textContent =
-          '后端：' + info.backend + ' · 范围：' + (info.backend === 'gm' ? '本域（油猴存储按域名隔离）' : '仅本域名') +
-          ' · 体积：' + info.bytes + ' 字节\n' + '站点：' + location.host + '\n版本：' + CXAI.__version;
-      } catch (e) {
-        storeInfo.textContent = '读取失败：' + e.message;
-      }
-    }
-    const ioHint = $('#cfg-iohint');
-    if (ioHint) {
-      const info = CXAI.Store.info(CXAI.CONFIG_KEY);
-      ioHint.textContent =
-        info.backend === 'gm'
-          ? '存储：油猴 GM 存储（按域名隔离，仅本站生效）· ' + info.bytes + ' 字节 —— 跨到考试页请用设置中心「备份 → 同步到学习通」'
-          : '存储：仅本源 localStorage（换域名就看不到这份配置）· ' + info.bytes + ' 字节 —— 用上面的导出/导入搬';
-    }
-    const vmSel = $('#cfg-vmodel');
-    if (vmSel) vmSel.addEventListener('change', syncVisionHint);
-    const vjChk = $('#cfg-vjudge');
-    if (vjChk) vjChk.addEventListener('change', syncVisionHint);
-    // 预设联动（委托，避免重渲染丢监听）
-    const pbox = $('#cfg-providers');
-    if (pbox) {
-      pbox.addEventListener('change', (e) => {
-        const t = e.target;
-        if (t && t.classList && t.classList.contains('f-preset')) {
-          applyPreset(t.closest('.pv'), t.value);
-          refreshVisionSelect();
-        }
-      });
-    }
-    showTab(state.cfgTab || 'model');
-    $('#mask').classList.add('show');
-  }
-
-  /** 切换设置窗页签（左侧竖排导航） */
-  function showTab(name) {
-    if (!root) return;
-    name = name || 'model';
-    state.cfgTab = name;
-    Array.from(root.querySelectorAll('.ntab')).forEach((x) => x.classList.toggle('on', x.getAttribute('data-tab') === name));
-    Array.from(root.querySelectorAll('.pane')).forEach((x) => x.classList.toggle('show', x.getAttribute('data-pane') === name));
-  }
-
-  function renderProviders(list) {
-    const box = $('#cfg-providers');
-    if (!box) return;
-    const esc = (s) => CXAI.U.escapeHtml(s == null ? '' : String(s));
-    box.innerHTML = (list || [])
-      .map((p, i) => {
-        const pid = p.id || 'p' + i;
-        const style = p.apiStyle === 'anthropic' ? 'anthropic' : 'openai';
-        const preset = guessPreset(p);
-        const showStyle = preset === 'custom';
-        return `
-      <div class="pv${p.enabled ? '' : ' off'}" data-i="${i}" data-id="${esc(pid)}" data-preset="${esc(preset)}" data-open="${i === 0 ? '1' : '0'}">
-        <div class="ph" data-act="pv-toggle" data-i="${i}" title="点击展开 / 收起这张卡">
-          <span class="dot"></span>
-          <span class="nm">模型 ${i + 1}</span>
-          <span class="pm">${esc(p.model || '(未填模型名)')}</span>
-          <span class="chipx">${esc(preset)}</span>
-          <label class="chk" data-nohead="1"><input type="checkbox" class="f-enabled"${p.enabled ? ' checked' : ''}>启用</label>
-          <span class="del" data-del="${i}">删除</span>
-        </div>
-        <div class="pbody">
-        <div class="row2">
-          <div class="fld"><label>预设</label><select class="f-preset">${presetOptions(preset)}</select></div>
-          <div class="fld"><label>模型名</label>
-            <div class="withbtn"><input type="text" class="f-model" value="${esc(p.model)}" placeholder="填好 Key 点「拉取」"><button type="button" class="mini" data-fetch="${i}">拉取</button><button type="button" class="mini" data-pick="${i}" title="从拉取到的模型里选">▾</button></div>
-            <div class="hint mhint"></div></div>
-        </div>
-        <div class="row2">
-          <div class="fld"><label>Base URL</label><input type="text" class="f-base" value="${esc(p.baseURL)}" placeholder="https://api.deepseek.com/v1"></div>
-          <div class="fld"><label>API Key</label><input type="password" class="f-key" value="${esc(p.apiKey)}" placeholder="本地网关可留空"></div>
-        </div>
-        <div class="row2 stylebox"${showStyle ? '' : ' style="display:none"'}>
-          <div class="fld"><label>接口协议</label>
-            <select class="f-style">
-              <option value="openai"${style === 'openai' ? ' selected' : ''}>OpenAI 兼容（/chat/completions）</option>
-              <option value="anthropic"${style === 'anthropic' ? ' selected' : ''}>Anthropic 兼容（/v1/messages）</option>
-            </select></div>
-          <div class="fld"><label>说明</label><div class="hint">默认 OpenAI 兼容，Base URL 不用改</div></div>
-        </div>
-        </div>
-      </div>`;
-      })
-      .join('');
-    wireProviderBox(box);
-    refreshVisionSelect();
-  }
-
-  function readRow(box, i) {
-    const q = (sel) => box.querySelector(sel);
-    const v = (sel) => (q(sel) ? q(sel).value : '');
-    const ck = (sel) => !!(q(sel) && q(sel).checked);
-    const presetId = q('.f-preset') ? q('.f-preset').value : box.getAttribute('data-preset') || '';
-    const pre = (CXAI.PRESETS || []).filter((p) => p.id === presetId)[0] || null;
-    const tempRaw = String(v('.f-temp') || '').trim();
-    return CXAI.normalizeProvider(
-      {
-        id: box.getAttribute('data-id') || 'p' + i,
-        preset: presetId,
-        label: v('.f-model').trim() || v('.f-label').trim() || (pre ? pre.label : '') || '模型' + (i + 1),
-        baseURL: v('.f-base').trim(),
-        apiStyle: v('.f-style') || 'openai',
-        role: 'judge',
-        apiKey: v('.f-key').trim(),
-        model: v('.f-model').trim(),
-        weight: Number(v('.f-weight')) || 1,
-        temperature: tempRaw === '' ? 0.2 : Number(tempRaw),
-        maxTokens: Number(v('.f-max')) || 700,
-        enabled: ck('.f-enabled'),
-        vision: false,
-        jsonMode: q('.f-json') ? ck('.f-json') : true,
-        keyOptional: q('.f-keyopt') ? ck('.f-keyopt') : undefined,
-        extraBody: undefined,
-        extraHeaders: undefined
-      },
-      i
-    );
-  }
-
-  function readProviders() {
-    const out = [];
-    root.querySelectorAll('.pv').forEach((box, i) => out.push(readRow(box, i)));
-    const sel = $('#cfg-vmodel');
-    const vid = sel ? sel.value : '';
-    const both = (function () {
-      const c = $('#cfg-vjudge');
-      return !!(c && c.checked);
-    })();
-    out.forEach((p) => {
-      const isVision = !!vid && p.id === vid;
-      if (!isVision) {
-        p.role = 'judge';
-        p.vision = false;
-      } else if (both) {
-        p.role = 'both';
-        p.vision = true;
-      } else {
-        p.role = 'vision';
-        p.vision = true;
-      }
-    });
-    return out;
-  }
-
-  /** 独立设置中心的地址（配置项 ui.settingsURL 可覆盖，方便自建部署 / 本地调试） */
   function settingsURL() {
     try {
       const u = CXAI.Cfg.get('ui.settingsURL', '');
@@ -6060,6 +5367,31 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   }
 
   /** 新标签打开设置中心：同一份 GM 存储，改完回考试页直接生效 */
+  /** 同步码小窗：脚本里不再放设置面板，配置全在网页版设置中心 */
+  function openSync() {
+    const m = $('#syncmask');
+    if (m) m.classList.add('show');
+    const inp = $('#sync-code2');
+    if (inp) {
+      inp.value = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
+      try {
+        inp.focus();
+      } catch (e) {}
+    }
+    const hint = $('#syncmask-hint');
+    if (hint) {
+      const code = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
+      hint.textContent = code
+        ? '当前已存同步码 · 改配置后会自动拉取；点「拉取配置」可手动刷新一次'
+        : '还没有同步码：去设置中心配好模型，点右上角「生成同步码并上传」，把这串码粘进来';
+    }
+  }
+
+  function closeSync() {
+    const m = $('#syncmask');
+    if (m) m.classList.remove('show');
+  }
+
   function openSettingsPage() {
     const url = settingsURL();
     try {
@@ -6070,172 +5402,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     CXAI.Log.info('已打开设置中心：' + url);
   }
 
-  function closeConfig() {
-    const m = $('#mask');
-    if (m) m.classList.remove('show');
-  }
-
-  function saveConfig(opt) {
-    const silent = !!(opt && opt.silent);
-    const val = (id) => $(id);
-    const draft = readProviders();
-    const vsel = val('#cfg-vmodel');
-    const vid = vsel ? vsel.value : '';
-    let judges = draft.filter((p) => p.enabled && p.role !== 'vision');
-    let both = !!(vid && $('#cfg-vjudge') && $('#cfg-vjudge').checked);
-    // 只有一个模型（或独立判题模型全被停用）时，让它兼任判题，别把保存卡死
-    if (!judges.length && vid) {
-      const vp = draft.filter((p) => p.id === vid && p.enabled)[0];
-      if (vp) {
-        vp.role = 'both';
-        vp.vision = true;
-        both = true;
-        if ($('#cfg-vjudge')) $('#cfg-vjudge').checked = true;
-        judges = draft.filter((p) => p.enabled && p.role !== 'vision');
-        CXAI.Log.info('没有独立判题模型：已让读图模型「' + (vp.model || vp.label) + '」兼任判题');
-      }
-    }
-    if (!judges.length) {
-      CXAI.Log.error('没有可用模型：至少启用一个，或把读图模型也勾上「参与判题」');
-      return false;
-    }
-    CXAI.Cfg.set('ai.providers', draft);
-    CXAI.Cfg.set('ai.vision.enabled', !!vid);
-    CXAI.Cfg.set('ai.vision.strategy', vid ? 'ocr' : 'off');
-    CXAI.Cfg.set('ai.vision.ocrProviderId', vid || '');
-    CXAI.Cfg.set('ai.vision.judgeToo', both);
-
-    CXAI.Cfg.set('ai.judge.mode', val('#cfg-mode').value);
-    // 不要向下夹到模型数：夹一次就会永久变小，之后加模型也回不来；真正取面板时 buildPanel 会自己夹
-    CXAI.Cfg.set('ai.judge.panelSize', Math.max(1, Number(val('#cfg-panel').value) || 3));
-    CXAI.Cfg.set('ai.judge.voteThreshold', Number(val('#cfg-vote').value) || 0.7);
-    CXAI.Cfg.set('ai.judge.concurrency', Number(val('#cfg-conc').value) || 3);
-    CXAI.Cfg.set('ai.judge.minConfidence', Number(val('#cfg-minconf').value) || 0.55);
-    CXAI.Cfg.set('ai.judge.enableCritique', val('#cfg-critique').checked);
-    CXAI.Cfg.set('ai.judge.enableArbiter', val('#cfg-arbiter').checked);
-
-    CXAI.Cfg.set('guard.minDelay', Number(val('#cfg-dmin').value) || 1400);
-    CXAI.Cfg.set('guard.maxDelay', Number(val('#cfg-dmax').value) || 4200);
-    CXAI.Cfg.set('guard.enabled', val('#cfg-guard').checked);
-    CXAI.Cfg.set('guard.dialogDelaySec', Math.max(0, Number(val('#cfg-dlg').value) || 0));
-    CXAI.Cfg.set('ui.logMax', Math.max(50, Number(val('#cfg-logmax').value) || 300));
-    CXAI.Cfg.set('apply.overwriteAnswered', val('#cfg-force').checked);
-    CXAI.Cfg.set('apply.saveEach', val('#cfg-save').checked);
-    CXAI.Cfg.set('apply.submit', val('#cfg-submit').checked);
-    // 引擎（08）与 guard（06）实际读的是 apply.autoSubmit，两个字段一起写，避免开关只改一半
-    CXAI.Cfg.set('apply.autoSubmit', val('#cfg-submit').checked);
-    const wrote = CXAI.Cfg.save();
-    if (!silent) {
-      CXAI.Log.ok(
-        '设置已保存 · 判题 ' + judges.length + ' 个' + (vid ? ' / 读图 1 个' + (both ? '（兼任判题）' : '') : '')
-      );
-      if (CXAI.Store.backend === 'local') CXAI.Log.warn('当前没有油猴存储：这份配置只在本网站生效，换域名请用面板底部「导出/导入」搬运');
-    }
-    update({ providers: CXAI.Cfg.activeProviders().length });
-    if (!silent) closeConfig();
-    return wrote !== false;
-  }
-
-  /* ---------- 配置搬运（换浏览器 / 换域名 / 换脚本实例） ---------- */
-
-  function exportConfig() {
-    if (!saveConfig({ silent: true })) return;
-    const txt = $('#cfg-io');
-    if (txt) txt.value = CXAI.Cfg.json();
-    const hint = $('#cfg-iohint');
-    if (hint) hint.textContent = '已导出 ' + (txt ? txt.value.length : 0) + ' 字符。全选复制，粘贴到另一台/另一个域名的同一个框里点「导入」。';
-    CXAI.Log.ok('配置已导出到文本框（' + (txt ? txt.value.length : 0) + ' 字符）');
-  }
-
-  function importConfig() {
-    const txt = $('#cfg-io');
-    const raw = txt ? String(txt.value || '').trim() : '';
-    if (!raw) {
-      CXAI.Log.error('文本框是空的：先把导出的 JSON 粘进来');
-      return;
-    }
-    try {
-      CXAI.Cfg.importJSON(raw);
-    } catch (e) {
-      CXAI.Log.error('导入失败：' + (e && e.message ? e.message : e));
-      return;
-    }
-    CXAI.Log.ok('配置已导入 · 模型 ' + (CXAI.Cfg.get('ai.providers', []) || []).length + ' 个');
-    openConfig();
-  }
-
-  async function testProviders() {
-    const out = $('#cfg-testout');
-    const btn = $('#cfg-test2');
-    const esc = (t) => CXAI.U.escapeHtml(String(t == null ? '' : t));
-    const say = (html) => {
-      if (out) out.innerHTML = html;
-    };
-    const line = (cls, text) => '<div class="' + cls + '">' + esc(text) + '</div>';
-
-    const saved = CXAI.Cfg.get('ai.providers', []);
-    const draft = readProviders();
-    CXAI.Cfg.set('ai.providers', draft);
-    const judge = CXAI.Cfg.activeProviders();
-    const vis = CXAI.Cfg.visionProviders();
-    const all = judge.concat(vis.filter((p) => judge.every((j) => j.id !== p.id)));
-
-    if (!all.length) {
-      CXAI.Cfg.set('ai.providers', saved);
-      const msg = '没有可用模型：检查 Base URL / Key / 模型名是否填全（本地网关记得勾「允许空 Key」）';
-      say(line('bad', msg));
-      CXAI.Log.error(msg);
-      return;
-    }
-
-    if (btn) {
-      btn.disabled = true;
-      btn.textContent = '测试中…';
-    }
-    say(line('mid', '正在测试 ' + all.length + ' 个模型…'));
-    const lines = [];
-    let okN = 0;
-    for (const p of all) {
-      const tag = p.role === 'vision' ? '[读图]' : p.vision ? '[判题+读图]' : '[判题]';
-      const head = tag + (p.label || p.id) + ' · ' + (p.model || '(未填模型)') + ' · ' + (p.baseURL || '');
-      lines.push(line('mid', '… ' + head));
-      say(lines.join(''));
-      try {
-        const t0 = Date.now();
-        const r = await CXAI.AI.ping(p);
-        okN++;
-        lines[lines.length - 1] = line('ok', '✓ ' + head + ' · ' + (r.ms || Date.now() - t0) + 'ms · ' +
-          CXAI.U.truncate(String(r.text || '').replace(/\s+/g, ' '), 40));
-        CXAI.Log.ok(`${p.label || p.id} 连通 (${r.ms}ms) · ${CXAI.U.truncate(r.text, 40)}`);
-      } catch (e) {
-        lines[lines.length - 1] = line('bad', '✗ ' + head + ' · ' + e.message);
-        CXAI.Log.error(`${p.label || p.id} 失败：${e.message}`);
-      }
-      say(lines.join(''));
-    }
-    lines.push(line(okN === all.length ? 'ok' : 'bad', '完成：' + okN + '/' + all.length + ' 连通'));
-    say(lines.join(''));
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = '测试连接';
-    }
-    CXAI.Cfg.save();
-  }
-
-  function showHelp() {
-    const box = $('#logs');
-    if (!box) return;
-    box.innerHTML = `
-      <div class="lg">用法：</div>
-      <div class="lg">1. 点 ⚙ → 模型列表里选「预设」自动填好，或手填任意兼容接口</div>
-      <div class="lg">2. 图片题：在「图片题处理」选策略；要直传就把模型勾上「支持图片输入」</div>
-      <div class="lg">3. 本地网关（Ollama / LM Studio 等）：Base URL 填本机端口，Key 可留空</div>
-      <div class="lg">4. 打开考试页（整卷 / 单题模式均可），点「开始答题」</div>
-      <div class="lg warn">低置信度题目标黄，建议人工复核后再交卷</div>
-      <div class="lg">Ctrl+Shift+X 呼出面板；交卷只在显式开启时自动点</div>`;
-  }
-
-  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, openConfig, closeConfig, getQList, saveQList, settingsURL, openSettingsPage, state };
+  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, getQList, saveQList, settingsURL, openSettingsPage, openSync, closeSync, state };
 })();
 
 /* ==================== 08-main.js ==================== */
@@ -6507,8 +5674,28 @@ CXAI.Engine = (function () {
       );
     }
 
-    if (CXAI.Cfg.get('apply.saveEach', false)) {
-      await CXAI.Apply.saveOne(q);
+    // 落盘策略：整卷预览 / 章节测验里每道填空·简答都有自己的「保存」按钮，
+    // 不点的话内容会在失焦或页面重绘时被清掉，超星还会拦住"继续填下一题"。
+    // 所以这类题在整卷场景下一律自动点保存；其余情况仍按 apply.saveEach 走。
+    const wholePage = (function () {
+      try {
+        return document.querySelectorAll('.questionLi, .TiMu').length > 1;
+      } catch (e) {
+        return false;
+      }
+    })();
+    // 判断依据放宽到"有没有输入框"：填空/简答靠 input/textarea/iframe 承载答案，
+    // 而题型映射在不同皮肤上不一定可靠（有的页面 type 值不同）。整卷里有输入框就落一次盘。
+    const hasInput = !!(q.inputs && q.inputs.some(function (el) {
+      return el && el.isConnected;
+    }));
+    const blankLike =
+      hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
+    if (CXAI.Cfg.get('apply.saveEach', false) || (wholePage && blankLike)) {
+      const saved = await CXAI.Apply.saveOne(q);
+      if (wholePage && blankLike && !saved) {
+        CXAI.Log.warn(`#${no} 是${q.typeLabel || '填空'}题，但没找到该题的「保存」按钮，内容可能会丢`);
+      }
     }
 
     CXAI.UI.addQuestionCard(q, result, applied);
@@ -6992,8 +6179,8 @@ CXAI.Engine = (function () {
     if (st.running) return;
     const providers = CXAI.Cfg.activeProviders();
     if (!providers.length) {
-      CXAI.Log.error('还没有配置模型：点右上角 ⚙ 填入 Base URL / API Key / 模型名');
-      CXAI.UI.openConfig();
+      CXAI.Log.error('还没有配置模型：点面板右上角 ⇅ 粘同步码拉取，或在设置中心（网页版）配好后生成同步码');
+      if (CXAI.UI.openSync) CXAI.UI.openSync();
       return;
     }
 
@@ -7306,7 +6493,7 @@ CXAI.Engine = (function () {
       if (!np) {
         CXAI.Log.warn(
           '本域还没有模型配置（存储后端：' + CXAI.Store.backend + '）。' +
-            '去设置中心配好后点「同步到学习通」，或把配置码粘到面板「备份 → 导入」'
+            '去设置中心配好后点右上角「生成同步码并上传」，再把同步码粘到面板里 ⇅ 拉取一次（之后自动同步）'
         );
         try {
           CXAI.UI.update({ needSetup: true });
@@ -7323,6 +6510,11 @@ CXAI.Engine = (function () {
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
         GM_registerMenuCommand('开始答题', () => CXAI.Engine.start());
+        GM_registerMenuCommand('输入同步码（云同步）', () => {
+          try {
+            CXAI.UI.openSync();
+          } catch (e) {}
+        });
         GM_registerMenuCommand('打开设置中心（配置模型）', () => {
           const url = CXAI.UI && CXAI.UI.settingsURL ? CXAI.UI.settingsURL() : 'https://cx-exam-ai.pages.dev/settings.html';
           try {
