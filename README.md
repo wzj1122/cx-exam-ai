@@ -62,7 +62,7 @@
 | 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | 同上 |
 | OpenAI | `https://api.openai.com/v1` | 同上 |
 | Ollama / LM Studio | `127.0.0.1:11434/v1`、`127.0.0.1:1234/v1` | 同上，Key 可空 |
-| 自定义模型 | 自己填 | 自己填，默认按 OpenAI 兼容接口发请求 |
+| 自定义模型 | 自己填 | 自己填；**默认 OpenAI 协议**（`POST {base}/chat/completions`，`Authorization: Bearer`），要 Anthropic 协议在高级设置里切 |
 
 填好 Base URL 和 Key 后点模型名右侧的「拉取」，脚本会向供应商的 `/models` 要一份清单，再从「▾」浮层里挑。点「测试连接」看到 `连通 (xxx ms)` 即可。
 
@@ -215,6 +215,11 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.8.6（2026-11-17）自定义模型默认走 OpenAI 协议
+
+- 「自定义模型」的默认接口协议明确为 **OpenAI**（`POST {base}/chat/completions`，`Authorization: Bearer`）：预设说明、向导提示、高级设置里的下拉提示都写清楚了；套用预设与向导落库时都显式兜底成 `openai`，不会再残留上一次的 Anthropic/Gemini 选择。
+- 修一个交互死角：在首次向导里点右上角「高级设置」原本没反应（向导优先渲染）——现在会结束引导、标记已完成并直接进高级设置页。
 
 ### v1.8.3（2026-11-17）预设换血：加基元律动、去 magpie/Kimi、模型名一律留空
 

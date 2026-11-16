@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.8.5（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.8.6（`package.json`）
 
 # MAINTENANCE
 
@@ -225,6 +225,18 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.6（2026-11-17）自定义模型默认 OpenAI 协议
+
+- `custom` 预设的 `hint` 写清默认协议：`POST {base}/chat/completions` + `Authorization: Bearer`。
+- `applyPresetTo()` 里协议改为**无条件套用** `pre.apiStyle || 'openai'`，并对 `custom` 再兜底一次 `openai`
+  —— 避免从 Anthropic/Gemini 端点切到自定义模型时把旧协议带过去。
+- `wizardCommitProvider()`：`custom` 一律写 `apiStyle: 'openai'`。
+- 向导 custom 分支与高级设置「接口协议」下拉的说明文字都标注了默认 OpenAI。
+- **BUGFIX（交互死角）**：向导渲染优先级高于设置页，导致在引导里点右上角「高级设置」毫无反应。
+  `toggle-advanced` 现在会先结束引导（`S.wzActive=false` + `ui.onboarded=true`）再重渲染。
+- 验证：`check` 11 模块；`test-dom` 114/0；无头探针 `count=1 / apiStyle=openai / preset=custom / advSel=openai`
+  （高级设置里协议下拉确实停在 OpenAI）。
 
 ### v1.8.5（2026-11-17）引导页可连续添加多个模型
 

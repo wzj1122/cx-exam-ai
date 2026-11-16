@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.8.5
+// @version      1.8.6
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.8.5";
-CXAI.__builtAt = "2026-11-16T16:24:44.277Z";
+CXAI.__version = "1.8.6";
+CXAI.__builtAt = "2026-11-16T16:28:39.100Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -128,7 +128,7 @@ CXAI.PRESETS = [
     model: '',
     apiStyle: 'openai',
     vision: false,
-    hint: '任何 OpenAI 兼容端点都填这里。要 Anthropic 协议就在高级设置的「接口协议」里切。'
+    hint: '任何 OpenAI 兼容端点都填这里。默认按 OpenAI 协议发（POST {base}/chat/completions，Authorization: Bearer）；只吃 Anthropic 协议的，在高级设置里把「接口协议」切过去。'
   }
 ];
 
@@ -7695,7 +7695,7 @@ CXAI.Settings = (function () {
                 .map((st) => '<option value="' + st + '"' + (p.apiStyle === st ? ' selected' : '') + '>' + styleLabel(st) + '</option>')
                 .join('')}
             </select>
-            <div class="hint">绝大多数兼容端点选 OpenAI</div></div>`
+            <div class="hint">默认 <b>OpenAI</b>（{base}/chat/completions）；只有明确吃 Anthropic 协议的端点才需要改</div></div>`
         : `<div class="cs-fld"><label>连通性</label>
             <button class="cs-btn" data-act="test-one" data-i="${i}"${busy} style="margin-top:6px;align-self:flex-start">测试这个模型</button>
             <span class="hint" data-testout="${i}"></span></div>`}
@@ -8175,7 +8175,7 @@ ${wizardSteps(1)}
           ${w.pick === 'custom'
             ? `<div class="cs-fld" style="grid-column:1 / -1"><label>Base URL（必填）</label>
                 <input class="cs-in" data-wz="base" value="${esc(w.base)}" placeholder="https://你的端点/v1">
-                <div class="hint">任何 OpenAI 兼容端点都行；只吃 Anthropic 协议的，走完引导后在高级设置里把「接口协议」切过去。</div></div>`
+                <div class="hint">默认按 <b>OpenAI 协议</b>发请求（<code>POST {base}/chat/completions</code>）；只吃 Anthropic 协议（<code>/v1/messages</code>）的，走完引导后在高级设置里切「接口协议」。</div></div>`
             : ''}
           <div class="cs-fld"><label>API Key${pre.keyOptional ? '（这家可留空）' : ''}</label>
             <input class="cs-in" type="password" data-wz="key" value="${esc(w.key)}" autocomplete="off"
@@ -8312,7 +8312,7 @@ ${wizardSteps(3)}
         preset: pre.id,
         baseURL: base,
         model: model,
-        apiStyle: pre.apiStyle || 'openai',
+        apiStyle: pre.id === 'custom' ? 'openai' : pre.apiStyle || 'openai',
         apiKey: key,
         weight: 1,
         temperature: 0.2,
@@ -8388,7 +8388,7 @@ ${wizardSteps(3)}
         baseURL: base,
         model: String(w.model || pre.model || '').trim() || 'probe',
         apiKey: String(w.key || '').trim(),
-        apiStyle: pre.apiStyle || 'openai',
+        apiStyle: pre.id === 'custom' ? 'openai' : pre.apiStyle || 'openai',
         keyOptional: !!pre.keyOptional || CXAI.isLocalURL(base)
       },
       0
@@ -8673,7 +8673,9 @@ ${wizardSteps(3)}
     p.preset = pre.id;
     if (pre.baseURL) p.baseURL = pre.baseURL;
     if (pre.model) p.model = pre.model;
-    if (pre.apiStyle) p.apiStyle = pre.apiStyle;
+    // 自定义模型默认走 OpenAI 协议（用户之后仍可在高级设置里手动切 Anthropic/Gemini）
+    p.apiStyle = pre.apiStyle || 'openai';
+    if (pre.id === 'custom' && !p.apiStyle) p.apiStyle = 'openai';
     if (pre.label) p.label = pre.label;
     if (pre.keyOptional) p.keyOptional = true;
     p.vision = !!pre.vision || p.vision;
@@ -8910,6 +8912,12 @@ ${wizardSteps(3)}
       case 'toggle-advanced': {
         const on = !advancedOn();
         CXAI.Cfg.set('ui.advanced', on);
+        // 向导里点「高级设置」：结束引导直接进设置页，否则点了会没反应（向导优先渲染）
+        if (S.wzActive) {
+          S.wzActive = false;
+          S.wz = null;
+          CXAI.Cfg.set('ui.onboarded', true);
+        }
         S.tab = 'model';
         renderFrame();
         toast(on ? '已切到高级设置：权重 / 阈值 / 超时 / 运行 / 备份 / 诊断' : '已切回简单设置（专业项隐藏，值仍保留）', 'ok');

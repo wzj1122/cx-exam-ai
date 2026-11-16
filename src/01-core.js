@@ -93,7 +93,7 @@ CXAI.PRESETS = [
     model: '',
     apiStyle: 'openai',
     vision: false,
-    hint: '任何 OpenAI 兼容端点都填这里。要 Anthropic 协议就在高级设置的「接口协议」里切。'
+    hint: '任何 OpenAI 兼容端点都填这里。默认按 OpenAI 协议发（POST {base}/chat/completions，Authorization: Bearer）；只吃 Anthropic 协议的，在高级设置里把「接口协议」切过去。'
   }
 ];
 
