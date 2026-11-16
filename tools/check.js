@@ -47,7 +47,8 @@ const EXPECT = {
   '06-guard.js': ['CXAI.Guard'],
   '07-ui.js': ['CXAI.UI'],
   '08-main.js': ['CXAI.Engine'],
-  '09-settings.js': ['CXAI.Settings']
+  '09-settings.js': ['CXAI.Settings'],
+  '10-sync.js': ['CXAI.Sync']
 };
 
 for (const [f, needles] of Object.entries(EXPECT)) {

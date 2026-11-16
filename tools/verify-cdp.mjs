@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -343,6 +344,165 @@ async function main() {
   })()`);
   ok('A10 配置码可编码/解码（UTF-8 安全）', a10.back && a10.len > 0, a10);
   await shot('A-settings-simple.png');
+
+  /* ==================== C. 云同步（Cloudflare Pages Functions + KV）==================== */
+  console.log('\n[C] 云同步 · 设置页上传 → 考试页（另一 origin）拉取');
+  const API = 'https://cx-exam-ai.pages.dev/api/sync';
+
+  // C1 设置页：进高级 → 备份 → 生成同步码并上传
+  await nav('http://127.0.0.1:' + PORT_A + '/settings.html');
+  await inject();
+  // 备份栏只在高级模式出现：没有就先切高级（不依赖上一段遗留的状态）
+  if (!(await evaluate(`!!document.querySelector('[data-tab="backup"]')`))) {
+    await evaluate(`(() => { const b = document.querySelector('[data-act="toggle-advanced"]'); if (b) b.click(); return true; })()`);
+    await sleep(600);
+  }
+  await evaluate(`(() => { const t = document.querySelector('[data-tab="backup"]'); if (t) t.click(); return !!t; })()`);
+  await sleep(500);
+  const preC1 = await evaluate(`(() => { const r = document.getElementById('cx-ai-settings');
+    return { hasSyncBtn: !!r.querySelector('[data-act="sync-new"]'),
+      tab: (r.querySelector('.cs-nav .it.on') || {}).textContent || '?',
+      providerCount: (window.CXAI.Cfg.get('ai.providers', []) || []).length }; })()`);
+  console.log('    [dbg] 备份页状态 ' + JSON.stringify(preC1));
+  await evaluate(`(() => { const b = document.querySelector('[data-act="sync-new"]'); if (b) { b.click(); return true; } return false; })()`);
+  await sleep(3500);
+  const c1 = await evaluate(`(() => {
+    const el = document.getElementById('cs-synccode');
+    return { code: el ? el.value : '', hint: (document.getElementById('cs-cloudhint') || {}).textContent || '',
+      toast: (document.getElementById('cs-toast') || {}).textContent || '' };
+  })()`);
+  const syncCode = c1.code || '';
+  const codeOk = /^[A-Za-z0-9_-]{6,48}\.[A-Za-z0-9_-]{16,60}$/.test(syncCode);
+  ok('C1 设置页「生成同步码并上传」产出合法同步码', codeOk, { codeHead: syncCode.slice(0, 12), hint: c1.hint });
+
+  // C2 云端确实存了密文
+  const apiId = syncCode.split('.')[0];
+  let cloudBlob = null;
+  try {
+    const r = await fetch(API + '/' + apiId);
+    const j = await r.json();
+    cloudBlob = j.blob || null;
+    ok('C2 KV 里已有密文（客户端加密后上传）', r.ok && !!cloudBlob, { status: r.status, len: (cloudBlob || '').length });
+  } catch (e) {
+    ok('C2 KV 里已有密文（客户端加密后上传）', false, { error: String(e && e.message) });
+  }
+
+  // C3 考试页（另一个 origin，无配置）粘同步码 → 拉取
+  await nav('http://127.0.0.1:' + PORT_B + '/exam.html');
+  await evaluate('localStorage.clear(); sessionStorage.clear(); true');
+  await nav('http://127.0.0.1:' + PORT_B + '/exam.html');
+  await inject();
+  // 先直连 API 层拿一次结果，把「拉取失败」的真实原因打出来（比只看 UI 现象有用）
+  const directPull = await evaluate(
+    `window.CXAI.Sync.pullInto(${JSON.stringify(syncCode)}).then(function(o){return 'OK:'+((o.ai&&o.ai.providers)||[]).length;}).catch(function(e){return 'ERR:'+(e&&e.message);})`
+  );
+  console.log('    [dbg] 直连拉取 ' + directPull);
+  const logs = await evaluate(`window.CXAI.Log.entries.slice(-4).map(function(e){return e.level+':'+e.msg;})`);
+  console.log('    [dbg] 日志 ' + JSON.stringify(logs));
+
+  await ballDoubleClick();
+  await evaluate(`(() => {
+    const sr = document.getElementById('cx-ai-host').shadowRoot;
+    const inp = sr.querySelector('#sync-code');
+    inp.value = ${JSON.stringify(syncCode)};
+    sr.querySelector('[data-act="sync-pull"]').click();
+    return true;
+  })()`);
+  await sleep(3500);
+  const c3 = await evaluate(`(() => {
+    const sr = document.getElementById('cx-ai-host').shadowRoot;
+    return { providers: window.CXAI.Cfg.get('ai.providers', []).length,
+      labels: window.CXAI.Cfg.get('ai.providers', []).map((p) => p.label),
+      setupbar: sr.querySelector('#setupbar').classList.contains('show'),
+      savedCode: window.CXAI.Store.get('syncCode', '') };
+  })()`);
+  ok('C3 考试页粘一次同步码 → 从 KV 拉回配置（2 个模型）且提示条消失',
+    c3.providers === 2 && c3.labels.includes('基元律动') && c3.setupbar === false && c3.savedCode === syncCode, c3);
+  await shot('C-exam-cloud-synced.png');
+
+  // C4 刷新后仍在（同 origin 持久化）
+  await nav('http://127.0.0.1:' + PORT_B + '/exam.html');
+  await inject();
+  const c4 = await evaluate(`window.CXAI.Cfg.get('ai.providers', []).length`);
+  ok('C4 刷新后配置仍在（同 origin 已落库）', c4 === 2, { providers: c4 });
+
+  // C5 模拟「新的子域」：清掉配置、只留同步码 → 打开即自动拉取
+  await evaluate(`(() => { localStorage.removeItem('cxai:cxai.config.v3'); localStorage.removeItem('cxai.config.v3'); return true; })()`);
+  await nav('http://127.0.0.1:' + PORT_B + '/exam.html');
+  await inject();
+  await sleep(2500);
+  const c5 = await evaluate(`(() => {
+    const sr = document.getElementById('cx-ai-host').shadowRoot;
+    return { providers: window.CXAI.Cfg.get('ai.providers', []).length,
+      needsSetup: sr.querySelector('#ball').classList.contains('needs-setup') };
+  })()`);
+  ok('C5 新子域（有同步码、无本地配置）打开即自动拉取、橙点消失',
+    c5.providers === 2 && c5.needsSetup === false, c5);
+
+  // C6 设置页改判定强度 → 自动上传 → 新子域拉到新值
+  await nav('http://127.0.0.1:' + PORT_A + '/settings.html');
+  await inject();
+  await evaluate(`document.querySelector('[data-tab="judge"]').click(); true`);
+  await sleep(350);
+  const c6set = await evaluate(`(() => {
+    const s = document.querySelector('[data-act="strength"]');
+    if (!s) return { err: 'no-strength' };
+    s.value = 'single';
+    s.dispatchEvent(new Event('change', { bubbles: true }));
+    return { mode: window.CXAI.Cfg.get('ai.judge.mode'), syncOn: !!(window.CXAI.Sync && window.CXAI.Sync.enabled()) };
+  })()`);
+  console.log('    [dbg] 设置页改完 ' + JSON.stringify(c6set));
+  await sleep(4000); // 等 1.2s 防抖 + 上传
+  const c6cloud = await evaluate(`window.CXAI.Sync.pull().then(function(o){return (o.ai.judge&&o.ai.judge.mode)||'?';}).catch(function(e){return 'ERR:'+(e&&e.message);})`);
+  console.log('    [dbg] 云端 mode ' + c6cloud);
+  // 注意：清 localStorage 必须在**考试页上下文**里做（在设置页做只会清掉设置域，考试域仍留着旧配置，
+  // 那样 autoPull 会因为"已有配置"直接跳过 —— 这个坑踩过一次，留注释防复发）
+  await nav('http://127.0.0.1:' + PORT_B + '/exam.html');
+  await inject();
+  let c6 = { mode: '', providers: 0 };
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    // 配置同时存在两处：GM 垫片的 'cxai:<key>' 和裸 localStorage '<key>'（Store.set 两边都写）。
+    // 只删一处会残留旧配置 → autoPull 认为"已有配置"直接跳过。这里全清、只留同步码。
+    await evaluate(`(() => {
+      const k1 = 'cxai:cxai.config.v3', k2 = 'cxai.config.v3';
+      const c1 = localStorage.getItem('cxai:syncCode'), c2 = localStorage.getItem('syncCode');
+      localStorage.clear();
+      if (c1) localStorage.setItem('cxai:syncCode', c1);
+      if (c2) localStorage.setItem('syncCode', c2);
+      return { keptCode: !!c1, removedCfg: !localStorage.getItem(k1) && !localStorage.getItem(k2) };
+    })()`);
+    await nav('http://127.0.0.1:' + PORT_B + '/exam.html?c6=' + attempt);
+    await inject();
+    await sleep(2000);
+    c6 = await evaluate(`({ mode: window.CXAI.Cfg.get('ai.judge.mode'), providers: window.CXAI.Cfg.get('ai.providers', []).length })`);
+    if (c6.mode === 'single' && c6.providers === 2) {
+      c6.attempt = attempt;
+      break;
+    }
+    await sleep(3000);
+  }
+  ok('C6 设置页改动自动上传 → 新子域自动拉到新判定模式', c6.mode === 'single' && c6.providers === 2, c6);
+
+  // C7 清理云端测试数据（顺带验证客户端 token 推导与服务端一致）
+  try {
+    const b64urlToBuf = (str) =>
+      Buffer.from(String(str).replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (String(str).length % 4)) % 4), 'base64');
+    const token = crypto
+      .createHmac('sha256', b64urlToBuf(syncCode.split('.')[1]))
+      .update('cx-exam-ai:write:v1')
+      .digest('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    const del = await fetch(API + '/' + apiId, { method: 'DELETE', headers: { 'x-cxai-token': token } });
+    const dj = await del.json();
+    const after = await fetch(API + '/' + apiId);
+    // KV 删除同样是最终一致：立刻 GET 可能还命中旧副本，只断言删除请求被接受
+    ok('C7 客户端 HMAC 令牌被服务端接受 · 云端测试数据已删除', del.ok && dj.ok === true,
+      { delete: del.status, afterImmediate: after.status });
+  } catch (e) {
+    ok('C7 客户端 HMAC 令牌被服务端接受 · 云端测试数据已删除', false, { error: String(e && e.message) });
+  }
 
   /* ==================== B. 考试页（另一个 origin）==================== */
   console.log('\n[B] 考试页 · http://127.0.0.1:' + PORT_B + '/exam.html（不同 origin，存储隔离）');

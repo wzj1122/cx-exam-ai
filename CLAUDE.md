@@ -7,7 +7,7 @@
 | 文件 / 目录 | 用途 | 能否修改/删除 |
 | :--- | :--- | :--- |
 | `src/00-header.js` | UserScript 元数据（`@version` / `@match` / `@grant` / `@updateURL`） | 可修改（版本升级时同步），不可删除 |
-| `src/01-core.js` ~ `src/08-main.js` | 按编号顺序拼接的源码模块 | 可修改，不可删除 |
+| `src/01-core.js` ~ `src/10-sync.js` | 按编号顺序拼接的源码模块（`10-sync.js` 是云同步） | 可修改，不可删除 |
 | `build.js` | 零依赖打包器 | 可修改，不可删除 |
 | `dist/cx-exam-ai.user.js` | 构建产物，唯一交付物 | **只由 `node build.js` 生成，不手改** |
 | `package.json` | 版本号、scripts、仓库元信息 | 可修改（版本号必须与 `00-header.js` 一致） |
@@ -15,6 +15,7 @@
 | `MAINTENANCE.md` | 维护手册（文件用途清单 / 数据流 / 变更记录） | 可修改，不可删除 |
 | `index.html` | Cloudflare Pages 落地页与一键安装入口 | 可修改，不可删除 |
 | `images/alipay.png` `images/wechat_pay.png` | 收款码 | 不可修改/删除 |
+| `functions/api/sync/[id].js` | Pages Function：配置云同步接口（KV `CFG_KV`），只存密文 + 写令牌 | 可修改，不可删除 |
 | `wrangler.jsonc` | Cloudflare Pages 部署配置（`pages_build_output_dir: "./.site"`，**不可指向 "./"**） | 可修改（改部署方式时），不可删除 |
 | `LICENSE` | MIT 许可证 | 不可修改/删除 |
 | `tools/*.js` | 自检、离线测试、CDP 调试工具 | 可修改，不可删除 |

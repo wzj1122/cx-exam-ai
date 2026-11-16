@@ -1070,6 +1070,14 @@ CXAI.Engine = (function () {
         try {
           CXAI.UI.update({ needSetup: true });
         } catch (e) {}
+        // 存过同步码就直接从云端静默拉一次（跨子域唯一可靠的通道）
+        try {
+          CXAI.Sync.autoPull().then(function (got) {
+            if (!got) return;
+            CXAI.UI.update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+            CXAI.Log.ok('云同步完成 · 直接点「答一题」就行');
+          });
+        } catch (e) {}
       }
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));

@@ -265,7 +265,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div><b id="s-model">0</b><span>模型</span></div>
     </div>
     <div class="setupbar" id="setupbar">
-      <span>本域还没有模型配置。去设置中心配好，回这里点「答一题」就行。</span>
+      <span>本域还没有模型配置：粘同步码拉取，或去设置中心配</span>
+      <input id="sync-code" placeholder="同步码 abc123.xyz…" spellcheck="false" autocomplete="off">
+      <button class="b" data-act="sync-pull">拉取</button>
       <button class="b" data-act="open-settings">设置中心</button>
     </div>
     <div class="bar">
@@ -383,6 +385,53 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         case 'open-settings':
           openSettingsPage();
           break;
+        case 'sync-pull': {
+          const inp = $('#sync-code');
+          const code = inp ? String(inp.value || '').trim() : '';
+          if (!code) {
+            toast('先粘同步码');
+            break;
+          }
+          CXAI.Sync.pullInto(code)
+            .then(function (obj) {
+              const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+              update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+              toast('已同步 ' + n + ' 个模型');
+              CXAI.Log.ok('云同步完成 · 模型 ' + n + ' 个');
+            })
+            .catch(function (e) {
+              toast('拉取失败');
+              CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
+            });
+          break;
+        }
+        case 'cfg-sync-pull': {
+          const inp = $('#cfg-sync-code');
+          const code = inp ? String(inp.value || '').trim() : '';
+          CXAI.Sync.pullInto(code || CXAI.Sync.savedCode())
+            .then(function (obj) {
+              const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+              CXAI.Log.ok('已从云端同步 · 模型 ' + n + ' 个');
+              update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+              openConfig();
+            })
+            .catch(function (e) {
+              CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
+            });
+          break;
+        }
+        case 'cfg-sync-new': {
+          CXAI.Sync.newCode()
+            .then(function (code) {
+              const inp = $('#cfg-sync-code');
+              if (inp) inp.value = code;
+              CXAI.Log.ok('云同步已开启 · 把同步码抄到别的设备：' + code);
+            })
+            .catch(function (e) {
+              CXAI.Log.error('生成同步码失败：' + (e && e.message ? e.message : e));
+            });
+          break;
+        }
         case 'run':
           CXAI.Engine.start();
           break;
@@ -1363,6 +1412,16 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           </div>
           <textarea id="cfg-io" rows="8" style="height:180px;font-family:ui-monospace,monospace;font-size:11px" placeholder="点「导出到文本框」把当前配置变成 JSON；在另一台电脑 / 另一个域名粘贴进来点「从文本框导入」"></textarea>
           <div class="help" id="cfg-iohint"></div>
+        </div>
+        <div class="fld">
+          <label>云同步（跨子域 / 跨设备）</label>
+          <input id="cfg-sync-code" class="f-input" placeholder="粘同步码，或点下面「生成」" spellcheck="false" autocomplete="off"
+            value="" style="font-family:ui-monospace,monospace;font-size:11px">
+          <div class="row2" style="margin-top:6px">
+            <button class="b" data-act="cfg-sync-pull" style="margin-top:0">拉取云端配置</button>
+            <button class="b" data-act="cfg-sync-new" style="margin-top:0">生成同步码并上传</button>
+          </div>
+          <div class="help" id="cfg-synchint">超星有多个子域，浏览器存储按域隔离 —— 云同步把配置加密后放 Cloudflare KV，考试页粘一次码之后自动拉。密钥不上传。</div>
         </div>
         <div class="fld">
           <label>存储状态</label>

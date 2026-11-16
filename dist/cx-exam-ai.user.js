@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.8.7
+// @version      1.9.0
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.8.7";
-CXAI.__builtAt = "2026-11-16T16:58:30.402Z";
+CXAI.__version = "1.9.0";
+CXAI.__builtAt = "2026-11-16T18:15:17.751Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -4679,7 +4679,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div><b id="s-model">0</b><span>模型</span></div>
     </div>
     <div class="setupbar" id="setupbar">
-      <span>本域还没有模型配置。去设置中心配好，回这里点「答一题」就行。</span>
+      <span>本域还没有模型配置：粘同步码拉取，或去设置中心配</span>
+      <input id="sync-code" placeholder="同步码 abc123.xyz…" spellcheck="false" autocomplete="off">
+      <button class="b" data-act="sync-pull">拉取</button>
       <button class="b" data-act="open-settings">设置中心</button>
     </div>
     <div class="bar">
@@ -4797,6 +4799,53 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         case 'open-settings':
           openSettingsPage();
           break;
+        case 'sync-pull': {
+          const inp = $('#sync-code');
+          const code = inp ? String(inp.value || '').trim() : '';
+          if (!code) {
+            toast('先粘同步码');
+            break;
+          }
+          CXAI.Sync.pullInto(code)
+            .then(function (obj) {
+              const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+              update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+              toast('已同步 ' + n + ' 个模型');
+              CXAI.Log.ok('云同步完成 · 模型 ' + n + ' 个');
+            })
+            .catch(function (e) {
+              toast('拉取失败');
+              CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
+            });
+          break;
+        }
+        case 'cfg-sync-pull': {
+          const inp = $('#cfg-sync-code');
+          const code = inp ? String(inp.value || '').trim() : '';
+          CXAI.Sync.pullInto(code || CXAI.Sync.savedCode())
+            .then(function (obj) {
+              const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+              CXAI.Log.ok('已从云端同步 · 模型 ' + n + ' 个');
+              update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+              openConfig();
+            })
+            .catch(function (e) {
+              CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
+            });
+          break;
+        }
+        case 'cfg-sync-new': {
+          CXAI.Sync.newCode()
+            .then(function (code) {
+              const inp = $('#cfg-sync-code');
+              if (inp) inp.value = code;
+              CXAI.Log.ok('云同步已开启 · 把同步码抄到别的设备：' + code);
+            })
+            .catch(function (e) {
+              CXAI.Log.error('生成同步码失败：' + (e && e.message ? e.message : e));
+            });
+          break;
+        }
         case 'run':
           CXAI.Engine.start();
           break;
@@ -5777,6 +5826,16 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           </div>
           <textarea id="cfg-io" rows="8" style="height:180px;font-family:ui-monospace,monospace;font-size:11px" placeholder="点「导出到文本框」把当前配置变成 JSON；在另一台电脑 / 另一个域名粘贴进来点「从文本框导入」"></textarea>
           <div class="help" id="cfg-iohint"></div>
+        </div>
+        <div class="fld">
+          <label>云同步（跨子域 / 跨设备）</label>
+          <input id="cfg-sync-code" class="f-input" placeholder="粘同步码，或点下面「生成」" spellcheck="false" autocomplete="off"
+            value="" style="font-family:ui-monospace,monospace;font-size:11px">
+          <div class="row2" style="margin-top:6px">
+            <button class="b" data-act="cfg-sync-pull" style="margin-top:0">拉取云端配置</button>
+            <button class="b" data-act="cfg-sync-new" style="margin-top:0">生成同步码并上传</button>
+          </div>
+          <div class="help" id="cfg-synchint">超星有多个子域，浏览器存储按域隔离 —— 云同步把配置加密后放 Cloudflare KV，考试页粘一次码之后自动拉。密钥不上传。</div>
         </div>
         <div class="fld">
           <label>存储状态</label>
@@ -7252,6 +7311,14 @@ CXAI.Engine = (function () {
         try {
           CXAI.UI.update({ needSetup: true });
         } catch (e) {}
+        // 存过同步码就直接从云端静默拉一次（跨子域唯一可靠的通道）
+        try {
+          CXAI.Sync.autoPull().then(function (got) {
+            if (!got) return;
+            CXAI.UI.update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+            CXAI.Log.ok('云同步完成 · 直接点「答一题」就行');
+          });
+        } catch (e) {}
       }
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
@@ -7359,6 +7426,22 @@ CXAI.Settings = (function () {
     const ok = CXAI.Cfg.save();
     if (msg !== false) toast(ok === false ? '保存失败：存储被禁用或空间不足' : msg || '已保存', ok === false ? 'bad' : 'ok');
     refreshMeta();
+    // 云同步开着：改动 1.2 秒后自动推一份（连续拖滑杆不会打十几条请求）
+    try {
+      if (CXAI.Sync && CXAI.Sync.enabled && CXAI.Sync.enabled()) {
+        clearTimeout(S.syncTimer);
+        S.syncTimer = setTimeout(function () {
+          CXAI.Sync.syncNow({ silent: true })
+            .then(function () {
+              const hint = q('#cs-cloudhint');
+              if (hint) hint.textContent = '已自动上传 · ' + new Date().toLocaleTimeString();
+            })
+            .catch(function (e) {
+              CXAI.Log.warn('云同步失败：' + (e && e.message ? e.message : e));
+            });
+        }, 1200);
+      }
+    } catch (e) {}
     return ok;
   }
 
@@ -8101,6 +8184,74 @@ CXAI.Settings = (function () {
 
   /* ---------------- 备份面板 ---------------- */
 
+  /** 备份页里的云同步状态块 */
+  function cloudSyncHtml() {
+    const code = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
+    if (!code) {
+      return `
+      <div class="cs-row" style="margin-top:10px;flex-wrap:wrap">
+        <button class="cs-btn pri" data-act="sync-new">生成同步码并上传</button>
+        <span class="hint" id="cs-cloudhint">生成后抄到考试页面板里，粘一次就够</span>
+      </div>`;
+    }
+    return `
+    <div class="cs-grid" style="margin-top:10px">
+      <div class="cs-fld"><label>同步码（在考试页面板里粘一次）</label>
+        <div class="cs-row">
+          <input class="cs-in" id="cs-synccode" readonly value="${esc(code)}" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px">
+          <button class="cs-btn mini" data-act="sync-copy">复制</button>
+        </div>
+        <div class="hint">这串同时是解密密钥 —— 别公开贴出来，别人拿到就能解开你的配置</div></div>
+    </div>
+    <div class="cs-row" style="margin-top:10px;flex-wrap:wrap">
+      <button class="cs-btn pri" data-act="sync-now">立即上传当前配置</button>
+      <button class="cs-btn" data-act="sync-pull">从云端拉回（校验）</button>
+      <button class="cs-btn" data-act="sync-off">停用云同步</button>
+      <span class="hint" id="cs-cloudhint">改动会自动上传</span>
+    </div>`;
+  }
+
+  async function syncNew() {
+    try {
+      const code = await CXAI.Sync.newCode();
+      renderMain();
+      const hint = q('#cs-cloudhint');
+      if (hint) hint.textContent = '已上传 · ' + code.slice(0, 8) + '…';
+      toast('云同步已开启 · 把同步码抄到考试页', 'ok');
+    } catch (e) {
+      toast('生成失败：' + (e && e.message ? e.message : e), 'bad');
+    }
+  }
+
+  async function syncNowClick() {
+    const btn = q('[data-act="sync-now"]');
+    if (btn) btn.disabled = true;
+    try {
+      const r = await CXAI.Sync.syncNow();
+      toast('已上传 · ' + r.bytes + ' 字符', 'ok');
+    } catch (e) {
+      toast('上传失败：' + (e && e.message ? e.message : e), 'bad');
+    }
+    if (btn) btn.disabled = false;
+  }
+
+  async function syncPullClick() {
+    try {
+      const obj = await CXAI.Sync.pull();
+      const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+      toast('云端配置可解密 · 模型 ' + n + ' 个', 'ok');
+    } catch (e) {
+      toast('拉取失败：' + (e && e.message ? e.message : e), 'bad');
+    }
+  }
+
+  function syncOffClick() {
+    if (!confirm('停用云同步？本机会忘掉同步码，云端密文不会删。')) return;
+    CXAI.Sync.disable();
+    renderMain();
+    toast('已停用云同步', 'ok');
+  }
+
   function paneBackup() {
     const info = storeInfo();
     return `
@@ -8108,10 +8259,16 @@ CXAI.Settings = (function () {
   <h2>备份 <span class="tag">换浏览器 / 换域名时搬配置</span></h2>
   <p class="desc">配置里只有模型地址和参数，不含任何账号信息。导出的 JSON 可以直接贴进考试页面板的「设置 → 备份」，也可以用来在另一台电脑上恢复。</p>
   <div class="cs-note" style="margin-bottom:14px">
-    <b>油猴存储按域名隔离</b>：这里存的是本页站点（<code>cx-exam-ai.pages.dev</code>）的配置，考试页（chaoxing.com）读不到同一份。
-    点下面按钮会打开学习通并带上配置码，脚本会在那一侧自动落库 —— 之后所有考试页都能用。
+    <b>云同步（推荐 · 跨子域 / 跨设备）</b>：超星把考试页分散在 i. / mooc2-ans. / passport2. 等多个子域，
+    浏览器存储按域隔离，纯前端传不过去。云同步把配置<b>在本地加密后</b>存到 Cloudflare KV（密钥不上传），
+    考试页只要填一次同步码，之后每次打开自动拉取。
+    ${cloudSyncHtml()}
+  </div>
+  <div class="cs-note" style="margin-bottom:14px">
+    <b>备用：离线搬运（只对同一个子域有效）</b>：把配置编码进链接打开学习通，脚本在那一侧落库。
+    但它只能落到打开的那个子域，考试页在别的子域时仍读不到 —— 有云同步就别用它。
     <div class="cs-row" style="margin-top:10px;flex-wrap:wrap">
-      <button class="cs-btn pri" data-act="sync-chaoxing">同步到学习通 →</button>
+      <button class="cs-btn" data-act="sync-chaoxing">同步到学习通 →</button>
       <button class="cs-btn" data-act="copy-code">复制配置码</button>
       <span class="hint" id="cs-synchint"></span>
     </div>
@@ -9180,6 +9337,21 @@ ${wizardSteps(3)}
       case 'sync-chaoxing':
         syncToChaoxing();
         break;
+      case 'sync-new':
+        syncNew();
+        break;
+      case 'sync-now':
+        syncNowClick();
+        break;
+      case 'sync-pull':
+        syncPullClick();
+        break;
+      case 'sync-off':
+        syncOffClick();
+        break;
+      case 'sync-copy':
+        copyText(CXAI.Sync.savedCode(), '同步码已复制');
+        break;
       case 'copy-code':
         copyConfigCode();
         break;
@@ -9423,5 +9595,275 @@ ${wizardSteps(3)}
   }
 
   return { isHere, mount, unmount, collectDiag };
+})();
+
+/* ==================== 10-sync.js ==================== */
+/* ---------------- 配置云同步（跨子域 / 跨设备） ----------------
+ * 背景：超星把考试页分散在 i. / mooc1 / mooc2-ans / passport2 等多个子域，
+ * 而且未登录时会 302 到登录域。浏览器存储（localStorage、油猴 GM 存储）**按 origin 隔离**，
+ * 所以"设置页配好 → 考试页读到"在纯前端方案里根本不可能成立。
+ *
+ * 这里走服务端中转（Cloudflare Pages Functions + KV，见 functions/api/sync/[id].js）：
+ *   - 配置在浏览器内用随机 128-bit key 做 AES-GCM 加密后才上传，**key 从不上传**（零知识）；
+ *   - 服务端只存密文 + HMAC 写权限令牌，因此 KV 泄露也解不开配置；
+ *   - 同步码 = "<id>.<key>"，一串 33 个字符，考试页粘贴一次即记住，之后每次打开自动拉取。
+ *
+ * 对外的五个动作：newCode / syncNow / pull / autoPull / enabled。
+ */
+
+CXAI.Sync = (function () {
+  const DEFAULT_API = 'https://cx-exam-ai.pages.dev/api/sync';
+  const CODE_STORE_KEY = 'syncCode'; // 单独存，不混进配置 JSON
+  const TOKEN_MSG = 'cx-exam-ai:write:v1';
+
+  /* ---------------- 编码 ---------------- */
+
+  function bytesToB64url(bytes) {
+    let s = '';
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function b64urlToBytes(str) {
+    const s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+    const pad = s.length % 4 ? '===='.slice(0, 4 - (s.length % 4)) : '';
+    const raw = atob(s + pad);
+    const out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  function utf8Bytes(text) {
+    return new TextEncoder().encode(String(text));
+  }
+
+  function utf8Text(bytes) {
+    return new TextDecoder().decode(bytes);
+  }
+
+  function rand(n) {
+    const out = new Uint8Array(n);
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(out);
+    else for (let i = 0; i < n; i++) out[i] = Math.floor(Math.random() * 256);
+    return out;
+  }
+
+  /* ---------------- WebCrypto ---------------- */
+
+  function subtle() {
+    const c = typeof crypto !== 'undefined' ? crypto : null;
+    if (!c || !c.subtle) throw new Error('当前页面拿不到 crypto.subtle（需要 https 或 localhost）');
+    return c.subtle;
+  }
+
+  async function aesKey(raw, usage) {
+    return subtle().importKey('raw', raw, { name: 'AES-GCM' }, false, [usage]);
+  }
+
+  async function hmacToken(raw) {
+    const k = await subtle().importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const sig = await subtle().sign('HMAC', k, utf8Bytes(TOKEN_MSG));
+    return bytesToB64url(new Uint8Array(sig));
+  }
+
+  async function encrypt(rawKey, text) {
+    const iv = rand(12);
+    const ct = await subtle().encrypt({ name: 'AES-GCM', iv }, await aesKey(rawKey, 'encrypt'), utf8Bytes(text));
+    const all = new Uint8Array(iv.length + ct.byteLength);
+    all.set(iv, 0);
+    all.set(new Uint8Array(ct), iv.length);
+    return bytesToB64url(all);
+  }
+
+  async function decrypt(rawKey, blob) {
+    const all = b64urlToBytes(blob);
+    if (all.length < 13) throw new Error('密文长度异常');
+    const iv = all.subarray(0, 12);
+    const ct = all.subarray(12);
+    const pt = await subtle().decrypt({ name: 'AES-GCM', iv }, await aesKey(rawKey, 'decrypt'), ct);
+    return utf8Text(new Uint8Array(pt));
+  }
+
+  /* ---------------- 同步码 ---------------- */
+
+  function apiBase() {
+    try {
+      const u = CXAI.Cfg.get('ui.syncAPI', '');
+      if (u) return String(u).replace(/\/+$/, '');
+    } catch (e) {}
+    return DEFAULT_API;
+  }
+
+  function savedCode() {
+    try {
+      return String(CXAI.Store.get(CODE_STORE_KEY, '') || '');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function setCode(code) {
+    const v = String(code || '').trim();
+    try {
+      if (v) CXAI.Store.set(CODE_STORE_KEY, v);
+      else CXAI.Store.remove(CODE_STORE_KEY);
+    } catch (e) {}
+    return v;
+  }
+
+  function parseCode(code) {
+    const m = /^([A-Za-z0-9_-]{6,48})\.([A-Za-z0-9_-]{16,60})$/.exec(String(code || '').trim());
+    if (!m) throw new Error('同步码格式不对（应该形如 abc12345.xyz…，中间有个点）');
+    return { id: m[1], keyRaw: b64urlToBytes(m[2]) };
+  }
+
+  /** 生成一条全新的同步码（id + 16 字节随机密钥） */
+  function makeCode() {
+    const id = bytesToB64url(rand(8));
+    const keyRaw = rand(16);
+    return { id: id, keyRaw: keyRaw, code: id + '.' + bytesToB64url(keyRaw) };
+  }
+
+  /* ---------------- 网络 ---------------- */
+
+  function request(method, url, headers, body, timeoutMs) {
+    // anonymous: 配置同步不需要任何 cookie（跨域 + ACAO:* 时必须是 anonymous，否则被浏览器拦）
+    // 注意：GET/HEAD 绝不能带 data —— 传空字符串也会被 fetch 判成 "GET cannot have body"
+    const opts = { method: method, url: url, headers: headers || {}, timeout: timeoutMs || 15000, anonymous: true };
+    if (body != null && String(method).toUpperCase() !== 'GET' && String(method).toUpperCase() !== 'HEAD') opts.data = body;
+    const viaGm = typeof GM_xmlhttpRequest === 'function';
+    return new Promise(function (resolve, reject) {
+      const onOk = (res) => {
+        let data = res.response !== undefined ? res.response : res.responseText;
+        if (typeof data === 'string') {
+          try {
+            data = JSON.parse(data);
+          } catch (e) {}
+        }
+        if ((res.status || 0) >= 200 && res.status < 300) resolve(data || {});
+        else reject(new Error('HTTP ' + res.status + ' ' + ((data && (data.error || data.message)) || '')));
+      };
+      const onErr = (e) => reject(new Error((e && (e.error || e.message)) || '网络错误'));
+      if (viaGm) {
+        try {
+          GM_xmlhttpRequest({ ...opts, onload: onOk, onerror: onErr, ontimeout: () => reject(new Error('请求超时')) });
+        } catch (e) {
+          reject(e);
+        }
+        return;
+      }
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), opts.timeout);
+      fetch(url, { method: method, headers: headers || {}, body: body == null ? undefined : body, signal: ctrl.signal })
+        .then((r) =>
+          r.text().then((t) => {
+            let d = t;
+            try {
+              d = JSON.parse(t);
+            } catch (e) {}
+            if (r.ok) resolve(d || {});
+            else reject(new Error('HTTP ' + r.status + ' ' + ((d && (d.error || d.message)) || '')));
+          })
+        )
+        .catch((e) => reject(new Error(e && e.message ? e.message : '网络错误')))
+        .finally(() => clearTimeout(timer));
+    });
+  }
+
+  /* ---------------- 五个动作 ---------------- */
+
+  /** 是否已启用云同步（存过同步码） */
+  function enabled() {
+    return !!savedCode();
+  }
+
+  /** 上传当前配置（覆盖同一 id）；首次调用即绑定写权限 */
+  async function push(code, obj) {
+    const parsed = parseCode(code);
+    const blob = await encrypt(parsed.keyRaw, JSON.stringify(obj || CXAI.Cfg.data || CXAI.Cfg.load()));
+    const token = await hmacToken(parsed.keyRaw);
+    const base = apiBase();
+    const res = await request(
+      'PUT',
+      base + '/' + encodeURIComponent(parsed.id),
+      { 'Content-Type': 'application/json', 'x-cxai-token': token },
+      JSON.stringify({ blob: blob })
+    );
+    return { ok: true, at: (res && res.at) || Date.now(), bytes: blob.length };
+  }
+
+  /** 生成并立即上传，返回同步码 */
+  async function newCode() {
+    const made = makeCode();
+    const r = await push(made.code, CXAI.Cfg.data || CXAI.Cfg.load());
+    setCode(made.code);
+    try {
+      CXAI.Cfg.set('ui.syncEnabled', true);
+    } catch (e) {}
+    CXAI.Log.ok('云同步已开启 · 密文 ' + r.bytes + ' 字符 · 同步码 ' + made.code.slice(0, 8) + '…');
+    return made.code;
+  }
+
+  /** 用已保存的同步码上传当前配置 */
+  async function syncNow(opt) {
+    const code = savedCode();
+    if (!code) throw new Error('还没开启云同步（先生成同步码）');
+    const r = await push(code, CXAI.Cfg.data || CXAI.Cfg.load());
+    if (!(opt && opt.silent)) CXAI.Log.ok('配置已同步到云端 · ' + r.bytes + ' 字符');
+    return r;
+  }
+
+  /** 用同步码拉取并解密（不改本地配置） */
+  async function pull(code) {
+    const parsed = parseCode(code || savedCode());
+    const base = apiBase();
+    const res = await request('GET', base + '/' + encodeURIComponent(parsed.id), {}, null);
+    if (!res || !res.blob) throw new Error('云端没有这份配置（同步码不对，或已过期）');
+    const text = await decrypt(parsed.keyRaw, res.blob);
+    let obj = null;
+    try {
+      obj = JSON.parse(text);
+    } catch (e) {
+      throw new Error('解密后的配置不是合法 JSON');
+    }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('解密结果不是一个配置对象');
+    return obj;
+  }
+
+  /** 拉取并写入本地（考试页自动同步走这里）；返回是否成功写入 */
+  async function pullInto(code) {
+    const obj = await pull(code);
+    CXAI.Cfg.importJSON(obj);
+    if (code) setCode(code);
+    return obj;
+  }
+
+  /**
+   * 自动同步：已存同步码且本地没有模型配置时，静默拉一次。
+   * 有本地配置时不覆盖 —— 免得用户在设置中心改了一半被云端旧配置顶回去。
+   */
+  async function autoPull() {
+    if (!enabled()) return false;
+    if ((CXAI.Cfg.get('ai.providers', []) || []).length) return false;
+    try {
+      const obj = await pullInto(savedCode());
+      const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+      CXAI.Log.ok('已从云端同步配置 · 模型 ' + n + ' 个');
+      return true;
+    } catch (e) {
+      CXAI.Log.warn('云端同步失败：' + (e && e.message ? e.message : e));
+      return false;
+    }
+  }
+
+  /** 停用云同步（本地忘记同步码；云端密文不动） */
+  function disable() {
+    setCode('');
+    try {
+      CXAI.Cfg.set('ui.syncEnabled', false);
+    } catch (e) {}
+  }
+
+  return { enabled, savedCode, setCode, disable, makeCode, newCode, syncNow, push, pull, pullInto, autoPull, apiBase };
 })();
 })();

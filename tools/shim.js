@@ -59,7 +59,8 @@ if (!window.__CXAI_SHIM__) {
     // 浏览器禁止脚本设置 Referer/Origin 等受限头，静默丢弃避免请求直接失败
     var BANNED = { referer: 1, origin: 1, 'user-agent': 1, host: 1, cookie: 1 };
     for (var k in h) if (Object.prototype.hasOwnProperty.call(h, k) && !BANNED[k.toLowerCase()]) headers[k] = h[k];
-    fetch(o.url, { method: o.method || 'GET', headers: headers, body: o.data, credentials: 'include', signal: ctrl.signal })
+    // GM 规范里有 anonymous 选项：为真时不带 cookie（跨域 + ACAO:* 的场景必须这样）
+    fetch(o.url, { method: o.method || 'GET', headers: headers, body: (String(o.method || 'GET').toUpperCase() === 'GET' ? undefined : o.data), credentials: o.anonymous ? 'omit' : 'include', signal: ctrl.signal })
       .then(function (r) {
         if (o.responseType === 'blob') return r.blob().then(function (b) { return { r: r, body: b, txt: '' }; });
         if (o.responseType === 'arraybuffer') return r.arrayBuffer().then(function (b) { return { r: r, body: b, txt: '' }; });

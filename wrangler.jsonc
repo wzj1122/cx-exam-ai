@@ -8,5 +8,13 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "cx-exam-ai",
   "compatibility_date": "2026-11-16",
-  "pages_build_output_dir": "./.site"
+  "pages_build_output_dir": "./.site",
+  // 配置云同步用的 KV（functions/api/sync/[id].js 里以 env.CFG_KV 访问）。
+  // 只存 AES-GCM 密文 + 写权限令牌，客户端密钥从不上传（零知识）。
+  "kv_namespaces": [
+    {
+      "binding": "CFG_KV",
+      "id": "82987ae0f84d4ee18b3062cf666ab14e"
+    }
+  ]
 }

@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.8.7（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.9.0（`package.json`）
 
 # MAINTENANCE
 
@@ -31,7 +31,8 @@ cx-exam-ai/
 ├── index.html                落地页（Cloudflare Pages 一键安装入口 + 设置中心入口）
 ├── settings.html             独立设置中心骨架（脚本接管后整页渲染设置界面，未接管时给排查指引）
 ├── .gitignore                运行期产物与浏览器 profile 的排除清单
-├── wrangler.jsonc            Cloudflare Workers 静态资源部署配置（可选通道）
+├── functions/api/sync/[id].js  Pages Function：配置云同步接口（GET/PUT/DELETE + KV `CFG_KV`）
+├── wrangler.jsonc            Cloudflare Pages 部署配置（含 `pages_build_output_dir` 与 CFG_KV 绑定）
 ├── images/                   收款码（alipay.png / wechat_pay.png）
 ├── src/                      源码（按编号顺序拼接，禁止乱序）
 │   ├── 00-header.js          UserScript 元数据块
@@ -44,7 +45,8 @@ cx-exam-ai/
 │   ├── 06-guard.js           环境伪装、弹窗确认、节奏控制
 │   ├── 07-ui.js              Shadow DOM 控制台（面板/设置/题目卡片）
 │   ├── 08-main.js            主编排引擎 + boot
-│   └── 09-settings.js        独立设置中心（网页版配置页，整页接管 /settings.html）
+│   ├── 09-settings.js        独立设置中心（网页版配置页，整页接管 /settings.html）
+│   └── 10-sync.js            云同步（AES-GCM 加密 + Pages Functions/KV 中转）
 ├── tools/
 │   ├── check.js              语法与模块契约自检
 │   ├── test-dom.js           离线集成测试（自建 DOM 垫片 + fetch 模拟）
@@ -73,9 +75,9 @@ cx-exam-ai/
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
 | `LICENSE` | — | MIT，版权人 `wzj1122` | 无 |
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
-| `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main` | `tools/verify-cdp.mjs` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | 真实浏览器端到端验证：自起两个静态服务（8790/8791 = 两个 origin，复现跨域存储隔离）+ headless Chrome（CDP），跑「设置中心向导 → 配置码 → 考试页落库 → 悬浮球/面板」20 项断言，用 `Input.dispatchMouseEvent` 发真实双击（球的交互是 pointer 链，合成 click 无效） | `dist/` `.site/` `tools/shim.js` `tools/fixtures/exam-mock.html` |
+| `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main`
+| `tools/verify-cdp.mjs` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | 真实浏览器端到端验证：自起两个静态服务（8790/8791 = 两个 origin，复现跨域存储隔离）+ headless Chrome（CDP），跑「设置中心向导 → 配置码 → 云同步(KV) → 考试页落库 → 悬浮球/面板」27 项断言，用 `Input.dispatchMouseEvent` 发真实双击（球的交互是 pointer 链，合成 click 无效） | `dist/` `.site/` `tools/shim.js` `tools/fixtures/exam-mock.html` |
 | `tools/fixtures/exam-mock.html` | — | 模拟学习通考试页（`.questionLi` + `.stem_answer` + `check_answer` 点选行为），给 `verify-cdp.mjs` 当考试页夹具 | `tools/verify-cdp.mjs` |
-| `tools/build-site.js` |
 | `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` 与 `settings.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
@@ -169,6 +171,20 @@ Engine.start()
 结束：可选 maybeSubmit()（找不到交卷按钮只告警）
 ```
 
+### 5c. 云同步（10-sync + functions/api/sync）
+
+超星考试页跨子域（i. / mooc2-ans. / passport2.），浏览器存储按 origin 隔离 → 纯前端传不过去，必须服务端中转。
+
+- 客户端 `src/10-sync.js`：`makeCode()` 生成 `<id>.<key>`（8B id + 16B 密钥，base64url）；
+  `push()` 用 `crypto.subtle` 做 AES-GCM 加密后 PUT，附带 `HMAC(key,'cx-exam-ai:write:v1')` 作为写令牌；
+  `pull()` GET 后用同一 key 解密；`autoPull()` 只在「存过码 + 本地无配置」时执行（不覆盖本地改动）。
+- 请求走 `GM_xmlhttpRequest`（`anonymous: true`，不带 cookie）→ 降级 `fetch`。
+  **GET/HEAD 绝不能带 data**，否则 `fetch` 报 `GET cannot have body`（踩过一次）。
+- 服务端 `functions/api/sync/[id].js`：GET 返回 `{blob,at}`；PUT 首次绑定 token、之后校验；
+  DELETE 校验 token；`blob` 上限 24KB；KV 90 天过期；CORS 允许 `*`。
+- 存储键：同步码在 `Store` 的 `syncCode`（不与配置 JSON 混存）。
+- **配置在 localStorage 里有两份**（GM 垫片 `cxai:<KEY>` + 裸 `<KEY>`），写测试或清理时两处都要处理。
+
 ### 5b. 独立设置中心（09-settings）
 
 `settings.html` 只是一份深色骨架 + `<html data-cxai-settings>` 标记。脚本的 `08-main.ready()` 一进来先问
@@ -231,6 +247,21 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.9.0（2026-11-17）云同步：Pages Functions + KV（彻底解决跨子域）
+
+- **根因**：超星考试页跨多个子域（`i.` / `mooc2-ans.` / `passport2.`），且未登录 302 到登录域会把 hash 丢掉；
+  浏览器存储按 origin 隔离 → v1.8.7 的"URL 带配置码"只能落到打开的那个子域，考试页仍读不到。
+- 新增 `functions/api/sync/[id].js`：Pages Function，`GET/PUT/DELETE /api/sync/<id>`，KV binding `CFG_KV`
+  （id `82987ae0f84d4ee18b3062cf666ab14e`）。首次 PUT 绑定 `x-cxai-token`，之后校验；blob ≤ 24KB；TTL 90 天。
+- 新增 `src/10-sync.js`（`CXAI.Sync`）：AES-GCM（key 16B）+ HMAC 写令牌；`newCode/syncNow/pull/pullInto/autoPull/disable`。
+- 设置中心「备份」页：生成同步码并上传、立即上传、云端校验、停用；`persist()` 里 1.2s 防抖**自动上传**。
+- 考试页面板：`#setupbar` 加同步码输入 + 「拉取」；`08-main` 在无配置时 `autoPull()`（静默、不覆盖已有配置）。
+- 工具链：`tools/shim.js` / `tools/cdp.js` 的 GM 垫片支持 `anonymous`（跨域 + `ACAO:*` 必须 omit），
+  且 GET/HEAD 不再塞 body。
+- E2E（`npm run e2e`）扩到 **27 项**：C1 生成同步码 / C2 KV 有密文 / C3 考试页粘码拉取 / C4 刷新仍在 /
+  C5 新子域自动拉取 / C6 设置页改动自动上传后新子域拿到新值 / C7 HMAC 令牌被服务端接受并删除。
+  验证：`check` 12 模块、`test-dom` 114/0、`e2e` **27/27 全绿**。
 
 ### v1.8.7（2026-11-17）修跨域读不到配置 + 考试页不再自动弹窗
 
