@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><title>模拟考试页 · 学习通结构</title></head>
+<body>
+<div class="questionList">
+  <div class="questionLi" id="q1">
+    <input type="hidden" name="type0" value="0">
+    <h3 class="mark_name">1、下列哪一项属于 TCP 三次握手的第二步？</h3>
+    <ul class="stem_answer">
+      <li class="clearfix"><a class="answerBg" href="javascript:;"><div class="answer_p"><div class="textDIV">A. SYN</div></div></a></li>
+      <li class="clearfix"><a class="answerBg" href="javascript:;"><div class="answer_p"><div class="textDIV">B. SYN + ACK</div></div></a></li>
+      <li class="clearfix"><a class="answerBg" href="javascript:;"><div class="answer_p"><div class="textDIV">C. ACK</div></div></a></li>
+      <li class="clearfix"><a class="answerBg" href="javascript:;"><div class="answer_p"><div class="textDIV">D. FIN</div></div></a></li>
+    </ul>
+  </div>
+  <div class="questionLi" id="q2">
+    <input type="hidden" name="type1" value="3">
+    <h3 class="mark_name">2、HTTP 默认端口是 80。</h3>
+    <ul class="stem_answer">
+      <li class="clearfix"><a class="answerBg" href="javascript:;"><div class="answer_p"><div class="textDIV">A. 对</div></div></a></li>
+      <li class="clearfix"><a class="answerBg" href="javascript:;"><div class="answer_p"><div class="textDIV">B. 错</div></div></a></li>
+    </ul>
+  </div>
+</div>
+<script>
+  // 模拟学习通的点选行为：点完给父级加 check_answer
+  document.querySelectorAll('.stem_answer').forEach(function (ul) {
+    ul.addEventListener('click', function (e) {
+      var a = e.target.closest ? e.target.closest('.answerBg') : null;
+      if (!a) return;
+      ul.querySelectorAll('.check_answer').forEach(function (x) { x.classList.remove('check_answer'); });
+      a.querySelector('.answer_p').classList.add('check_answer');
+    });
+  });
+</script>
+</body></html>

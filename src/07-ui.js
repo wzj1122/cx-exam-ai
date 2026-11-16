@@ -7,7 +7,7 @@ CXAI.UI = (function () {
   // Cloudflare Pages 会把 /settings.html 308 跳到 /settings，这里直接用规范路径，少一跳
   const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings';
   let root = null;
-  let state = { running: false, paused: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
+  let state = { running: false, paused: false, needSetup: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
 
   const CSS = `
 :host { all: initial; }
@@ -50,6 +50,13 @@ CXAI.UI = (function () {
 .ball.done { background: rgba(220,252,231,.62); border-color: rgba(167,243,208,.6); color: #4f9e72; opacity: .5; }
 .ball.done #balllabel { font-size: 10px; letter-spacing: .5px; }
 .ball.dragging { opacity: 1; cursor: grabbing; transform: scale(1.05); }
+/* 本域还没配置：球左上角一颗橙点，不弹窗打扰，点球才进面板 */
+.ball.needs-setup::before { content:''; position:absolute; left:2px; top:2px; width:7px; height:7px; border-radius:50%;
+  background:#f59e0b; box-shadow:0 0 0 2px rgba(255,255,255,.92); }
+.setupbar { display:none; align-items:center; gap:8px; padding:8px 12px; background:#fffbeb;
+  border-bottom:1px solid #fde68a; font-size:11.5px; color:#92400e; }
+.setupbar.show { display:flex; }
+.setupbar span { flex:1; line-height:1.5; }
 
 .panel { position:absolute; right:0; bottom:44px; width: 404px; max-height: 76vh; background:#fff; border:1px solid #e5e8ee;
   border-radius: 12px; box-shadow: 0 16px 44px rgba(16,24,40,.16); display:none; flex-direction:column; overflow:hidden; }
@@ -257,6 +264,10 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div><b id="s-todo">0</b><span>未答</span></div>
       <div><b id="s-model">0</b><span>模型</span></div>
     </div>
+    <div class="setupbar" id="setupbar">
+      <span>本域还没有模型配置。去设置中心配好，回这里点「答一题」就行。</span>
+      <button class="b" data-act="open-settings">设置中心</button>
+    </div>
     <div class="bar">
       <button class="b primary" data-act="next" title="答下一道还没答的题">答一题</button>
       <button class="b" data-act="run" title="从头连答到底">自动连答</button>
@@ -367,6 +378,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           importConfig();
           break;
         case 'cfg-page':
+          openSettingsPage();
+          break;
+        case 'open-settings':
           openSettingsPage();
           break;
         case 'run':
@@ -671,6 +685,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     renderQDetail(rows);
     const ball = $('#ball');
     if (ball) ball.classList.toggle('busy', state.running && !state.paused);
+    if (ball) ball.classList.toggle('needs-setup', !!state.needSetup && !state.running);
+    const setupBar = $('#setupbar');
+    if (setupBar) setupBar.classList.toggle('show', !!state.needSetup);
     const label = $('#balllabel');
     if (label) {
       if (state.doneAll && !state.running) label.textContent = 'OK';
@@ -1415,7 +1432,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       try {
         const info = CXAI.Store.info(CXAI.CONFIG_KEY);
         storeInfo.textContent =
-          '后端：' + info.backend + ' · 范围：' + (info.backend === 'gm' ? '所有域名共享' : '仅本域名') +
+          '后端：' + info.backend + ' · 范围：' + (info.backend === 'gm' ? '本域（油猴存储按域名隔离）' : '仅本域名') +
           ' · 体积：' + info.bytes + ' 字节\n' + '站点：' + location.host + '\n版本：' + CXAI.__version;
       } catch (e) {
         storeInfo.textContent = '读取失败：' + e.message;
@@ -1426,7 +1443,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       const info = CXAI.Store.info(CXAI.CONFIG_KEY);
       ioHint.textContent =
         info.backend === 'gm'
-          ? '存储：油猴 GM 存储（本脚本在所有域名间共享，换考试站点配置不会丢）· ' + info.bytes + ' 字节'
+          ? '存储：油猴 GM 存储（按域名隔离，仅本站生效）· ' + info.bytes + ' 字节 —— 跨到考试页请用设置中心「备份 → 同步到学习通」'
           : '存储：仅本源 localStorage（换域名就看不到这份配置）· ' + info.bytes + ' 字节 —— 用上面的导出/导入搬';
     }
     const vmSel = $('#cfg-vmodel');

@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.8.6（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.8.7（`package.json`）
 
 # MAINTENANCE
 
@@ -73,7 +73,9 @@ cx-exam-ai/
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
 | `LICENSE` | — | MIT，版权人 `wzj1122` | 无 |
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
-| `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main` | `tools/build-site.js` |
+| `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main` | `tools/verify-cdp.mjs` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | 真实浏览器端到端验证：自起两个静态服务（8790/8791 = 两个 origin，复现跨域存储隔离）+ headless Chrome（CDP），跑「设置中心向导 → 配置码 → 考试页落库 → 悬浮球/面板」20 项断言，用 `Input.dispatchMouseEvent` 发真实双击（球的交互是 pointer 链，合成 click 无效） | `dist/` `.site/` `tools/shim.js` `tools/fixtures/exam-mock.html` |
+| `tools/fixtures/exam-mock.html` | — | 模拟学习通考试页（`.questionLi` + `.stem_answer` + `check_answer` 点选行为），给 `verify-cdp.mjs` 当考试页夹具 | `tools/verify-cdp.mjs` |
+| `tools/build-site.js` |
 | `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` 与 `settings.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
@@ -183,8 +185,12 @@ Engine.start()
   （选中者 `vision`/`both`，其余 `judge`）。少了这步，会出现"读图下拉改了但 `visionProviders()` 还按旧角色挑模型"。
   只配了一个模型时自动把 `judgeToo` 打开（否则判题面板为空）。
 - 深链：`?tab=judge` 直接落到指定栏；`S.tab` 取值即上述六栏 id。
-- 设置页与考试页共享配置的前提是 `CXAI.Store.backend === 'gm'`（同一脚本跨域名）。降级 localStorage 时顶部胶囊会标出来，
-  并提示用「备份 → 导出」搬运。
+- **存储不跨域**：GM 存储作用域是「脚本 + 站点」，设置页（pages.dev）与考试页（chaoxing.com）各有一份。
+  跨域搬运靠 `CXAI.cfgCodec`（base64+UTF-8）：
+  - 设置中心「备份 → 同步到学习通」：生成 `https://i.chaoxing.com/base#cxai_cfg=<code>` 并打开；
+  - `08-main.consumeConfigHash()` 在 **gate 之前**（任何匹配页面）读取该 hash → `Cfg.importJSON` → 写本域存储 →
+    `history.replaceState` 清掉 hash（避免重复导入、避免配置留在地址/历史里）；
+  - 备用通道：设置页「复制配置码」/ JSON 导出 → 考试页面板「备份 → 导入」。
 
 ### 5. 状态与配置
 
@@ -225,6 +231,26 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.7（2026-11-17）修跨域读不到配置 + 考试页不再自动弹窗
+
+- **新增 `tools/verify-cdp.mjs` 与 `tools/fixtures/exam-mock.html`**：真实浏览器端到端验证（CDP）。
+  用 8790 / 8791 两个端口当两个 origin，真实复现"设置中心配好、考试页读不到"，
+  再验证配置码通道打通；20 项断言全绿。`npm run e2e` 可一键回归。
+
+- **根因**：v1.8.0 起假设「GM 存储同一脚本跨域名共享」，实际 TM / VM 的存储作用域是「脚本 + 站点」。
+  设置中心写在 pages.dev 的配置，chaoxing.com 读不到，`08-main` 于是弹出「当前域名还没有配置」。
+- 新增 `CXAI.cfgCodec.{encode,decode}`（`btoa(unescape(encodeURIComponent(JSON)))` 处理中文）作为跨域配置码。
+- `08-main.consumeConfigHash()`：在 `ready()` 最开始（**gate 之前**，任何 `@match` 页面）解析 `#cxai_cfg=`，
+  `Cfg.importJSON` 落库到本域并 `history.replaceState` 清 hash。
+- 设置中心「备份」页新增「同步到学习通 →」（`syncToChaoxing()`，打开 `i.chaoxing.com/base#cxai_cfg=…`）
+  与「复制配置码」（`copyConfigCode()`）。
+- **行为变更**：本域无配置时不再 `CXAI.UI.openConfig()`（用户明确要求不自动弹窗）；
+  改为 `CXAI.UI.update({needSetup:true})` → 悬浮球 `::before` 橙点 + 面板 `#setupbar` 提示条 + 「设置中心」按钮。
+  `Engine.start()` 里"点开始答题但没模型"仍会打开面板，那是用户主动操作。
+- 文案修正：设置页胶囊改「油猴存储 · 本域」、诊断页与面板存储信息去掉"所有域名共享"。
+- 验证：`check` 11 模块；`test-dom` 114/0；无头 Chrome 实测
+  `无 hash → providers=0`、`带配置码 → providers=1(label=基元律动) / bytes=579 / hash 已清空`。
 
 ### v1.8.6（2026-11-17）自定义模型默认 OpenAI 协议
 

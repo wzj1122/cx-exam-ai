@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.8.6
+// @version      1.8.7
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.8.6";
-CXAI.__builtAt = "2026-11-16T16:28:39.100Z";
+CXAI.__version = "1.8.7";
+CXAI.__builtAt = "2026-11-16T16:58:30.402Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -490,7 +490,7 @@ CXAI.Store = (function () {
   }
 
   return {
-    /** 'gm' = 跨域名共享；'local' = 只在本源有效；'mem' = 仅本次会话 */
+    /** 'gm' = 走油猴存储（按域名隔离，跨域要靠 CXAI.cfgCodec 搬运）；'local' = 只在本源有效；'mem' = 仅本次会话 */
     get backend() {
       return backend || (api ? 'gm' : 'local');
     },
@@ -690,6 +690,31 @@ CXAI.Cfg = {
   }
 };
 
+/* ---------------- 配置码（跨域搬运） ----------------
+ * 油猴的 GM 存储在多数管理器里按「脚本 + 域名」隔离：设置中心在
+ * cx-exam-ai.pages.dev 写的那份，chaoxing.com 的考试页读不到。
+ * 所以设置中心把整份配置编码成一个「配置码」，可以：
+ *   1) 拼进 URL hash 交给任意 chaoxing 页面，脚本落库到本域（自动）
+ *   2) 复制粘贴进考试页面板的「备份 → 导入」
+ * 用 base64 + UTF-8 处理中文，不依赖任何后端。
+ */
+CXAI.cfgCodec = {
+  encode(obj) {
+    try {
+      return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+    } catch (e) {
+      return '';
+    }
+  },
+  decode(str) {
+    try {
+      return JSON.parse(decodeURIComponent(escape(atob(String(str)))));
+    } catch (e) {
+      return null;
+    }
+  }
+};
+
 /* ---------------- 日志 ---------------- */
 
 CXAI.Log = {
@@ -755,7 +780,7 @@ CXAI.diag = function () {
     judge: CXAI.Cfg.get('ai.judge', {})
   };
   CXAI.Log.info(
-    '存储后端 ' + (info.backend === 'gm' ? 'GM（跨域名共享）' : info.backend === 'local' ? '仅本源 localStorage' : '内存') +
+    '存储后端 ' + (info.backend === 'gm' ? 'GM（按域名隔离）' : info.backend === 'local' ? '仅本源 localStorage' : '内存') +
       ' · ' + info.bytes + ' 字节 · 模型 ' + providers.length + ' 个',
     out
   );
@@ -4396,7 +4421,7 @@ CXAI.UI = (function () {
   // Cloudflare Pages 会把 /settings.html 308 跳到 /settings，这里直接用规范路径，少一跳
   const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings';
   let root = null;
-  let state = { running: false, paused: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
+  let state = { running: false, paused: false, needSetup: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
 
   const CSS = `
 :host { all: initial; }
@@ -4439,6 +4464,13 @@ CXAI.UI = (function () {
 .ball.done { background: rgba(220,252,231,.62); border-color: rgba(167,243,208,.6); color: #4f9e72; opacity: .5; }
 .ball.done #balllabel { font-size: 10px; letter-spacing: .5px; }
 .ball.dragging { opacity: 1; cursor: grabbing; transform: scale(1.05); }
+/* 本域还没配置：球左上角一颗橙点，不弹窗打扰，点球才进面板 */
+.ball.needs-setup::before { content:''; position:absolute; left:2px; top:2px; width:7px; height:7px; border-radius:50%;
+  background:#f59e0b; box-shadow:0 0 0 2px rgba(255,255,255,.92); }
+.setupbar { display:none; align-items:center; gap:8px; padding:8px 12px; background:#fffbeb;
+  border-bottom:1px solid #fde68a; font-size:11.5px; color:#92400e; }
+.setupbar.show { display:flex; }
+.setupbar span { flex:1; line-height:1.5; }
 
 .panel { position:absolute; right:0; bottom:44px; width: 404px; max-height: 76vh; background:#fff; border:1px solid #e5e8ee;
   border-radius: 12px; box-shadow: 0 16px 44px rgba(16,24,40,.16); display:none; flex-direction:column; overflow:hidden; }
@@ -4646,6 +4678,10 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div><b id="s-todo">0</b><span>未答</span></div>
       <div><b id="s-model">0</b><span>模型</span></div>
     </div>
+    <div class="setupbar" id="setupbar">
+      <span>本域还没有模型配置。去设置中心配好，回这里点「答一题」就行。</span>
+      <button class="b" data-act="open-settings">设置中心</button>
+    </div>
     <div class="bar">
       <button class="b primary" data-act="next" title="答下一道还没答的题">答一题</button>
       <button class="b" data-act="run" title="从头连答到底">自动连答</button>
@@ -4756,6 +4792,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           importConfig();
           break;
         case 'cfg-page':
+          openSettingsPage();
+          break;
+        case 'open-settings':
           openSettingsPage();
           break;
         case 'run':
@@ -5060,6 +5099,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     renderQDetail(rows);
     const ball = $('#ball');
     if (ball) ball.classList.toggle('busy', state.running && !state.paused);
+    if (ball) ball.classList.toggle('needs-setup', !!state.needSetup && !state.running);
+    const setupBar = $('#setupbar');
+    if (setupBar) setupBar.classList.toggle('show', !!state.needSetup);
     const label = $('#balllabel');
     if (label) {
       if (state.doneAll && !state.running) label.textContent = 'OK';
@@ -5804,7 +5846,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       try {
         const info = CXAI.Store.info(CXAI.CONFIG_KEY);
         storeInfo.textContent =
-          '后端：' + info.backend + ' · 范围：' + (info.backend === 'gm' ? '所有域名共享' : '仅本域名') +
+          '后端：' + info.backend + ' · 范围：' + (info.backend === 'gm' ? '本域（油猴存储按域名隔离）' : '仅本域名') +
           ' · 体积：' + info.bytes + ' 字节\n' + '站点：' + location.host + '\n版本：' + CXAI.__version;
       } catch (e) {
         storeInfo.textContent = '读取失败：' + e.message;
@@ -5815,7 +5857,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       const info = CXAI.Store.info(CXAI.CONFIG_KEY);
       ioHint.textContent =
         info.backend === 'gm'
-          ? '存储：油猴 GM 存储（本脚本在所有域名间共享，换考试站点配置不会丢）· ' + info.bytes + ' 字节'
+          ? '存储：油猴 GM 存储（按域名隔离，仅本站生效）· ' + info.bytes + ' 字节 —— 跨到考试页请用设置中心「备份 → 同步到学习通」'
           : '存储：仅本源 localStorage（换域名就看不到这份配置）· ' + info.bytes + ' 字节 —— 用上面的导出/导入搬';
     }
     const vmSel = $('#cfg-vmodel');
@@ -7035,8 +7077,48 @@ CXAI.Engine = (function () {
 /* ---------------- 启动 ---------------- */
 
 (function boot() {
+  /**
+   * 读取 URL 里的配置码并落到本域存储。
+   * 为什么需要它：油猴存储按域名隔离，设置中心（pages.dev）写的配置考试页（chaoxing.com）读不到，
+   * 只能由设置中心生成链接，本脚本在任意匹配页面把配置码导入本域。
+   */
+  function consumeConfigHash() {
+    let raw = '';
+    try {
+      raw = String(location.hash || '');
+    } catch (e) {
+      return false;
+    }
+    const m = /[#&]cxai_cfg=([A-Za-z0-9+/=%_-]+)/.exec(raw);
+    if (!m) return false;
+    const obj = CXAI.cfgCodec.decode(decodeURIComponent(m[1]));
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      CXAI.Log.warn('配置码解不出来，忽略');
+      return false;
+    }
+    try {
+      CXAI.Cfg.importJSON(obj);
+    } catch (e) {
+      CXAI.Log.error('配置码导入失败：' + (e && e.message ? e.message : e));
+      return false;
+    }
+    // 清掉 hash：刷新不重复导入，配置也不留在地址栏 / 浏览历史里
+    try {
+      const clean = location.href.replace(/([#&])cxai_cfg=[^&#]*/g, '').replace(/[#&]+$/, '');
+      history.replaceState(null, '', clean);
+    } catch (e) {}
+    CXAI.Log.ok(
+      '已通过链接导入设置中心的配置 · 模型 ' + (CXAI.Cfg.get('ai.providers', []) || []).length + ' 个 · 本域已生效'
+    );
+    return true;
+  }
+
   function ready() {
     try {
+      // 设置中心「同步到学习通」带过来的配置码：先落库，再走正常流程
+      try {
+        consumeConfigHash();
+      } catch (e) {}
       // 独立设置中心（/settings.html）：整页接管，不跑任何考试逻辑、不装环境伪装、不挂浮球
       if (CXAI.Settings && CXAI.Settings.isHere()) {
         try {
@@ -7159,15 +7241,16 @@ CXAI.Engine = (function () {
         }
       } catch (e) {}
       // 本域第一次跑（或配置没跟着过来）时，直接把设置面板和导入框摆在眼前
+      // 本域还没配置：**不自动弹面板**（用户明确要求，除非自己点），
+      // 只在悬浮球上点一颗提示点；想配就点球 → 面板里会给出「打开设置中心」与配置码入口。
       var np = (CXAI.Cfg.get('ai.providers', []) || []).length;
       if (!np) {
         CXAI.Log.warn(
-          '当前域名还没有配置（存储后端：' + CXAI.Store.backend + '）。在别的站点配过的，把那份 JSON 粘到设置面板底部「配置备份」里点导入即可'
+          '本域还没有模型配置（存储后端：' + CXAI.Store.backend + '）。' +
+            '去设置中心配好后点「同步到学习通」，或把配置码粘到面板「备份 → 导入」'
         );
         try {
-          CXAI.UI.openConfig();
-          var io = document.getElementById('cx-ai-host').shadowRoot.querySelector('#cfg-io');
-          if (io) io.focus();
+          CXAI.UI.update({ needSetup: true });
         } catch (e) {}
       }
       if (typeof GM_registerMenuCommand === 'function') {
@@ -7209,10 +7292,12 @@ try {
  * 打开就能像普通网站设置页那样改模型、判题、读图、运行参数、备份、诊断，
  * 改完立刻写回存储，回到 chaoxing.com 的考试页直接生效。
  *
- * 存储关键点：油猴的 GM 存储是「同一脚本跨域名共享」的（CXAI.Store.backend === 'gm'），
- * 所以在设置页保存的配置，考试页读到的就是同一份，不用再搬 JSON。
- * 若用户脚本管理器不支持 GM 存储（backend === 'local'），配置只在本域生效，
- * 页面顶部会明确标出来，并引导用「备份 → 导出」搬到考试页。
+ * 存储关键点：油猴的 GM 存储作用域是「脚本 + 站点」，**不是跨域名共享** ——
+ * 设置页（pages.dev）写的配置，考试页（chaoxing.com）读不到同一份。
+ * 所以「备份」页提供两条搬运通道：
+ *   1) 「同步到学习通」：把整份配置编码进 URL hash（CXAI.cfgCodec），打开学习通后脚本自动落库到那一侧
+ *   2) 「复制配置码」/ 导出 JSON：粘到考试页面板的「备份 → 导入」
+ * 若管理器连 GM 存储都没有（backend === 'local'），同样走这两条通道。
  *
  * 本模块顶层零副作用：不在设置页时它只是一堆函数，绝不会往考试页插东西。
  */
@@ -7259,7 +7344,7 @@ CXAI.Settings = (function () {
 
   function backendText() {
     const info = storeInfo();
-    if (info.backend === 'gm') return { tag: '油猴存储 · 跨域共享', cls: 'ok', hint: '在这里保存的配置，考试页直接生效（同一脚本跨域名共享）' };
+    if (info.backend === 'gm') return { tag: '油猴存储 · 本域', cls: 'ok', hint: '油猴存储按域名隔离：这份配置只对当前站点生效。到考试页请用「备份 → 同步到学习通」' };
     if (info.backend === 'local') return { tag: '仅本域存储', cls: 'warn', hint: '没有 GM 存储，配置只在本域名有效 —— 用「备份 → 导出」把 JSON 粘到考试页的设置里' };
     return { tag: '内存 · 未持久化', cls: 'bad', hint: '刷新就丢，检查脚本管理器是否禁用了存储' };
   }
@@ -7575,6 +7660,8 @@ CXAI.Settings = (function () {
   <span class="cs-pill ${st.cls}" id="cs-pill-store" title="${esc(st.hint)}">${esc(st.tag)}</span>
   <span class="cs-pill" id="cs-pill-count">${n} 个已启用模型</span>
   <div class="spacer"></div>
+  <button class="cs-btn adv" data-act="sync-chaoxing" title="把当前配置带到 chaoxing.com（油猴存储按域名隔离，必须搬一次）"
+    ${(cfg().ai.providers || []).length ? '' : 'disabled'}>同步到考试页</button>
   <button class="cs-btn${adv ? '' : ' adv'}" data-act="toggle-advanced" id="cs-adv"
     title="${adv ? '隐藏权重、温度、阈值、超时等专业项，回到简单设置' : '显示权重、温度、阈值、超时、运行、备份、诊断等专业项'}">${adv ? '切回简单设置' : '高级设置'}</button>
   <a class="cs-btn" href="/" target="_self" title="回到安装 / 说明页">安装页</a>
@@ -7761,6 +7848,7 @@ CXAI.Settings = (function () {
     <button class="cs-btn" data-act="test-all">测试全部连接</button>
     <button class="cs-btn" data-act="pv-collapse">全部收起</button>
     <div style="flex:1"></div>
+    <span class="hint" id="cs-sync-tip">${(cfg().ai.providers || []).length ? '配好点右上角「同步到考试页」，配置才会到 chaoxing.com' : ''}</span>
     <a class="cs-btn" href="https://greasyfork.org/zh-CN/scripts/605687" target="_blank" rel="noopener" title="看各家的 Key 在哪申请">去哪拿 Key？</a>
   </div>
   <div class="cs-out" id="cs-testout" style="display:none;margin-top:12px"></div>
@@ -8019,6 +8107,15 @@ CXAI.Settings = (function () {
 <section class="cs-card">
   <h2>备份 <span class="tag">换浏览器 / 换域名时搬配置</span></h2>
   <p class="desc">配置里只有模型地址和参数，不含任何账号信息。导出的 JSON 可以直接贴进考试页面板的「设置 → 备份」，也可以用来在另一台电脑上恢复。</p>
+  <div class="cs-note" style="margin-bottom:14px">
+    <b>油猴存储按域名隔离</b>：这里存的是本页站点（<code>cx-exam-ai.pages.dev</code>）的配置，考试页（chaoxing.com）读不到同一份。
+    点下面按钮会打开学习通并带上配置码，脚本会在那一侧自动落库 —— 之后所有考试页都能用。
+    <div class="cs-row" style="margin-top:10px;flex-wrap:wrap">
+      <button class="cs-btn pri" data-act="sync-chaoxing">同步到学习通 →</button>
+      <button class="cs-btn" data-act="copy-code">复制配置码</button>
+      <span class="hint" id="cs-synchint"></span>
+    </div>
+  </div>
   <div class="cs-row" style="margin-bottom:10px">
     <button class="cs-btn pri" data-act="export-text">导出到下面文本框</button>
     <button class="cs-btn" data-act="download">下载 .json 文件</button>
@@ -8035,7 +8132,7 @@ CXAI.Settings = (function () {
   </div>
   <div class="cs-line"></div>
   <div class="cs-kv">
-    <div class="k">存储后端</div><div class="v">${esc(info.backend === 'gm' ? '油猴 GM（跨域名共享）' : info.backend === 'local' ? 'localStorage（仅本域）' : '内存')}</div>
+    <div class="k">存储后端</div><div class="v">${esc(info.backend === 'gm' ? '油猴 GM（按域名隔离）' : info.backend === 'local' ? 'localStorage（仅本域）' : '内存')}</div>
     <div class="k">配置体积</div><div class="v">${info.bytes || 0} 字节</div>
     <div class="k">当前站点</div><div class="v">${esc(location.host || 'file://')}</div>
     <div class="k">存储键</div><div class="v">${esc(CXAI.CONFIG_KEY)}</div>
@@ -8326,7 +8423,8 @@ ${wizardSteps(3)}
     );
     list.push(fresh);
     c.ai.providers = list;
-    w.visionId = fresh.id;
+    // 读图模型默认取「第一个模型」；只有当后加的这家预设本身带视觉能力时，才改用新的这个
+    if (!w.visionId || pre.vision) w.visionId = fresh.id;
     CXAI.Cfg.save();
     return { ok: true, provider: fresh };
   }
@@ -8815,6 +8913,34 @@ ${wizardSteps(3)}
     }
   }
 
+  /** 把当前配置编码进 URL hash，打开学习通让考试域落库（油猴存储按域隔离，这是唯一自动通道） */
+  function syncToChaoxing() {
+    const code = CXAI.cfgCodec.encode(CXAI.Cfg.data || CXAI.Cfg.load());
+    if (!code) {
+      toast('配置编码失败', 'bad');
+      return;
+    }
+    const url = 'https://i.chaoxing.com/base#cxai_cfg=' + encodeURIComponent(code);
+    try {
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      location.href = url;
+    }
+    const hint = q('#cs-synchint');
+    if (hint) hint.textContent = '已打开学习通，配置会在那一侧自动生效（同时复制了一份配置码）';
+    copyText(code, '配置码已复制');
+    toast('已打开学习通 · 配置将自动落库', 'ok');
+  }
+
+  function copyConfigCode() {
+    const code = CXAI.cfgCodec.encode(CXAI.Cfg.data || CXAI.Cfg.load());
+    if (!code) {
+      toast('配置编码失败', 'bad');
+      return;
+    }
+    copyText(code, '配置码已复制 · 粘到考试页面板「备份 → 导入」');
+  }
+
   function downloadJSON() {
     try {
       const blob = new Blob([CXAI.Cfg.json()], { type: 'application/json' });
@@ -9050,6 +9176,12 @@ ${wizardSteps(3)}
         break;
       case 'export-text':
         exportText();
+        break;
+      case 'sync-chaoxing':
+        syncToChaoxing();
+        break;
+      case 'copy-code':
+        copyConfigCode();
         break;
       case 'download':
         downloadJSON();

@@ -455,7 +455,7 @@ CXAI.Store = (function () {
   }
 
   return {
-    /** 'gm' = 跨域名共享；'local' = 只在本源有效；'mem' = 仅本次会话 */
+    /** 'gm' = 走油猴存储（按域名隔离，跨域要靠 CXAI.cfgCodec 搬运）；'local' = 只在本源有效；'mem' = 仅本次会话 */
     get backend() {
       return backend || (api ? 'gm' : 'local');
     },
@@ -655,6 +655,31 @@ CXAI.Cfg = {
   }
 };
 
+/* ---------------- 配置码（跨域搬运） ----------------
+ * 油猴的 GM 存储在多数管理器里按「脚本 + 域名」隔离：设置中心在
+ * cx-exam-ai.pages.dev 写的那份，chaoxing.com 的考试页读不到。
+ * 所以设置中心把整份配置编码成一个「配置码」，可以：
+ *   1) 拼进 URL hash 交给任意 chaoxing 页面，脚本落库到本域（自动）
+ *   2) 复制粘贴进考试页面板的「备份 → 导入」
+ * 用 base64 + UTF-8 处理中文，不依赖任何后端。
+ */
+CXAI.cfgCodec = {
+  encode(obj) {
+    try {
+      return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+    } catch (e) {
+      return '';
+    }
+  },
+  decode(str) {
+    try {
+      return JSON.parse(decodeURIComponent(escape(atob(String(str)))));
+    } catch (e) {
+      return null;
+    }
+  }
+};
+
 /* ---------------- 日志 ---------------- */
 
 CXAI.Log = {
@@ -720,7 +745,7 @@ CXAI.diag = function () {
     judge: CXAI.Cfg.get('ai.judge', {})
   };
   CXAI.Log.info(
-    '存储后端 ' + (info.backend === 'gm' ? 'GM（跨域名共享）' : info.backend === 'local' ? '仅本源 localStorage' : '内存') +
+    '存储后端 ' + (info.backend === 'gm' ? 'GM（按域名隔离）' : info.backend === 'local' ? '仅本源 localStorage' : '内存') +
       ' · ' + info.bytes + ' 字节 · 模型 ' + providers.length + ' 个',
     out
   );

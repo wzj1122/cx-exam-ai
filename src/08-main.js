@@ -895,8 +895,48 @@ CXAI.Engine = (function () {
 /* ---------------- 启动 ---------------- */
 
 (function boot() {
+  /**
+   * 读取 URL 里的配置码并落到本域存储。
+   * 为什么需要它：油猴存储按域名隔离，设置中心（pages.dev）写的配置考试页（chaoxing.com）读不到，
+   * 只能由设置中心生成链接，本脚本在任意匹配页面把配置码导入本域。
+   */
+  function consumeConfigHash() {
+    let raw = '';
+    try {
+      raw = String(location.hash || '');
+    } catch (e) {
+      return false;
+    }
+    const m = /[#&]cxai_cfg=([A-Za-z0-9+/=%_-]+)/.exec(raw);
+    if (!m) return false;
+    const obj = CXAI.cfgCodec.decode(decodeURIComponent(m[1]));
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+      CXAI.Log.warn('配置码解不出来，忽略');
+      return false;
+    }
+    try {
+      CXAI.Cfg.importJSON(obj);
+    } catch (e) {
+      CXAI.Log.error('配置码导入失败：' + (e && e.message ? e.message : e));
+      return false;
+    }
+    // 清掉 hash：刷新不重复导入，配置也不留在地址栏 / 浏览历史里
+    try {
+      const clean = location.href.replace(/([#&])cxai_cfg=[^&#]*/g, '').replace(/[#&]+$/, '');
+      history.replaceState(null, '', clean);
+    } catch (e) {}
+    CXAI.Log.ok(
+      '已通过链接导入设置中心的配置 · 模型 ' + (CXAI.Cfg.get('ai.providers', []) || []).length + ' 个 · 本域已生效'
+    );
+    return true;
+  }
+
   function ready() {
     try {
+      // 设置中心「同步到学习通」带过来的配置码：先落库，再走正常流程
+      try {
+        consumeConfigHash();
+      } catch (e) {}
       // 独立设置中心（/settings.html）：整页接管，不跑任何考试逻辑、不装环境伪装、不挂浮球
       if (CXAI.Settings && CXAI.Settings.isHere()) {
         try {
@@ -1019,15 +1059,16 @@ CXAI.Engine = (function () {
         }
       } catch (e) {}
       // 本域第一次跑（或配置没跟着过来）时，直接把设置面板和导入框摆在眼前
+      // 本域还没配置：**不自动弹面板**（用户明确要求，除非自己点），
+      // 只在悬浮球上点一颗提示点；想配就点球 → 面板里会给出「打开设置中心」与配置码入口。
       var np = (CXAI.Cfg.get('ai.providers', []) || []).length;
       if (!np) {
         CXAI.Log.warn(
-          '当前域名还没有配置（存储后端：' + CXAI.Store.backend + '）。在别的站点配过的，把那份 JSON 粘到设置面板底部「配置备份」里点导入即可'
+          '本域还没有模型配置（存储后端：' + CXAI.Store.backend + '）。' +
+            '去设置中心配好后点「同步到学习通」，或把配置码粘到面板「备份 → 导入」'
         );
         try {
-          CXAI.UI.openConfig();
-          var io = document.getElementById('cx-ai-host').shadowRoot.querySelector('#cfg-io');
-          if (io) io.focus();
+          CXAI.UI.update({ needSetup: true });
         } catch (e) {}
       }
       if (typeof GM_registerMenuCommand === 'function') {

@@ -87,8 +87,10 @@
 要点：
 
 - **改动即时保存**，没有「保存」按钮；回到考试页刷新一下就是新配置。
-- 靠的是油猴 GM 存储**同一脚本跨域名共享**，所以设置页（pages.dev）与考试页（chaoxing.com）读写的是同一份配置。
-- 若脚本管理器不支持 GM 存储（页面顶部会标「仅本源 localStorage」），配置只在本域有效 —— 用「备份 → 导出」把 JSON 粘到考试页的 `⚙ → 备份` 里即可。
+- **存储是按域名隔离的**（Tampermonkey / Violentmonkey 的 GM 存储作用域是「脚本 + 站点」）：设置中心写在 `cx-exam-ai.pages.dev` 的配置，`chaoxing.com` 的考试页读不到同一份。
+  所以「备份」页有一个 **「同步到学习通 →」** 按钮：它把整份配置编码进链接，打开学习通后脚本会在那一侧自动落库 —— 之后所有考试页都能用（改完配置再点一次即可，一次性操作）。
+- 也可以点「复制配置码」，粘到考试页面板「⚙ → 备份 → 导入」。
+- 若脚本管理器不支持 GM 存储（设置页顶部会标「仅本域存储」），同样走上面两条通道搬运。
 - 支持深链：`/settings.html?tab=judge` 直接落到判题栏，取值 `model` / `judge` / `vision` / `run` / `backup` / `diag`。
 - 自建部署换了域名：把配置项 `ui.settingsURL` 指向你的地址，面板里的「独立设置页 ↗」会跟着变。
 - 页面自带一份静态兜底：脚本没接管（版本 < 1.8.0、未授权该域名）时会显示排查步骤，不会白屏。
@@ -183,11 +185,15 @@ node build.js          # 拼接 src/*.js → dist/cx-exam-ai.user.js
 node build.js --watch  # 监听重建
 node tools/check.js    # 语法 + 模块契约自检
 node tools/test-dom.js # 离线集成测试（自建 DOM 垫片 + 模拟模型端点）
-node tools/build-site.js # 生成 Cloudflare 发布目录 .site/（只含 index.html + dist/ + images/）
+node tools/build-site.js # 生成 Cloudflare 发布目录 .site/（只含 index.html + settings.html + dist/ + images/）
+node tools/verify-cdp.mjs # 真实浏览器端到端验证（CDP 驱动 Chrome，两个 origin 模拟跨域）
 npx wrangler pages deploy --project-name=cx-exam-ai --branch=main   # 发布到 Cloudflare Pages
 ```
 
-零依赖，不需要 `npm install`。测试夹具覆盖：整卷抓题、单选/多选/判断/填空点选、答案映射、分歧→复核→仲裁全链路，当前 111 项断言全绿。
+零依赖，不需要 `npm install`。两层测试：
+
+- `node tools/test-dom.js`：自建 DOM 垫片里的离线集成测试，覆盖整卷抓题、单选/多选/判断/填空点选、答案映射、分歧→复核→仲裁全链路，当前 **114 项断言全绿**。
+- `node tools/verify-cdp.mjs`（`npm run e2e`）：起两个静态服务（不同端口 = 不同 origin，复现"设置页配好、考试页读不到"的真实隔离）+ headless Chrome，用真实鼠标事件跑完设置中心向导 → 生成配置码 → 考试页落库 → 悬浮球行为，当前 **20 项全绿**。
 
 改动前请先读 [`MAINTENANCE.md`](MAINTENANCE.md)（维护手册：文件用途清单、数据流、修改安全守则、完整变更记录）。
 
@@ -215,6 +221,14 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.8.7（2026-11-17）修「设置中心的配置考试页读不到」+ 考试页不再自动弹窗
+
+- **真 bug**：之前误以为「油猴 GM 存储同一脚本跨域名共享」，实际上 Tampermonkey / Violentmonkey 的存储作用域是「脚本 + 站点」。结果在设置中心（pages.dev）配好的模型，考试页（chaoxing.com）读不到，还弹出「当前域名还没有配置」。
+  - 新增 `CXAI.cfgCodec`（base64 + UTF-8）与「**同步到学习通 →**」按钮：把整份配置编码进 URL hash 打开学习通，脚本在任何匹配页面读一次 `#cxai_cfg=…` 就落库到本域，并立刻清掉 hash（`history.replaceState`）。
+  - 同时保留「复制配置码」与 JSON 导出/导入。
+- **不再自动弹设置窗**：本域没配置时只记日志 + 在悬浮球左上角点一颗橙点，面板里显示一行提示条，除非你自己点球/点按钮，否则什么都不弹。只有你主动点「自动连答」而没模型时，才会打开设置面板。
+- 修正所有「跨域名共享」的错误表述（设置页胶囊、诊断页、面板存储信息、README）。
 
 ### v1.8.6（2026-11-17）自定义模型默认走 OpenAI 协议
 

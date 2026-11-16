@@ -1,6 +1,6 @@
 {
   "name": "cx-exam-ai",
-  "version": "1.8.6",
+  "version": "1.8.7",
   "private": true,
   "description": "超星学习通考试 AI 自动答题脚本（多模型交叉判定，无题库）",
   "keywords": [
@@ -25,6 +25,7 @@
     "site": "node tools/build-site.js",
     "dev": "node build.js --watch",
     "check": "node tools/check.js",
-    "test": "node tools/test-dom.js"
+    "test": "node tools/test-dom.js",
+    "e2e": "node tools/verify-cdp.mjs"
   }
 }
