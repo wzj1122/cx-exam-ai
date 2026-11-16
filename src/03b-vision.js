@@ -35,7 +35,7 @@ CXAI.Vision = (function () {
     const d = (CXAI.DEFAULT_CONFIG.ai.vision || {});
     const out = Object.assign({}, d, v && typeof v === 'object' ? v : {});
     if (typeof v === 'boolean') out.enabled = v;
-    out.maxImages = Math.max(1, Math.min(8, Number(out.maxImages) || 3));
+    out.maxImages = Math.max(1, Math.min(20, Number(out.maxImages) || 6));
     out.maxEdge = Math.max(320, Math.min(4096, Number(out.maxEdge) || 1400));
     out.quality = Math.max(0.1, Math.min(1, Number(out.quality) || 0.82));
     out.maxTotalBytes = Math.max(200000, Number(out.maxTotalBytes) || 4194304);

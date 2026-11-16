@@ -19,6 +19,8 @@ CXAI.Settings = (function () {
   let mounted = false;
   const S = {
     tab: 'model',
+    /** 是否正在走首次向导（进入设置页时由 needWizard() 决定，完成后置 false） */
+    wzActive: false,
     /** 每个 provider 卡片是否展开 */
     open: {},
     /** 拉取到的模型清单：provider.id -> [{id,label}] */
@@ -141,6 +143,72 @@ CXAI.Settings = (function () {
     return false;
   }
 
+  /** 简单版保留哪几栏；其余只在「高级设置」里出现 */
+  const SIMPLE_TABS = ['model', 'judge', 'vision'];
+
+  /** 是否处于高级模式（配置项 ui.advanced，默认关） */
+  function advancedOn() {
+    try {
+      return !!CXAI.Cfg.get('ui.advanced', false);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * 要不要「开局就是向导」：一个模型都没有，且用户没点过跳过。
+   * 只用来决定进入设置页时的初始模式 —— 一旦进了向导就看 S.wzActive，
+   * 否则第 1 步提交第一个模型后 providers 非空，第 2/3 步会被直接跳过。
+   */
+  function needWizard() {
+    if ((cfg().ai.providers || []).length) return false;
+    try {
+      return !CXAI.Cfg.get('ui.onboarded', false);
+    } catch (e) {
+      return true;
+    }
+  }
+
+  /**
+   * 读图模型下拉：只列真实存在的模型，**不提供"自动挑"**。
+   * 原因：脚本没有任何可靠办法判断某家模型到底能不能看图（/models 里不带这个信息），
+   * 与其猜错，不如让用户自己指定一个。
+   */
+  function visionModelOptions() {
+    const ps = cfg().ai.providers || [];
+    const cur = (cfg().ai.vision || {}).ocrProviderId || '';
+    if (!ps.length) return '<option value="">（先在「模型」里加一个）</option>';
+    return ps
+      .map(
+        (p) =>
+          '<option value="' + esc(p.id) + '"' + (p.id === cur ? ' selected' : '') + '>' +
+          esc(p.label || p.model || p.id) + (p.model ? ' · ' + esc(p.model) : '') + '</option>'
+      )
+      .join('');
+  }
+
+  /** 读图模型必须落地成具体 id：空 / 指向已删模型时，落到第一个启用模型 */
+  function ensureVisionModel() {
+    const c = cfg();
+    const v = c.ai.vision || {};
+    if (!v.enabled) return;
+    const ps = c.ai.providers || [];
+    if (!ps.length) return;
+    if (v.ocrProviderId && ps.some((p) => p.id === v.ocrProviderId)) return;
+    const first = ps.filter((p) => p.enabled !== false)[0] || ps[0];
+    v.ocrProviderId = first.id;
+    const single = ps.filter((p) => p.enabled !== false).length <= 1;
+    if (v.judgeToo || single) {
+      v.judgeToo = true;
+      first.role = 'both';
+    } else {
+      first.role = 'vision';
+    }
+    first.vision = true;
+    c.ai.providers = ps.map((x, i) => CXAI.normalizeProvider(x, i));
+    touch(false);
+  }
+
   /* ---------------- 样式 ---------------- */
 
   const CSS = `
@@ -168,6 +236,7 @@ CXAI.Settings = (function () {
 .cs-pill.bad { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
 
 .cs-layout { display:grid; grid-template-columns:190px minmax(0,1fr); gap:22px; max-width:1180px; margin:0 auto; padding:22px; }
+.cs-layout.wiz { grid-template-columns:minmax(0,1fr); max-width:860px; }
 .cs-nav { position:sticky; top:78px; align-self:start; display:flex; flex-direction:column; gap:2px; }
 .cs-nav .hd { font-size:11px; color:#9aa3b2; padding:0 10px 6px; letter-spacing:.4px; }
 .cs-nav .it { display:flex; align-items:center; gap:8px; padding:8px 10px; border-radius:9px; cursor:pointer;
@@ -255,6 +324,26 @@ CXAI.Settings = (function () {
 .cs-note b { color:#374151; }
 .cs-note code, .cs-card code { background:#eef2f9; border:1px solid var(--line); border-radius:4px;
   padding:0 4px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:#334155; }
+.cs-steps { display:flex; align-items:center; gap:8px; margin-bottom:16px; font-size:11.5px; color:#9aa3b2; }
+.cs-steps .st { display:flex; align-items:center; gap:6px; }
+.cs-steps .st b { width:19px; height:19px; border-radius:50%; background:#e5e8ef; color:#6b7280;
+  display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; }
+.cs-steps .st.on { color:#2563eb; font-weight:600; }
+.cs-steps .st.on b { background:var(--blue); color:#fff; }
+.cs-steps .st.done b { background:#bbf7d0; color:#15803d; }
+.cs-steps .ln { flex:1; height:1px; background:var(--line); min-width:16px; max-width:48px; }
+.cs-pre.on { border-color:var(--blue); background:#f2f7ff; box-shadow:0 0 0 2px rgba(37,99,235,.12); }
+.cs-pre .go { font-size:10.5px; color:#2563eb; margin-top:2px; }
+.cs-choices { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+@media (max-width:760px) { .cs-choices { grid-template-columns:1fr; } }
+.cs-choice { text-align:left; padding:12px 14px; border:1px solid var(--line); border-radius:12px;
+  background:#fff; cursor:pointer; font:12.5px/1.6 inherit; transition:.14s; }
+.cs-choice:hover { border-color:#a8c2f7; background:#f8fbff; }
+.cs-choice.on { border-color:var(--blue); background:#f2f7ff; box-shadow:0 0 0 2px rgba(37,99,235,.12); }
+.cs-choice b { display:block; font-size:13px; margin-bottom:2px; color:#1f2937; }
+.cs-choice span { color:#6b7280; font-size:11.5px; }
+.cs-top .adv { border-color:#c7d7f7; color:#2563eb; background:#f2f7ff; }
+.cs-top .adv:hover { background:#e8f0ff; border-color:#a8c2f7; }
 .cs-kv { display:grid; grid-template-columns:120px minmax(0,1fr); gap:6px 10px; font-size:12px; }
 .cs-kv .k { color:#9aa3b2; }
 .cs-kv .v { color:#374151; word-break:break-all; }
@@ -265,6 +354,7 @@ CXAI.Settings = (function () {
 
   function topbar() {
     const st = backendText();
+    const adv = advancedOn();
     const n = (cfg().ai.providers || []).filter((p) => p.enabled).length;
     return `
 <div class="cs-top">
@@ -273,6 +363,8 @@ CXAI.Settings = (function () {
   <span class="cs-pill ${st.cls}" id="cs-pill-store" title="${esc(st.hint)}">${esc(st.tag)}</span>
   <span class="cs-pill" id="cs-pill-count">${n} 个已启用模型</span>
   <div class="spacer"></div>
+  <button class="cs-btn${adv ? '' : ' adv'}" data-act="toggle-advanced" id="cs-adv"
+    title="${adv ? '隐藏权重、温度、阈值、超时等专业项，回到简单设置' : '显示权重、温度、阈值、超时、运行、备份、诊断等专业项'}">${adv ? '切回简单设置' : '高级设置'}</button>
   <a class="cs-btn" href="/" target="_self" title="回到安装 / 说明页">安装页</a>
   <a class="cs-btn" href="https://greasyfork.org/zh-CN/scripts/605687" target="_blank" rel="noopener">检查更新</a>
   <span class="cs-pill" id="cs-pill-ver">v${esc(CXAI.__version)}</span>
@@ -280,7 +372,7 @@ CXAI.Settings = (function () {
   }
 
   function nav() {
-    const items = [
+    const all = [
       ['model', '◈', '模型'],
       ['judge', '◉', '判题'],
       ['vision', '▣', '读图'],
@@ -288,6 +380,8 @@ CXAI.Settings = (function () {
       ['backup', '⇅', '备份'],
       ['diag', '◎', '诊断']
     ];
+    // 简单版只给三栏：运行 / 备份 / 诊断是排查和搬运用的，普通用户不用看
+    const items = advancedOn() ? all : all.filter((x) => SIMPLE_TABS.indexOf(x[0]) >= 0);
     return `
 <nav class="cs-nav">
   <div class="hd">配置分类</div>
@@ -305,8 +399,6 @@ CXAI.Settings = (function () {
   </div>
 </nav>`;
   }
-
-  /** 顶部两个状态胶囊跟着配置变化刷新 */
   function refreshMeta() {
     try {
       const st = backendText();
@@ -336,8 +428,9 @@ CXAI.Settings = (function () {
   }
 
   function providerCard(p, i) {
+    const adv = advancedOn();
     const pr = presetOf(p);
-    const open = S.open[p.id] === undefined ? i === 0 : !!S.open[p.id];
+    const open = S.open[p.id] === undefined ? (adv ? i === 0 : true) : !!S.open[p.id];
     const badge = p.role === 'vision' ? '读图' : p.role === 'both' ? '读图+判题' : '';
     const list = S.models[p.id] || null;
     const busy = S.busy['test' + i] ? ' disabled' : '';
@@ -353,14 +446,17 @@ CXAI.Settings = (function () {
     <span class="del" data-act="pv-del" data-i="${i}">删除</span>
   </div>
   <div class="cs-pb">
-    <div class="cs-grid g3">
+    <div class="cs-grid${adv ? ' g3' : ''}">
       <div class="cs-fld"><label>预设</label>
         <select class="cs-sel" data-f="preset" data-i="${i}">${presetOptions(pr)}</select></div>
-      <div class="cs-fld"><label>显示名</label>
-        <input class="cs-in" data-f="label" data-i="${i}" value="${esc(p.label)}" placeholder="随便写，只用于界面显示"></div>
-      <div class="cs-fld"><label>权重</label>
-        <input class="cs-in" type="number" min="0.1" max="5" step="0.1" data-f="weight" data-i="${i}" value="${p.weight == null ? 1 : p.weight}">
-        <div class="hint">越高越容易被选进议会</div></div>
+      ${adv
+        ? `<div class="cs-fld"><label>显示名</label>
+            <input class="cs-in" data-f="label" data-i="${i}" value="${esc(p.label)}" placeholder="只用于界面显示"></div>
+          <div class="cs-fld"><label>权重</label>
+            <input class="cs-in" type="number" min="0.1" max="5" step="0.1" data-f="weight" data-i="${i}" value="${p.weight == null ? 1 : p.weight}">
+            <div class="hint">越高越容易被选进议会</div></div>`
+        : `<div class="cs-fld"><label>&nbsp;</label>
+            <div class="hint" style="padding-top:8px">选预设会自动填好地址和模型名，只剩 Key 要你自己填。</div></div>`}
     </div>
     <div class="cs-grid">
       <div class="cs-fld"><label>Base URL</label>
@@ -376,34 +472,41 @@ CXAI.Settings = (function () {
         </div>
         ${list ? modelPickerHtml(list, i) : ''}
       </div>
-      <div class="cs-fld"><label>接口协议</label>
-        <select class="cs-sel" data-f="apiStyle" data-i="${i}">
-          ${['openai', 'anthropic', 'gemini']
-            .map((s) => '<option value="' + s + '"' + (p.apiStyle === s ? ' selected' : '') + '>' + styleLabel(s) + '</option>')
-            .join('')}
-        </select>
-        <div class="hint">绝大多数兼容端点选 OpenAI</div></div>
+      ${adv
+        ? `<div class="cs-fld"><label>接口协议</label>
+            <select class="cs-sel" data-f="apiStyle" data-i="${i}">
+              ${['openai', 'anthropic', 'gemini']
+                .map((st) => '<option value="' + st + '"' + (p.apiStyle === st ? ' selected' : '') + '>' + styleLabel(st) + '</option>')
+                .join('')}
+            </select>
+            <div class="hint">绝大多数兼容端点选 OpenAI</div></div>`
+        : `<div class="cs-fld"><label>连通性</label>
+            <button class="cs-btn" data-act="test-one" data-i="${i}"${busy} style="margin-top:6px;align-self:flex-start">测试这个模型</button>
+            <span class="hint" data-testout="${i}"></span></div>`}
     </div>
-    <div class="cs-grid g3">
-      <div class="cs-fld"><label>温度</label>
-        <input class="cs-in" type="number" min="0" max="2" step="0.1" data-f="temperature" data-i="${i}" value="${p.temperature == null ? 0.2 : p.temperature}"></div>
-      <div class="cs-fld"><label>最大输出 tokens</label>
-        <input class="cs-in" type="number" min="64" max="8192" step="64" data-f="maxTokens" data-i="${i}" value="${p.maxTokens == null ? 700 : p.maxTokens}"></div>
-      <div class="cs-fld"><label>允许空 Key</label>
-        <label class="cs-chk"><input type="checkbox" data-f="keyOptional" data-i="${i}"${p.keyOptional ? ' checked' : ''}>本地网关 / 免鉴权</label></div>
-    </div>
-    <div class="cs-row" style="margin-top:12px">
-      <button class="cs-btn mini" data-act="test-one" data-i="${i}"${busy}>测试这个</button>
-      <button class="cs-btn mini" data-act="pv-up" data-i="${i}">上移</button>
-      <button class="cs-btn mini" data-act="pv-down" data-i="${i}">下移</button>
-      <div style="flex:1"></div>
-      <span class="hint" data-testout="${i}"></span>
-    </div>
+    ${adv
+      ? `<div class="cs-grid g3">
+          <div class="cs-fld"><label>温度</label>
+            <input class="cs-in" type="number" min="0" max="2" step="0.1" data-f="temperature" data-i="${i}" value="${p.temperature == null ? 0.2 : p.temperature}"></div>
+          <div class="cs-fld"><label>最大输出 tokens</label>
+            <input class="cs-in" type="number" min="64" max="8192" step="64" data-f="maxTokens" data-i="${i}" value="${p.maxTokens == null ? 700 : p.maxTokens}"></div>
+          <div class="cs-fld"><label>允许空 Key</label>
+            <label class="cs-chk"><input type="checkbox" data-f="keyOptional" data-i="${i}"${p.keyOptional ? ' checked' : ''}>本地网关 / 免鉴权</label></div>
+        </div>
+        <div class="cs-row" style="margin-top:12px">
+          <button class="cs-btn mini" data-act="test-one" data-i="${i}"${busy}>测试这个</button>
+          <button class="cs-btn mini" data-act="pv-up" data-i="${i}">上移</button>
+          <button class="cs-btn mini" data-act="pv-down" data-i="${i}">下移</button>
+          <div style="flex:1"></div>
+          <span class="hint" data-testout="${i}"></span>
+        </div>`
+      : `<div class="cs-row" style="margin-top:10px">
+          <button class="cs-btn mini" data-act="pv-up" data-i="${i}">上移</button>
+          <button class="cs-btn mini" data-act="pv-down" data-i="${i}">下移</button>
+        </div>`}
   </div>
 </div>`;
   }
-
-  /** 空态：新装脚本一个模型都没有，直接把常用预设摆出来，点一下就加 */
   function emptyState() {
     const QUICK = ['deepseek', 'qwen-vl', 'qwen', 'glm', 'kimi', 'openai', 'magpie', 'ollama', 'lmstudio'];
     const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
@@ -459,6 +562,29 @@ CXAI.Settings = (function () {
   function paneJudge() {
     const j = cfg().ai.judge || {};
     const st = strengthNow(j);
+    const strengthBox = `
+      <div class="cs-fld">
+        <label>判定强度</label>
+        <select class="cs-sel" data-act="strength">
+          <option value="single"${st === 'single' ? ' selected' : ''}>省 token · 单模型直接作答</option>
+          <option value="fast"${st === 'fast' ? ' selected' : ''}>快速 · 单模型采样 3 次自一致</option>
+          <option value="council"${st === 'council' ? ' selected' : ''}>标准 · 多模型议会投票（推荐）</option>
+          <option value="max"${st === 'max' ? ' selected' : ''}>严格 · 议会 + 交叉复核 + 仲裁</option>
+        </select>
+        <div class="hint">改这一项会同时改模式 / 参与模型数 / 复核 / 仲裁</div>
+      </div>`;
+    if (!advancedOn()) {
+      return `
+<section class="cs-card">
+  <h2>判题 <span class="tag">一道题怎么收敛出一个答案</span></h2>
+  <p class="desc">默认「标准」就够用。越往下越准，但也更慢、更费 token。阈值、并发、超时这些去右上角「高级设置」里调。</p>
+  ${strengthBox}
+  <div class="cs-note" style="margin-top:14px">
+    现在有 <b>${(cfg().ai.providers || []).filter((p) => p.enabled !== false).length}</b> 个启用的模型：
+    只配一个时「标准」会自动降级成单模型多次采样；配两个以上才是真正的议会投票。
+  </div>
+</section>`;
+    }
     return `
 <section class="cs-card">
   <h2>判题 <span class="tag">一道题怎么收敛出一个答案</span></h2>
@@ -515,6 +641,34 @@ CXAI.Settings = (function () {
     const v = cfg().ai.vision || {};
     const ps = (cfg().ai.providers || []).filter((p) => p.enabled !== false);
     const cur = v.ocrProviderId || '';
+    const single = ps.length <= 1;
+    // 简单版只问四件事：要不要读图 / 怎么读 / 用哪个模型读 / 它要不要一起投票
+    if (!advancedOn()) {
+      return `
+<section class="cs-card">
+  <h2>读图 <span class="tag">图片题怎么处理</span></h2>
+  <p class="desc">学习通的图片挂在别的域名上，模型厂商的服务器常常拉不到，所以图片由脚本在本地抓下来、压小，再交给你指定的模型。</p>
+  <label class="cs-chk" style="margin-bottom:12px"><input type="checkbox" data-path="ai.vision.enabled"${v.enabled ? ' checked' : ''}>处理题目里的图片（关掉后带图的题只按文字判）</label>
+  <div class="cs-grid">
+    <div class="cs-fld"><label>怎么读</label>
+      <select class="cs-sel" data-path="ai.vision.strategy">
+        <option value="ocr"${v.strategy === 'ocr' ? ' selected' : ''}>先转成文字再判题（最省 token，推荐）</option>
+        <option value="inline"${v.strategy === 'inline' ? ' selected' : ''}>直接把图片发给模型（需要模型能看图）</option>
+        <option value="auto"${v.strategy === 'auto' ? ' selected' : ''}>自动：能直传就直传，否则转文字</option>
+      </select>
+    </div>
+    <div class="cs-fld"><label>用哪个模型读图</label>
+      <select class="cs-sel" data-path="ai.vision.ocrProviderId">${visionModelOptions()}</select>
+      <div class="hint">必须指定一个。脚本判断不了哪家真的能看图，所以由你选。</div>
+    </div>
+  </div>
+  <label class="cs-chk" style="margin-top:10px"><input type="checkbox" data-path="ai.vision.judgeToo"${v.judgeToo ? ' checked' : ''}>这个模型也参与判题${single ? '（只有一条模型，建议勾上）' : ''}</label>
+  <div class="cs-note" style="margin-top:14px">
+    单题最多处理 <b>${v.maxImages == null ? 6 : v.maxImages}</b> 张图、缩放长边 <b>${v.maxEdge || 1400}px</b>。
+    这些在「高级设置」里可调。
+  </div>
+</section>`;
+    }
     return `
 <section class="cs-card">
   <h2>读图 <span class="tag">图片题怎么处理</span></h2>
@@ -532,18 +686,16 @@ CXAI.Settings = (function () {
     </div>
     <div class="cs-fld">
       <label>读图模型</label>
-      <select class="cs-sel" data-path="ai.vision.ocrProviderId">
-        <option value="">自动挑（按权重选 enabled 且带视觉的）</option>
-        ${ps.map((p) => '<option value="' + esc(p.id) + '"' + (p.id === cur ? ' selected' : '') + '>' + esc(p.label || p.model || p.id) + ' · ' + esc(p.model || '') + '</option>').join('')}
-      </select>
-      <div class="hint">选中后它会变成「读图」角色，从判题议会里退出</div>
+      <select class="cs-sel" data-path="ai.vision.ocrProviderId">${visionModelOptions()}</select>
+      <div class="hint">必须指定一个（脚本无法判断哪家模型真能看图）。选中后它变成「读图」角色，从判题议会里退出</div>
     </div>
   </div>
   <label class="cs-chk" style="margin-top:10px"><input type="checkbox" data-path="ai.vision.judgeToo"${v.judgeToo ? ' checked' : ''}>读图模型同时参与判题（只配了一个模型时必须勾）</label>
   <div class="cs-line"></div>
   <div class="cs-grid g3">
     <div class="cs-fld"><label>单题最多几张图</label>
-      <input class="cs-in" type="number" min="1" max="9" data-path="ai.vision.maxImages" value="${v.maxImages == null ? 3 : v.maxImages}"></div>
+      <input class="cs-in" type="number" min="1" max="20" data-path="ai.vision.maxImages" value="${v.maxImages == null ? 6 : v.maxImages}">
+      <div class="hint">默认 6；一套卷子图文题多就往上调</div></div>
     <div class="cs-fld"><label>缩放最长边 (px)</label>
       <input class="cs-in" type="number" min="600" max="2400" step="100" data-path="ai.vision.maxEdge" value="${v.maxEdge || 1400}">
       <div class="hint">越小越省 token，1400 基本够看清公式</div></div>
@@ -719,6 +871,281 @@ CXAI.Settings = (function () {
     }
   }
 
+  /* ---------------- 首次向导（三步） ----------------
+   * 一个模型都没有时，不要把六栏设置怼到用户脸上：
+   *   ① 选一家 + 填 Key（能顺手测连通）
+   *   ② 判题强度（只给四档，内部参数自动换算）
+   *   ③ 要不要读图 + 用哪个模型读
+   * 完成后写 ui.onboarded=true，进简单版设置页。
+   */
+
+  function wizardState() {
+    if (!S.wz) {
+      S.wz = {
+        step: 1,
+        pick: '',
+        key: '',
+        model: '',
+        base: '',
+        judge: 'council',
+        visionOn: true,
+        visionId: '',
+        strategy: 'ocr',
+        out: '',
+        testing: false
+      };
+    }
+    return S.wz;
+  }
+
+  function wizardSteps(step) {
+    const names = ['添加模型', '判题强度', '读图'];
+    return (
+      '<div class="cs-steps">' +
+      [1, 2, 3]
+        .map((n) => {
+          const cls = n === step ? 'on' : n < step ? 'done' : '';
+          const dot = '<div class="st ' + cls + '"><b>' + n + '</b>' + names[n - 1] + '</div>';
+          return dot + (n < 3 ? '<div class="ln"></div>' : '');
+        })
+        .join('') +
+      '</div>'
+    );
+  }
+
+  function wizardStep1(w) {
+    const QUICK = ['deepseek', 'qwen-vl', 'qwen', 'glm', 'kimi', 'openai', 'magpie', 'ollama', 'lmstudio'];
+    const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
+    const pre = presetById(w.pick);
+    return `
+${wizardSteps(1)}
+<section class="cs-card">
+  <h2>先加一个模型 <span class="tag">第 1 步 / 共 3 步</span></h2>
+  <p class="desc">选一家（地址和模型名会自动填好），再填上你自己的 API Key。用本地网关（magpie / Ollama / LM Studio）的话 Key 可以留空。</p>
+  <div class="cs-presets">
+    ${list
+      .map(
+        (p) => `<button class="cs-pre${w.pick === p.id ? ' on' : ''}" data-act="wz-pick" data-preset="${esc(p.id)}">
+        <span class="nm">${esc(p.label)}</span>
+        <span class="bd">${esc(p.model || '')}</span>
+        <span class="bs">${esc(String(p.baseURL || '').replace(/^https?:\/\//, ''))}</span>
+        ${w.pick === p.id ? '<span class="go">已选中 ↓</span>' : ''}
+      </button>`
+      )
+      .join('')}
+  </div>
+  ${pre
+      ? `<div class="cs-grid" style="margin-top:16px">
+          <div class="cs-fld"><label>API Key${pre.keyOptional ? '（这家可留空）' : ''}</label>
+            <input class="cs-in" type="password" data-wz="key" value="${esc(w.key)}" autocomplete="off"
+              placeholder="${pre.keyOptional ? '本地网关随便填，或留空' : 'sk-…'}"></div>
+          <div class="cs-fld"><label>模型名</label>
+            <input class="cs-in" data-wz="model" value="${esc(w.model || pre.model || '')}" placeholder="${esc(pre.model || '')}"></div>
+        </div>
+        <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">地址不对？手动改 Base URL</summary>
+          <input class="cs-in" style="margin-top:8px" data-wz="base" value="${esc(w.base || pre.baseURL || '')}">
+        </details>`
+      : '<div class="cs-note" style="margin-top:14px">先点上面任意一家，再填 Key。</div>'}
+  <div class="cs-row" style="margin-top:16px;flex-wrap:wrap">
+    <button class="cs-btn" data-act="wz-test"${pre ? '' : ' disabled'}>${w.testing ? '测试中…' : '测试连通'}</button>
+    <span class="hint" id="cs-wzout" style="flex:1;min-width:160px">${esc(w.out || '')}</span>
+    <button class="cs-btn" data-act="wz-skip" title="先跳过引导，直接进设置页">先跳过</button>
+    <button class="cs-btn pri" data-act="wz-next"${pre ? '' : ' disabled'}>下一步 →</button>
+  </div>
+</section>`;
+  }
+
+  function wizardStep2(w) {
+    const opts = [
+      ['single', '省 token', '一个模型直接答，最快最便宜'],
+      ['fast', '快速', '一个模型连答几次，取一致的'],
+      ['council', '标准（推荐）', '多个模型各自答，再投票'],
+      ['max', '严格', '投票 + 交叉复核 + 仲裁，最准也最慢']
+    ];
+    return `
+${wizardSteps(2)}
+<section class="cs-card">
+  <h2>判题要多严格 <span class="tag">第 2 步 / 共 3 步</span></h2>
+  <p class="desc">只有一个模型时选「标准」也没问题 —— 脚本会自动降级成单模型多次采样，不会卡住。</p>
+  <div class="cs-choices">
+    ${opts
+      .map(
+        ([v, t, d]) =>
+          `<button class="cs-choice${w.judge === v ? ' on' : ''}" data-act="wz-judge" data-v="${v}"><b>${t}</b><span>${d}</span></button>`
+      )
+      .join('')}
+  </div>
+  <div class="cs-row" style="margin-top:16px">
+    <button class="cs-btn" data-act="wz-back">← 上一步</button>
+    <div style="flex:1"></div>
+    <button class="cs-btn pri" data-act="wz-next">下一步 →</button>
+  </div>
+</section>`;
+  }
+
+  function wizardStep3(w) {
+    const ps = cfg().ai.providers || [];
+    const opts = ps
+      .map(
+        (p) =>
+          '<option value="' + esc(p.id) + '"' + ((w.visionId || (ps[0] || {}).id) === p.id ? ' selected' : '') + '>' +
+          esc(p.label || p.model || p.id) + (p.model ? ' · ' + esc(p.model) : '') + '</option>'
+      )
+      .join('');
+    return `
+${wizardSteps(3)}
+<section class="cs-card">
+  <h2>要不要处理图片题 <span class="tag">第 3 步 / 共 3 步</span></h2>
+  <p class="desc">卷子里有图片题才会用到。给一个能看图的模型（例如 qwen-vl-max / gpt-4o）；只有一个模型时它自己读、自己判。</p>
+  <label class="cs-chk" style="margin-bottom:12px"><input type="checkbox" data-wz="visionOn"${w.visionOn ? ' checked' : ''}>处理题目里的图片</label>
+  ${w.visionOn
+      ? `<div class="cs-grid">
+          <div class="cs-fld"><label>用哪个模型读图</label>
+            <select class="cs-sel" data-wz="visionId">${opts || '<option value="">（还没有模型）</option>'}</select>
+            <div class="hint">必须选一个 —— 脚本判断不了哪家模型真能看图，所以由你指定</div></div>
+          <div class="cs-fld"><label>怎么读</label>
+            <select class="cs-sel" data-wz="strategy">
+              <option value="ocr"${w.strategy === 'ocr' ? ' selected' : ''}>先转成文字再判题（推荐）</option>
+              <option value="inline"${w.strategy === 'inline' ? ' selected' : ''}>直接把图片发给模型</option>
+              <option value="auto"${w.strategy === 'auto' ? ' selected' : ''}>自动：能直传就直传</option>
+            </select></div>
+        </div>`
+      : '<div class="cs-note">关掉后带图的题只按文字判，图片会被忽略。</div>'}
+  <div class="cs-row" style="margin-top:16px">
+    <button class="cs-btn" data-act="wz-back">← 上一步</button>
+    <div style="flex:1"></div>
+    <button class="cs-btn pri" data-act="wz-done">完成，开始用 →</button>
+  </div>
+</section>`;
+  }
+
+  function wizardHtml() {
+    const w = wizardState();
+    return w.step === 2 ? wizardStep2(w) : w.step === 3 ? wizardStep3(w) : wizardStep1(w);
+  }
+
+  /** 重建整页（切简单/高级、向导换步都走它） */
+  function renderFrame() {
+    if (!host) return;
+    host.innerHTML = frame();
+    renderMain();
+  }
+
+  const STRENGTH_MAP = {
+    single: { mode: 'single', panelSize: 1, enableCritique: false, enableArbiter: false },
+    fast: { mode: 'fast', panelSize: 1, enableCritique: false, enableArbiter: false },
+    council: { mode: 'council', panelSize: 3, enableCritique: true, enableArbiter: false },
+    max: { mode: 'council', panelSize: 3, enableCritique: true, enableArbiter: true }
+  };
+
+  /** 向导第 1 步 → 第 2 步：校验并真正写入这个 provider */
+  function wizardCommitProvider() {
+    const w = wizardState();
+    const pre = presetById(w.pick);
+    if (!pre) return { ok: false, msg: '先点一家模型' };
+    const base = String(w.base || pre.baseURL || '').trim();
+    const model = String(w.model || pre.model || '').trim();
+    const key = String(w.key || '').trim();
+    if (!base || !model) return { ok: false, msg: '地址和模型名要填全' };
+    if (!key && !pre.keyOptional && !CXAI.isLocalURL(base)) return { ok: false, msg: '这家需要填 API Key' };
+    const c = cfg();
+    const list = c.ai.providers || [];
+    const fresh = CXAI.normalizeProvider(
+      {
+        id: CXAI.U.uid('p'),
+        label: pre.label,
+        preset: pre.id,
+        baseURL: base,
+        model: model,
+        apiStyle: pre.apiStyle || 'openai',
+        apiKey: key,
+        weight: 1,
+        temperature: 0.2,
+        maxTokens: 700,
+        enabled: true,
+        vision: !!pre.vision,
+        keyOptional: !!pre.keyOptional || CXAI.isLocalURL(base),
+        role: 'judge'
+      },
+      list.length
+    );
+    list.push(fresh);
+    c.ai.providers = list;
+    w.visionId = fresh.id;
+    CXAI.Cfg.save();
+    return { ok: true, provider: fresh };
+  }
+
+  /** 向导完成：把判题 / 读图一次性写进配置 */
+  function wizardDone() {
+    const w = wizardState();
+    const c = cfg();
+    const m = STRENGTH_MAP[w.judge] || STRENGTH_MAP.council;
+    Object.keys(m).forEach((k) => (c.ai.judge[k] = m[k]));
+
+    const ps = c.ai.providers || [];
+    if (w.visionOn && ps.length) {
+      const id = w.visionId || ps[0].id;
+      const single = ps.filter((p) => p.enabled !== false).length <= 1;
+      c.ai.vision.enabled = true;
+      c.ai.vision.strategy = w.strategy || 'ocr';
+      c.ai.vision.ocrProviderId = id;
+      c.ai.vision.judgeToo = single;
+      ps.forEach((p) => {
+        if (p.id === id) {
+          p.role = single ? 'both' : 'vision';
+          p.vision = true;
+        } else {
+          p.role = 'judge';
+          p.vision = false;
+        }
+      });
+    } else {
+      c.ai.vision.enabled = false;
+      c.ai.vision.strategy = 'off';
+      ps.forEach((p) => {
+        p.role = 'judge';
+        p.vision = false;
+      });
+    }
+    c.ai.providers = ps.map((x, i) => CXAI.normalizeProvider(x, i));
+    c.ui.onboarded = true;
+    CXAI.Cfg.save();
+    S.wz = null;
+    S.wzActive = false;
+    S.tab = 'model';
+    renderFrame();
+    toast('配置完成 · 回到考试页刷新即可', 'ok');
+  }
+
+  async function wizardTest() {
+    const w = wizardState();
+    const pre = presetById(w.pick);
+    if (!pre) return;
+    const probe = CXAI.normalizeProvider({
+      baseURL: String(w.base || pre.baseURL || '').trim(),
+      model: String(w.model || pre.model || '').trim(),
+      apiKey: String(w.key || '').trim(),
+      apiStyle: pre.apiStyle || 'openai',
+      keyOptional: !!pre.keyOptional || CXAI.isLocalURL(String(w.base || pre.baseURL || ''))
+    }, 0);
+    w.testing = true;
+    w.out = '正在请求…';
+    renderFrame();
+    try {
+      const r = await CXAI.AI.ping(probe);
+      w.out = '✓ 连通 · ' + (r.ms || '') + 'ms · ' + CXAI.U.truncate(String(r.text || '').replace(/\s+/g, ' '), 30);
+      w.testing = false;
+      renderFrame();
+      toast('连通', 'ok');
+    } catch (e) {
+      w.out = '✗ ' + (e && e.message ? e.message : e);
+      w.testing = false;
+      renderFrame();
+      toast('连不通：' + w.out, 'bad');
+    }
+  }
+
   /* ---------------- 渲染 ---------------- */
 
   function paneHtml(tab) {
@@ -740,25 +1167,30 @@ CXAI.Settings = (function () {
 
   /** 整页骨架（只在 mount 时渲染一次） */
   function frame() {
+    const wiz = !!S.wzActive;
     return `${topbar()}
-<div class="cs-layout">
-  ${nav()}
+<div class="cs-layout${wiz ? ' wiz' : ''}">
+  ${wiz ? '' : nav()}
   <main class="cs-main" id="cs-main"></main>
 </div>
 <div class="cs-toast" id="cs-toast"></div>`;
   }
-
-  /** 只重建右栏：切页签 / 模型增删后调用 */
   function renderMain() {
     const main = q('#cs-main');
     if (!main) return;
+    // 向导进行中：整块交给向导，不看页签
+    if (S.wzActive) {
+      main.innerHTML = wizardHtml();
+      refreshMeta();
+      return;
+    }
+    if (!advancedOn() && SIMPLE_TABS.indexOf(S.tab) < 0) S.tab = 'model';
+    ensureVisionModel();
     main.innerHTML = paneHtml(S.tab);
-    // 页签高亮
     qa('.cs-nav .it').forEach((el) => el.classList.toggle('on', el.getAttribute('data-tab') === S.tab));
     refreshMeta();
     if (S.tab === 'diag' && !S.diag) collectDiag();
   }
-
   /* ---------------- 字段读写 ---------------- */
 
   const NUM_FIELDS = { weight: 1, temperature: 1, maxTokens: 1 };
@@ -1166,6 +1598,70 @@ CXAI.Settings = (function () {
       case 'pv-add-preset':
         addPresetProvider(el.getAttribute('data-preset'));
         break;
+      case 'toggle-advanced': {
+        const on = !advancedOn();
+        CXAI.Cfg.set('ui.advanced', on);
+        S.tab = 'model';
+        renderFrame();
+        toast(on ? '已切到高级设置：权重 / 阈值 / 超时 / 运行 / 备份 / 诊断' : '已切回简单设置（专业项隐藏，值仍保留）', 'ok');
+        break;
+      }
+      case 'wz-pick': {
+        const w = wizardState();
+        w.pick = el.getAttribute('data-preset') || '';
+        const pre = presetById(w.pick);
+        w.key = '';
+        w.model = pre ? pre.model || '' : '';
+        w.base = pre ? pre.baseURL || '' : '';
+        w.out = '';
+        renderFrame();
+        break;
+      }
+      case 'wz-judge': {
+        const w = wizardState();
+        w.judge = el.getAttribute('data-v') || 'council';
+        renderFrame();
+        break;
+      }
+      case 'wz-test':
+        wizardTest();
+        break;
+      case 'wz-next': {
+        const w = wizardState();
+        if (w.step === 1) {
+          const r = wizardCommitProvider();
+          if (!r.ok) {
+            toast(r.msg, 'warn');
+            break;
+          }
+          w.step = 2;
+          renderFrame();
+        } else if (w.step === 2) {
+          w.step = 3;
+          renderFrame();
+        } else {
+          wizardDone();
+        }
+        break;
+      }
+      case 'wz-back': {
+        const w = wizardState();
+        w.step = Math.max(1, w.step - 1);
+        renderFrame();
+        break;
+      }
+      case 'wz-done':
+        wizardDone();
+        break;
+      case 'wz-skip': {
+        CXAI.Cfg.set('ui.onboarded', true);
+        S.wz = null;
+        S.wzActive = false;
+        S.tab = 'model';
+        renderFrame();
+        toast('已跳过引导 · 需要细调时点右上角「高级设置」', 'ok');
+        break;
+      }
       case 'pv-del':
         delProvider(i);
         break;
@@ -1219,6 +1715,27 @@ CXAI.Settings = (function () {
     const t = e.target;
     if (!t || !t.getAttribute) return;
     const act = t.getAttribute('data-act');
+
+    // 向导里的字段（data-wz）
+    const wzKey = t.getAttribute('data-wz');
+    if (wzKey) {
+      const w = wizardState();
+      if (wzKey === 'visionOn') {
+        w.visionOn = !!t.checked;
+        renderFrame();
+        return;
+      }
+      if (wzKey === 'visionId') {
+        w.visionId = t.value;
+        return;
+      }
+      if (wzKey === 'strategy') {
+        w.strategy = t.value;
+        return;
+      }
+      w[wzKey] = t.value;
+      return;
+    }
 
     // 「+ 从预设添加…」下拉
     if (act === 'add-preset-select') {
@@ -1301,6 +1818,12 @@ CXAI.Settings = (function () {
   function onInput(e) {
     const t = e.target;
     if (!t || !t.getAttribute) return;
+    const wz = t.getAttribute('data-wz');
+    if (wz) {
+      const w = wizardState();
+      w[wz] = t.value;
+      return;
+    }
     if (!t.getAttribute('data-path') && !t.getAttribute('data-f')) return;
     const type = t.getAttribute('type') || 'text';
     if (type === 'checkbox') return;
@@ -1361,6 +1884,8 @@ CXAI.Settings = (function () {
     host.innerHTML = frame();
 
     CXAI.Cfg.load();
+    S.wz = null;
+    S.wzActive = needWizard();
     // 支持 /settings.html?tab=judge 直接落到指定栏（排查 / 收藏夹直达都方便）
     const wantTab = (function () {
       try {

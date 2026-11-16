@@ -128,7 +128,7 @@ CXAI.DEFAULT_CONFIG = {
        */
       strategy: 'ocr',
       /** 单题最多送几张图 */
-      maxImages: 3,
+      maxImages: 6,
       /** 缩放后最长边（px），越小越省 token */
       maxEdge: 1400,
       /** JPEG 质量 0.1~1 */
@@ -275,7 +275,11 @@ CXAI.DEFAULT_CONFIG = {
     y: 96,
     collapsed: false,
     /** 独立设置中心地址；留空 = 用脚本内置的官方地址（换部署位时才需要填） */
-    settingsURL: ''
+    settingsURL: '',
+    /** 设置中心：高级模式（显示权重/温度/阈值/超时/运行/备份/诊断），默认关 */
+    advanced: false,
+    /** 设置中心：是否走完过首次向导（false 且一个模型都没有时才显示向导） */
+    onboarded: false
   }
 };
 

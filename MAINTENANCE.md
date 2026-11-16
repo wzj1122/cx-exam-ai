@@ -1,4 +1,4 @@
-> 最后更新：2026-11-16 ｜ 当前版本：1.8.1（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.8.2（`package.json`）
 
 # MAINTENANCE
 
@@ -67,7 +67,7 @@ cx-exam-ai/
 | `src/06-guard.js` | `CXAI.Guard.{install,uninstall,pace,dismissDialogs}` | `document.hidden`/`visibilityState`/`hasFocus` 伪装、吞掉 `visibilitychange`/`blur`、`confirm` 自动 true、弹窗白名单点击、题间节奏（含每 N 题长停顿与 3% 概率犹豫） | `CXAI.Cfg` `CXAI.U` `CXAI.Log` |
 | `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（`deepseek`/`custom`/`magpie`）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行；`settingsURL()` / `openSettingsPage()` 打开独立设置中心，设置面板底部「独立设置页 ↗」 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
 | `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导；v1.8.0 起 `ready()` 先问 `CXAI.Settings.isHere()`，命中就整页接管设置中心并 return | 全部模块 |
-| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html`（Pages 上是 `/settings`）整页接管，六栏（模型/判题/读图/运行/备份/诊断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取 + `AI.ping` 单卡测试；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
+| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html`（Pages 上是 `/settings`）整页接管。默认「简单版」三栏（模型/判题/读图），`ui.advanced` 打开后才是六栏完整版；首次无模型时走 `wizardStep1/2/3` 三步向导（`S.wzActive` 控制，勿用 providers 是否为空判断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取 + `AI.ping` 单卡测试；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
 | `index.html` | — | Cloudflare Pages 落地页：三处一键安装入口（本站 `/dist/cx-exam-ai.user.js`、GitHub raw、Greasy Fork）、四件事、独立设置中心入口、三步上手、收款码。样式全内联，无外部依赖；改版式只动这一个文件 | `dist/cx-exam-ai.user.js`（下载路径）、`images/*.png` |
 | `settings.html` | — | 设置中心骨架：深色兜底页（含未接管时的排查步骤）+ `<html data-cxai-settings>` 标记。body 会被脚本清空后整页渲染，所以这里**只放兜底与标记，别指望它自己渲染表单** | `src/09-settings.js`（渲染方）、`index.html`（入口） |
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
@@ -225,6 +225,26 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.2（2026-11-17）设置中心：简单 / 高级两档 + 首次三步向导
+
+- **简单版（默认）**：`SIMPLE_TABS = ['model','judge','vision']`，`nav()` 只渲染这三栏；
+  `providerCard()` 的 `adv` 分支去掉权重 / 温度 / maxTokens / 接口协议 / 允许空 Key；
+  `paneJudge()` 只留「判定强度」四档；`paneVision()` 只留开关 / 策略 / 读图模型 / 兼任判题。
+- **高级开关**：`ui.advanced`（默认 false），顶栏 `data-act="toggle-advanced"`，切换后 `renderFrame()` 重建导航与右栏。
+- **首次向导**：`S.wzActive` + `S.wz`（step / pick / key / model / base / judge / visionOn / visionId / strategy），
+  `wizardHtml()` → `wizardStep1/2/3`；第 1 步 `wizardCommitProvider()` 落库，第 3 步 `wizardDone()` 一次写入
+  判题强度（`STRENGTH_MAP`）与读图设置并置 `ui.onboarded = true`。
+  **坑：向导模式必须用 `S.wzActive` 判断，不能用 `providers.length === 0`** —— 第 1 步一提交模型就变非空，
+  第 2/3 步会被直接跳过（本版实测踩到并修掉）。
+- **`ensureVisionModel()`**：读图模型必须落地成具体 id；空 / 指向已删模型时落到第一个启用模型，
+  单模型时自动 `judgeToo = true`（否则判题面板为空）。
+- **读图下拉去掉「自动挑」**（`visionModelOptions()`）：脚本无法判断某家模型是否支持视觉，改由用户指定。
+- `01-core`：`vision.maxImages` 默认 6；`ui.advanced` / `ui.onboarded` 新增。
+- `03b-vision`：`maxImages` clamp 从 1..8 放宽到 1..20。
+- `README`：补「简单版与高级版」「第一次打开：三步向导」两节。
+- 验证：`check` 11 模块；`test-dom` 111/0；无头 Chrome 探针跑完三步向导（wizard1/2/3 全 true、visionOpts=1），
+  简单版 navItems=3 且无权重/温度字段，高级版 advNavItems=6 且有，读图下拉 `visionAutoOpt=false`。
 
 ### v1.8.1（2026-11-16）修首页误判 / 默认模型 / 头部排版
 
