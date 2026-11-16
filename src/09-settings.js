@@ -389,8 +389,9 @@ CXAI.Settings = (function () {
   <span class="cs-pill ${st.cls}" id="cs-pill-store" title="${esc(st.hint)}">${esc(st.tag)}</span>
   <span class="cs-pill" id="cs-pill-count">${n} 个已启用模型</span>
   <div class="spacer"></div>
-  <button class="cs-btn adv" data-act="sync-chaoxing" title="把当前配置带到 chaoxing.com（油猴存储按域名隔离，必须搬一次）"
-    ${(cfg().ai.providers || []).length ? '' : 'disabled'}>同步到考试页</button>
+  <button class="cs-btn adv" data-act="sync-top" id="cs-sync-top"
+    title="${(CXAI.Sync && CXAI.Sync.enabled && CXAI.Sync.enabled()) ? '把当前配置加密后上传到云端（考试页粘同步码即可自动拉取）' : '生成同步码并把配置加密上传到云端；考试页粘一次码就够'}"
+    ${(cfg().ai.providers || []).length ? '' : 'disabled'}>${(CXAI.Sync && CXAI.Sync.enabled && CXAI.Sync.enabled()) ? '上传到云端' : '生成同步码并上传'}</button>
   <button class="cs-btn${adv ? '' : ' adv'}" data-act="toggle-advanced" id="cs-adv"
     title="${adv ? '隐藏权重、温度、阈值、超时等专业项，回到简单设置' : '显示权重、温度、阈值、超时、运行、备份、诊断等专业项'}">${adv ? '切回简单设置' : '高级设置'}</button>
   <a class="cs-btn" href="/" target="_self" title="回到安装 / 说明页">安装页</a>
@@ -567,6 +568,7 @@ CXAI.Settings = (function () {
   <h2>模型 <span class="tag">判题与读图都从这里配</span></h2>
   <p class="desc">每个模型 = 一条 OpenAI 兼容端点。填 Base URL + Key + 模型名即可；本地网关（Ollama / LM Studio 等）可以留空 Key。
   点「拉取」会向端点要一遍模型清单，直接选一个填进去，省得手打。</p>
+  ${syncBarHtml()}
   <div id="cs-pvbox">${ps.map((p, i) => providerCard(p, i)).join('') || emptyState()}</div>
   <div class="cs-row" style="margin-top:14px">
     <button class="cs-btn pri" data-act="pv-add">+ 空白模型</button>
@@ -577,7 +579,7 @@ CXAI.Settings = (function () {
     <button class="cs-btn" data-act="test-all">测试全部连接</button>
     <button class="cs-btn" data-act="pv-collapse">全部收起</button>
     <div style="flex:1"></div>
-    <span class="hint" id="cs-sync-tip">${(cfg().ai.providers || []).length ? '配好点右上角「同步到考试页」，配置才会到 chaoxing.com' : ''}</span>
+    <span class="hint" id="cs-sync-tip">${(cfg().ai.providers || []).length ? '配好后点右上角「生成同步码并上传」，再把它粘到考试页面板里拉一次' : ''}</span>
     <a class="cs-btn" href="https://greasyfork.org/zh-CN/scripts/605687" target="_blank" rel="noopener" title="看各家的 Key 在哪申请">去哪拿 Key？</a>
   </div>
   <div class="cs-out" id="cs-testout" style="display:none;margin-top:12px"></div>
@@ -830,6 +832,43 @@ CXAI.Settings = (function () {
 
   /* ---------------- 备份面板 ---------------- */
 
+  /** 模型页顶部的云同步状态条（简单版也看得到，不用进高级） */
+  function syncBarHtml() {
+    const code = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
+    if (!code) {
+      return `<div class="cs-note" style="margin-bottom:12px">
+        <b>还没开云同步。</b>点右上角「生成同步码并上传」→ 把这串码粘到考试页面板里拉一次，
+        之后换子域 / 换设备都自动同步（配置在本地加密后才上传，密钥不上传）。
+      </div>`;
+    }
+    return `<div class="cs-note" style="margin-bottom:12px;border-style:solid;background:#f0f7ff;border-color:#c7d7f7">
+      <b>云同步已开启</b> · 同步码
+      <code style="font-family:ui-monospace,Menlo,monospace">${esc(code)}</code>
+      <span class="cs-row" style="display:inline-flex;gap:6px;margin-left:6px">
+        <button class="cs-btn mini" data-act="sync-copy">复制</button>
+        <button class="cs-btn mini" data-act="sync-now">立即上传</button>
+      </span>
+      <div class="hint" style="margin-top:4px">考试页面板里粘这串码拉一次即可；之后每次改配置都会自动上传。别公开这串码 —— 它同时是解密密钥。</div>
+    </div>`;
+  }
+
+  /** 顶栏云同步按钮：未开启就先生成+上传，已开启就是手动上传一次 */
+  async function syncTopClick() {
+    const btn = q('#cs-sync-top');
+    if (btn) btn.disabled = true;
+    try {
+      if (CXAI.Sync && CXAI.Sync.enabled && CXAI.Sync.enabled()) {
+        const r = await CXAI.Sync.syncNow();
+        toast('已上传到云端 · ' + r.bytes + ' 字符', 'ok');
+      } else {
+        await syncNew();
+      }
+    } catch (e) {
+      toast('失败：' + (e && e.message ? e.message : e), 'bad');
+    }
+    if (btn) btn.disabled = false;
+  }
+
   /** 备份页里的云同步状态块 */
   function cloudSyncHtml() {
     const code = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
@@ -860,10 +899,11 @@ CXAI.Settings = (function () {
   async function syncNew() {
     try {
       const code = await CXAI.Sync.newCode();
-      renderMain();
+      renderFrame(); // 顶栏按钮文案 / 状态条 / 备份页一起刷新
       const hint = q('#cs-cloudhint');
       if (hint) hint.textContent = '已上传 · ' + code.slice(0, 8) + '…';
-      toast('云同步已开启 · 把同步码抄到考试页', 'ok');
+      copyText(code, '同步码已复制 · 粘到考试页面板里拉一次');
+      toast('云同步已开启 · 同步码已复制', 'ok');
     } catch (e) {
       toast('生成失败：' + (e && e.message ? e.message : e), 'bad');
     }
@@ -909,15 +949,6 @@ CXAI.Settings = (function () {
     浏览器存储按域隔离，纯前端传不过去。云同步把配置<b>在本地加密后</b>存到 Cloudflare KV（密钥不上传），
     考试页只要填一次同步码，之后每次打开自动拉取。
     ${cloudSyncHtml()}
-  </div>
-  <div class="cs-note" style="margin-bottom:14px">
-    <b>备用：离线搬运（只对同一个子域有效）</b>：把配置编码进链接打开学习通，脚本在那一侧落库。
-    但它只能落到打开的那个子域，考试页在别的子域时仍读不到 —— 有云同步就别用它。
-    <div class="cs-row" style="margin-top:10px;flex-wrap:wrap">
-      <button class="cs-btn" data-act="sync-chaoxing">同步到学习通 →</button>
-      <button class="cs-btn" data-act="copy-code">复制配置码</button>
-      <span class="hint" id="cs-synchint"></span>
-    </div>
   </div>
   <div class="cs-row" style="margin-bottom:10px">
     <button class="cs-btn pri" data-act="export-text">导出到下面文本框</button>
@@ -1985,6 +2016,9 @@ ${wizardSteps(3)}
         break;
       case 'sync-new':
         syncNew();
+        break;
+      case 'sync-top':
+        syncTopClick();
         break;
       case 'sync-now':
         syncNowClick();

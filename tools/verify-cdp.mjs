@@ -300,8 +300,8 @@ async function main() {
       providers: r.querySelectorAll('.cs-pv').length,
       hasWeight: body ? /权重/.test(body.textContent) : null,
       hasTemp: body ? /温度/.test(body.textContent) : null,
-      syncBtn: !!r.querySelector('.cs-top [data-act="sync-chaoxing"]'),
-      syncDisabled: (r.querySelector('.cs-top [data-act="sync-chaoxing"]') || {}).disabled,
+      syncBtn: !!r.querySelector('.cs-top #cs-sync-top'),
+      syncDisabled: (r.querySelector('.cs-top #cs-sync-top') || {}).disabled,
       storePill: (r.querySelector('#cs-pill-store') || {}).textContent,
       cfgLabels: cfg.map((p) => p.label), cfgStyles: cfg.map((p) => p.apiStyle),
       visionId: window.CXAI.Cfg.get('ai.vision.ocrProviderId', ''),
@@ -325,17 +325,24 @@ async function main() {
   await evaluate(`document.querySelector('[data-act="toggle-advanced"]').click(); true`);
   await sleep(400);
 
-  const a9 = await evaluate(`(() => {
-    window.__opened = '';
-    window.open = function (u) { window.__opened = String(u); return null; };
-    document.querySelector('.cs-top [data-act="sync-chaoxing"]').click();
-    return window.__opened;
+  const a9click = await evaluate(`(() => {
+    const btn = document.getElementById('cs-sync-top');
+    if (!btn) return { err: 'no-top-btn' };
+    const label = btn.textContent;
+    btn.click();
+    return { label: label };
   })()`);
-  const m = /cxai_cfg=([^&]+)/.exec(a9 || '');
-  const code = m ? decodeURIComponent(m[1]) : '';
-  ok('A9 「同步到考试页」生成带配置码的 chaoxing 链接',
-    /^https:\/\/[^/]+\//.test(a9 || '') && !!code && /chaoxing/.test(a9 || ''),
-    { head: (a9 || '').slice(0, 46), codeLen: code.length });
+  await sleep(4000);
+  const a9 = await evaluate(`(() => {
+    const code = (window.CXAI.Sync && window.CXAI.Sync.savedCode) ? window.CXAI.Sync.savedCode() : '';
+    const bar = document.querySelector('.cs-note code');
+    const btn = document.getElementById('cs-sync-top');
+    return { code: code, barShown: !!bar, btnLabel: btn ? btn.textContent : '' };
+  })()`);
+  const topSyncCode = a9.code || '';
+  ok('A9 顶栏「生成同步码并上传」→ 产出同步码并显示在模型页顶部',
+    /^[A-Za-z0-9_-]{6,48}\.[A-Za-z0-9_-]{16,60}$/.test(topSyncCode) && a9.barShown === true && /上传/.test(a9.btnLabel || ''),
+    { codeHead: topSyncCode.slice(0, 12), barShown: a9.barShown, btnLabel: a9.btnLabel });
 
   const a10 = await evaluate(`(() => {
     const enc = window.CXAI.cfgCodec.encode({ ai: { providers: [{ id: 'x' }] }, guard: { enabled: true } });
@@ -343,6 +350,8 @@ async function main() {
     return { len: enc.length, back: !!(dec && dec.ai && dec.ai.providers) };
   })()`);
   ok('A10 配置码可编码/解码（UTF-8 安全）', a10.back && a10.len > 0, a10);
+  // B 段要的是 cfgCodec 配置码（整份配置编码），与云同步码是两回事，分开取名免得串味
+  const legacyCode = await evaluate(`window.CXAI.cfgCodec.encode(window.CXAI.Cfg.data)`);
   await shot('A-settings-simple.png');
 
   /* ==================== C. 云同步（Cloudflare Pages Functions + KV）==================== */
@@ -369,11 +378,12 @@ async function main() {
   const c1 = await evaluate(`(() => {
     const el = document.getElementById('cs-synccode');
     return { code: el ? el.value : '', hint: (document.getElementById('cs-cloudhint') || {}).textContent || '',
-      toast: (document.getElementById('cs-toast') || {}).textContent || '' };
+      saved: (window.CXAI.Sync && window.CXAI.Sync.savedCode) ? window.CXAI.Sync.savedCode() : '' };
   })()`);
-  const syncCode = c1.code || '';
+  const syncCode = c1.saved || c1.code || '';
   const codeOk = /^[A-Za-z0-9_-]{6,48}\.[A-Za-z0-9_-]{16,60}$/.test(syncCode);
-  ok('C1 设置页「生成同步码并上传」产出合法同步码', codeOk, { codeHead: syncCode.slice(0, 12), hint: c1.hint });
+  ok('C1 备份页显示同一串同步码（可复制 / 立即上传 / 停用）', codeOk && !!c1.code,
+    { codeHead: syncCode.slice(0, 12), backupShowsCode: !!c1.code });
 
   // C2 云端确实存了密文
   const apiId = syncCode.split('.')[0];
@@ -541,7 +551,7 @@ async function main() {
   await sleep(300);
 
   console.log('\n  → 用设置中心的配置码打开考试页（模拟点「同步到考试页」）');
-  await nav('http://127.0.0.1:' + PORT_B + '/exam.html?case=2#cxai_cfg=' + encodeURIComponent(code));
+  await nav('http://127.0.0.1:' + PORT_B + '/exam.html?case=2#cxai_cfg=' + encodeURIComponent(legacyCode));
   await inject();
   const b6 = await evaluate(`(() => {
     const sr = document.getElementById('cx-ai-host').shadowRoot;

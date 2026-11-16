@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.9.0（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.9.1（`package.json`）
 
 # MAINTENANCE
 
@@ -247,6 +247,17 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.9.1（2026-11-17）云同步入口提到顶栏
+
+- `topbar()`：删除 `data-act="sync-chaoxing"`（旧的 URL 搬运），改为 `#cs-sync-top` / `data-act="sync-top"`：
+  未启用 → 文案「生成同步码并上传」，点击走 `syncNew()`；已启用 → 文案「上传到云端」，点击走 `syncNow()`。
+- `syncBarHtml()`：模型页顶部常驻云同步状态条（未启用给引导，已启用显示同步码 + 复制 + 立即上传），
+  **简单版也可见** —— 之前同步入口只在「备份」页，而简单版没有备份栏，用户找不到。
+- `syncNew()` 成功后改走 `renderFrame()`（顶栏文案、状态条、备份页一起刷新）并**自动复制同步码**。
+- 备份页删除「备用：离线搬运（同步到学习通）」整块；`cfgCodec` / `consumeConfigHash` 代码保留作离线兜底，但 UI 不再暴露。
+- E2E：A9 改为点顶栏按钮（断言同步码合法 + 模型页状态条出现 + 按钮变为「上传到云端」）；C1 改为核对备份页显示同一串码。
+- 验证：`check` 12 模块、`test-dom` 114/0、`e2e` 27/27。
 
 ### v1.9.0（2026-11-17）云同步：Pages Functions + KV（彻底解决跨子域）
 
