@@ -1,4 +1,4 @@
-> 最后更新：2026-11-16 ｜ 当前版本：1.8.0（`package.json`）
+> 最后更新：2026-11-16 ｜ 当前版本：1.8.1（`package.json`）
 
 # MAINTENANCE
 
@@ -225,6 +225,22 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.1（2026-11-16）修首页误判 / 默认模型 / 头部排版
+
+- **BUGFIX（严重）**：`09-settings.isHere()` 里的 Pages 兜底判断 `^\/(settings)?(\.html)?$` 把根路径 `/` 也命中，
+  于是打开 `cx-exam-ai.pages.dev` 首页就被整页接管；设置页上「安装页」链接指回 `/`，形成回不去的死循环。
+  现在只认 `^\/settings(\.html)?$`。**改这段判断时任何"顺手放宽"的写法都要先在首页验证一遍。**
+- **默认不预置模型**：`DEFAULT_CONFIG.ai.providers` 改为 `[]`。原来内置 3 个空 Key 模板，用户会误以为已配好；
+  现在首次进设置页是空态 + 九个预设一键添加（`addPresetProvider()`，`data-act="pv-add-preset"`），
+  非空时按钮行也多一个「+ 从预设添加…」下拉。`08-main` 原有"当前域名还没配置"的提示因此才真正会被触发。
+- **预设补全**：`CXAI.PRESETS` 实际只有 `deepseek` / `custom` / `magpie` 三条，文档声称 10 条属虚报。
+  已补 `qwen-vl` / `qwen` / `glm` / `kimi` / `openai` / `ollama` / `lmstudio`（本地网关两条带 `keyOptional`）。
+- **头部排版**：状态胶囊文案缩短（`油猴存储 · 跨域共享` / `仅本域存储` / `内存 · 未持久化`）并加 `white-space:nowrap`、
+  `.cs-top` 改 `flex-wrap:wrap`，窄窗口不再挤成两行。
+- `README.md` 徽章版本号同步 1.8.1（shields.io 徽章是硬编码，改版本时必须手动改，否则仓库首页一直显示旧版本）。
+- 验证：`check` 11 模块通过（PRESETS 10 条）；`test-dom` 111/0；无头 Chrome 实测首页不再被接管、`/settings` 空态出 9 张预设卡、
+  头部胶囊单行。
 
 ### v1.8.0（2026-11-16）独立设置中心（网页版配置页）
 

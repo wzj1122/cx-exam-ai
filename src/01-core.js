@@ -22,6 +22,71 @@ CXAI.PRESETS = [
     hint: '文本模型，便宜，适合做判题主力'
   },
   {
+    id: 'qwen-vl',
+    label: '通义千问 VL',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-vl-max',
+    apiStyle: 'openai',
+    vision: true,
+    hint: '阿里云百炼的视觉模型，能直接读题图；Key 在 DashScope 控制台申请'
+  },
+  {
+    id: 'qwen',
+    label: '通义千问',
+    baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '纯文本，便宜、并发宽松，适合当议会里的普通一票'
+  },
+  {
+    id: 'glm',
+    label: '智谱 GLM',
+    baseURL: 'https://open.bigmodel.cn/api/paas/v4',
+    model: 'glm-4-plus',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '中文题感不错；Key 在智谱开放平台申请'
+  },
+  {
+    id: 'kimi',
+    label: 'Kimi（Moonshot）',
+    baseURL: 'https://api.moonshot.cn/v1',
+    model: 'moonshot-v1-8k',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '长文本强，读长题干不吃力'
+  },
+  {
+    id: 'openai',
+    label: 'OpenAI',
+    baseURL: 'https://api.openai.com/v1',
+    model: 'gpt-4o-mini',
+    apiStyle: 'openai',
+    vision: true,
+    hint: '国内直连多半要走代理；也可以把 Base URL 指向任何 OpenAI 兼容中转'
+  },
+  {
+    id: 'ollama',
+    label: 'Ollama',
+    baseURL: 'http://127.0.0.1:11434/v1',
+    model: 'qwen2.5:7b',
+    apiStyle: 'openai',
+    vision: false,
+    keyOptional: true,
+    hint: '本地跑，不用 Key；模型名写 ollama list 里那个'
+  },
+  {
+    id: 'lmstudio',
+    label: 'LM Studio',
+    baseURL: 'http://127.0.0.1:1234/v1',
+    model: 'local-model',
+    apiStyle: 'openai',
+    vision: false,
+    keyOptional: true,
+    hint: '本地服务器开在 1234；模型名填当前加载的那个'
+  },
+  {
     id: 'custom',
     label: '自定义',
     baseURL: '',
@@ -47,50 +112,10 @@ CXAI.DEFAULT_CONFIG = {
   ai: {
     // 参与判定的模型面板（第一轮各自独立作答）
     // 字段说明：apiStyle=openai|anthropic|gemini，role=judge|vision|both
-    providers: [
-      {
-        id: 'deepseek',
-        label: 'DeepSeek Chat',
-        baseURL: 'https://api.deepseek.com/v1',
-        apiKey: '',
-        model: 'deepseek-chat',
-        apiStyle: 'openai',
-        role: 'judge',
-        weight: 1,
-        temperature: 0.2,
-        enabled: true,
-        vision: false,
-        keyOptional: false
-      },
-      {
-        id: 'qwen-vl',
-        label: '通义千问 VL',
-        baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-        apiKey: '',
-        model: 'qwen-vl-max',
-        apiStyle: 'openai',
-        role: 'vision',
-        weight: 1,
-        temperature: 0.2,
-        enabled: true,
-        vision: true,
-        keyOptional: false
-      },
-      {
-        id: 'glm',
-        label: '智谱 GLM-4-Plus',
-        baseURL: 'https://open.bigmodel.cn/api/paas/v4',
-        apiKey: '',
-        model: 'glm-4-plus',
-        apiStyle: 'openai',
-        role: 'judge',
-        weight: 1,
-        temperature: 0.2,
-        enabled: true,
-        vision: false,
-        keyOptional: false
-      }
-    ],
+    // 默认一个模型都不预置：空 Key 的"模板模型"会让人以为已经配好了，
+    // 新装用户打开设置页就该是空态 + 一键添加预设。
+    providers: [],
+
     /** 读图（多模态）流水线 */
     vision: {
       /** 总开关：关闭后题目图片一律忽略 */

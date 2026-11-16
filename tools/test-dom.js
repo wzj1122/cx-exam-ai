@@ -761,8 +761,13 @@ function ok(cond, label, extra) {
 
   console.log('\n[13] v1.3 预设精简 + 读图模型/判题模型分工');
   const pids = (CXAI.PRESETS || []).map((p) => p.id);
-  ok(pids.length === 3, '预设只剩 3 个', pids);
-  ok(pids.join(',') === 'deepseek,custom,magpie', '预设顺序 deepseek / 自定义 / magpie', pids);
+  // v1.8.1 起预设补全到 10 条（原来只有 deepseek / custom / magpie，文档却写 10 条属虚报）
+  ok(pids.length === 10, '预设覆盖 10 家（含两家本地网关）', pids);
+  ok(
+    pids[0] === 'deepseek' && pids.indexOf('custom') > 0 && pids.indexOf('magpie') > pids.indexOf('custom'),
+    '顺序：deepseek 在最前，custom / magpie 排在后面',
+    pids
+  );
   const customPre = (CXAI.PRESETS || []).filter((p) => p.id === 'custom')[0];
   ok(!!customPre && customPre.apiStyle === 'openai', '自定义默认 OpenAI 兼容', customPre && customPre.apiStyle);
   ok(!customPre.vision, '自定义默认不当读图模型', customPre.vision);

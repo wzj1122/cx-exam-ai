@@ -1,8 +1,8 @@
 # CX 考试 AI 大脑
 
-**超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。
+**超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.7.1-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.8.1-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -185,6 +185,13 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.8.1（2026-11-16）修设置中心的三个问题
+
+- **修首页被整页吞掉**：`isHere()` 把 Pages 根路径 `/` 也当成设置页，于是打开 `cx-exam-ai.pages.dev` 直接被接管，设置页上点「安装页」（链接回 `/`）又进设置页、回不去。现在只认 `/settings` 与 `/settings.html`。
+- **新装不再"自带模型"**：`DEFAULT_CONFIG.ai.providers` 改为空数组。以前默认塞了 3 个空 Key 的模板模型，看起来像已经配好了。现在首次打开是空态 + 九个预设一键添加。
+- **预设补全到 10 条**：`CXAI.PRESETS` 此前实际只有 `deepseek` / `magpie` / `custom` 三条，文档里写的 qwen / glm / kimi / openai / ollama / lmstudio 并不存在，现已补齐（含通义千问 VL 这类视觉模型）。
+- **头部排版**：存储状态胶囊文案缩短（`仅本域存储` / `油猴存储 · 跨域共享`）且禁止折行，顶栏允许换行，窄窗口下不再挤成两行。
 
 ### v1.8.0（2026-11-16）独立设置中心：不进考试页也能配模型
 

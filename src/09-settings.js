@@ -53,9 +53,9 @@ CXAI.Settings = (function () {
 
   function backendText() {
     const info = storeInfo();
-    if (info.backend === 'gm') return { tag: '油猴存储 · 跨域名共享', cls: 'ok', hint: '在这里保存的配置，考试页直接生效' };
-    if (info.backend === 'local') return { tag: '仅本源 localStorage', cls: 'warn', hint: '配置只在本域名有效，请用「备份」导出 JSON 带到考试页' };
-    return { tag: '内存（未持久化）', cls: 'bad', hint: '刷新就丢，检查脚本管理器是否禁用了存储' };
+    if (info.backend === 'gm') return { tag: '油猴存储 · 跨域共享', cls: 'ok', hint: '在这里保存的配置，考试页直接生效（同一脚本跨域名共享）' };
+    if (info.backend === 'local') return { tag: '仅本域存储', cls: 'warn', hint: '没有 GM 存储，配置只在本域名有效 —— 用「备份 → 导出」把 JSON 粘到考试页的设置里' };
+    return { tag: '内存 · 未持久化', cls: 'bad', hint: '刷新就丢，检查脚本管理器是否禁用了存储' };
   }
 
   function cfg() {
@@ -133,7 +133,10 @@ CXAI.Settings = (function () {
       if (/\/settings(\.html)?$/i.test(p)) return true;
       const s = String(location.search || '') + String(location.hash || '');
       if (/[?&#](cxai|settings)=(settings|1)\b/i.test(s)) return true;
-      if (/^cx-exam-ai\.pages\.dev$/i.test(location.host) && /^\/(settings)?(\.html)?$/i.test(location.pathname)) return true;
+      // 只认 /settings 与 /settings.html。
+      // 千万别把 "/" 算进来：落地页在根路径，那样会把首页整页接管，
+      // 而且设置页上「安装页」的链接指回 / 会变成死循环（v1.8.0 的真 bug）。
+      if (/^cx-exam-ai\.pages\.dev$/i.test(location.host) && /^\/settings(\.html)?$/i.test(location.pathname)) return true;
     } catch (e) {}
     return false;
   }
@@ -151,14 +154,15 @@ CXAI.Settings = (function () {
 .cs-root ::-webkit-scrollbar-thumb { background:#ccd2dd; border-radius:8px; }
 .cs-root ::-webkit-scrollbar-track { background:transparent; }
 
-.cs-top { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:12px;
+.cs-top { position:sticky; top:0; z-index:3; display:flex; align-items:center; gap:10px; flex-wrap:wrap; row-gap:8px;
   padding:12px 22px; background:rgba(255,255,255,.92); backdrop-filter:blur(8px); border-bottom:1px solid var(--line); }
 .cs-logo { width:26px; height:26px; border-radius:8px; background:linear-gradient(135deg,#2563eb,#60a5fa);
   color:#fff; font-size:12px; font-weight:700; display:flex; align-items:center; justify-content:center; letter-spacing:.5px; }
-.cs-title { font-size:15px; font-weight:600; }
+.cs-title { font-size:15px; font-weight:600; white-space:nowrap; }
 .cs-title small { font-weight:400; color:var(--sub); font-size:12px; margin-left:8px; }
 .cs-top .spacer { flex:1; }
-.cs-pill { font-size:11.5px; padding:3px 9px; border-radius:999px; border:1px solid var(--line); color:var(--sub); background:#fff; }
+.cs-pill { font-size:11.5px; padding:3px 9px; border-radius:999px; border:1px solid var(--line); color:var(--sub);
+  background:#fff; white-space:nowrap; flex:none; }
 .cs-pill.ok { color:#15803d; border-color:#bbf7d0; background:#f0fdf4; }
 .cs-pill.warn { color:#b45309; border-color:#fde68a; background:#fffbeb; }
 .cs-pill.bad { color:#b91c1c; border-color:#fecaca; background:#fef2f2; }
@@ -225,6 +229,15 @@ CXAI.Settings = (function () {
 .cs-pv .cs-grid { margin-top:12px; }
 
 /* ---- 列表 / 输出 ---- */
+.cs-presets { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+@media (max-width:760px) { .cs-presets { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+.cs-pre { display:flex; flex-direction:column; gap:2px; align-items:flex-start; text-align:left;
+  padding:10px 12px; border:1px solid var(--line); border-radius:11px; background:#fff; cursor:pointer;
+  font:12px/1.5 inherit; transition:.14s; }
+.cs-pre:hover { border-color:#a8c2f7; background:#f7faff; transform:translateY(-1px); }
+.cs-pre .nm { font-weight:600; color:#1f2937; font-size:12.5px; }
+.cs-pre .bd { color:#6b7280; font-size:11.5px; }
+.cs-pre .bs { color:#9aa3b2; font-size:10.5px; overflow:hidden; text-overflow:ellipsis; max-width:100%; white-space:nowrap; }
 .cs-out { font-family:ui-monospace,Menlo,monospace; font-size:11.5px; line-height:1.7; color:#374151;
   background:#f8fafc; border:1px solid var(--line); border-radius:10px; padding:10px 12px; max-height:260px; overflow:auto; }
 .cs-out .ok { color:#15803d; }
@@ -390,6 +403,28 @@ CXAI.Settings = (function () {
 </div>`;
   }
 
+  /** 空态：新装脚本一个模型都没有，直接把常用预设摆出来，点一下就加 */
+  function emptyState() {
+    const QUICK = ['deepseek', 'qwen-vl', 'qwen', 'glm', 'kimi', 'openai', 'magpie', 'ollama', 'lmstudio'];
+    const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
+    return `
+  <div class="cs-note" style="margin-bottom:12px">
+    <b>还没有配置任何模型。</b>选一个预设就能起步（会填好地址和模型名，只差你自己的 Key）；
+    用本地网关（magpie / Ollama / LM Studio）的话，Key 可以留空，装好就能跑。
+  </div>
+  <div class="cs-presets">
+    ${list
+      .map(
+        (p) => `<button class="cs-pre" data-act="pv-add-preset" data-preset="${esc(p.id)}" title="${esc(p.baseURL || '')}">
+        <span class="nm">${esc(p.label)}</span>
+        <span class="bd">${esc(String(p.model || ''))}</span>
+        <span class="bs">${esc((p.baseURL || '').replace(/^https?:\/\//, ''))}</span>
+      </button>`
+      )
+      .join('')}
+  </div>`;
+  }
+
   function paneModel() {
     const ps = cfg().ai.providers || [];
     return `
@@ -397,9 +432,13 @@ CXAI.Settings = (function () {
   <h2>模型 <span class="tag">判题与读图都从这里配</span></h2>
   <p class="desc">每个模型 = 一条 OpenAI 兼容端点。填 Base URL + Key + 模型名即可；本地网关（magpie / Ollama / LM Studio）可以留空 Key。
   点「拉取」会向端点要一遍模型清单，直接选一个填进去，省得手打。</p>
-  <div id="cs-pvbox">${ps.map((p, i) => providerCard(p, i)).join('') || '<div class="cs-note">还没有模型。点下面「添加模型」，选个预设就填好了。</div>'}</div>
+  <div id="cs-pvbox">${ps.map((p, i) => providerCard(p, i)).join('') || emptyState()}</div>
   <div class="cs-row" style="margin-top:14px">
-    <button class="cs-btn pri" data-act="pv-add">+ 添加模型</button>
+    <button class="cs-btn pri" data-act="pv-add">+ 空白模型</button>
+    <select class="cs-sel" data-act="add-preset-select" style="width:auto;min-width:150px;flex:none">
+      <option value="">+ 从预设添加…</option>
+      ${presetOptions('')}
+    </select>
     <button class="cs-btn" data-act="test-all">测试全部连接</button>
     <button class="cs-btn" data-act="pv-collapse">全部收起</button>
     <div style="flex:1"></div>
@@ -826,6 +865,39 @@ CXAI.Settings = (function () {
     renderMain();
   }
 
+  /** 从预设一键添加一个模型 */
+  function addPresetProvider(id) {
+    const pre = presetById(id);
+    if (!pre) return addProvider();
+    const c = cfg();
+    const list = c.ai.providers || [];
+    const fresh = CXAI.normalizeProvider(
+      {
+        id: CXAI.U.uid('p'),
+        label: pre.label,
+        preset: pre.id,
+        baseURL: pre.baseURL,
+        model: pre.model,
+        apiStyle: pre.apiStyle || 'openai',
+        apiKey: '',
+        weight: 1,
+        temperature: 0.2,
+        maxTokens: 700,
+        enabled: true,
+        vision: !!pre.vision,
+        keyOptional: !!pre.keyOptional,
+        role: 'judge'
+      },
+      list.length
+    );
+    list.push(fresh);
+    c.ai.providers = list;
+    S.open[fresh.id] = true;
+    persist('已添加 ' + pre.label + ' · 填好 Key 点「拉取」');
+    renderMain();
+    toast('已添加 ' + pre.label, 'ok');
+  }
+
   function delProvider(i) {
     const c = cfg();
     const list = c.ai.providers || [];
@@ -1091,6 +1163,9 @@ CXAI.Settings = (function () {
       case 'pv-add':
         addProvider();
         break;
+      case 'pv-add-preset':
+        addPresetProvider(el.getAttribute('data-preset'));
+        break;
       case 'pv-del':
         delProvider(i);
         break;
@@ -1144,6 +1219,15 @@ CXAI.Settings = (function () {
     const t = e.target;
     if (!t || !t.getAttribute) return;
     const act = t.getAttribute('data-act');
+
+    // 「+ 从预设添加…」下拉
+    if (act === 'add-preset-select') {
+      const id = t.value;
+      if (id) {
+        addPresetProvider(id);
+      }
+      return;
+    }
 
     // 拉取到的模型清单里选一个填进去
     if (act === 'pick-model') {
