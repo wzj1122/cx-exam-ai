@@ -67,7 +67,7 @@ cx-exam-ai/
 | `src/06-guard.js` | `CXAI.Guard.{install,uninstall,pace,dismissDialogs}` | `document.hidden`/`visibilityState`/`hasFocus` 伪装、吞掉 `visibilitychange`/`blur`、`confirm` 自动 true、弹窗白名单点击、题间节奏（含每 N 题长停顿与 3% 概率犹豫） | `CXAI.Cfg` `CXAI.U` `CXAI.Log` |
 | `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（`deepseek`/`custom`/`magpie`）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行；`settingsURL()` / `openSettingsPage()` 打开独立设置中心，设置面板底部「独立设置页 ↗」 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
 | `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导；v1.8.0 起 `ready()` 先问 `CXAI.Settings.isHere()`，命中就整页接管设置中心并 return | 全部模块 |
-| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html` 整页接管，六栏（模型/判题/读图/运行/备份/诊断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取 + `AI.ping` 单卡测试；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
+| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html`（Pages 上是 `/settings`）整页接管，六栏（模型/判题/读图/运行/备份/诊断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取 + `AI.ping` 单卡测试；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
 | `index.html` | — | Cloudflare Pages 落地页：三处一键安装入口（本站 `/dist/cx-exam-ai.user.js`、GitHub raw、Greasy Fork）、四件事、独立设置中心入口、三步上手、收款码。样式全内联，无外部依赖；改版式只动这一个文件 | `dist/cx-exam-ai.user.js`（下载路径）、`images/*.png` |
 | `settings.html` | — | 设置中心骨架：深色兜底页（含未接管时的排查步骤）+ `<html data-cxai-settings>` 标记。body 会被脚本清空后整页渲染，所以这里**只放兜底与标记，别指望它自己渲染表单** | `src/09-settings.js`（渲染方）、`index.html`（入口） |
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
@@ -236,7 +236,7 @@ Engine.start()
   不把域名硬编码进 `isHere()` 的主要判断。
 - `src/00-header.js`：`@match` 增加 `cx-exam-ai.pages.dev` / `wzj1122.github.io/cx-exam-ai` / `127.0.0.1`；版本 1.8.0。
 - `src/08-main.js`：`ready()` 最前面加设置页分支（整页接管、不跑考试逻辑）；GM 菜单加「打开设置中心（配置模型）」。
-- `src/07-ui.js`：设置面板底部加「独立设置页 ↗」（`settingsURL()` 读 `ui.settingsURL`，默认官方地址）。
+- `src/07-ui.js`：设置面板底部加「独立设置页 ↗」（`settingsURL()` 读 `ui.settingsURL`，默认 `https://cx-exam-ai.pages.dev/settings`）。
 - `src/01-core.js`：`DEFAULT_CONFIG.ui` 新增 `settingsURL`（空 = 用内置官方地址）。
 - **BUGFIX（真 bug）**：`apply.submit`（面板写）与 `apply.autoSubmit`（`08-main`/`06-guard` 读）字段不一致，
   面板里的「自动交卷」开关一直不生效。现在 `saveConfig` 与设置中心双写，`08-main.maybeSubmit()` /

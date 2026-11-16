@@ -68,7 +68,7 @@
 
 ## 独立设置中心（不进考试页也能配）
 
-装好脚本后直接打开 **https://cx-exam-ai.pages.dev/settings.html**（本站即 `/settings.html`），
+装好脚本后直接打开 **https://cx-exam-ai.pages.dev/settings**（仓库里的文件名是 `settings.html`，Cloudflare Pages 会把它 308 到 `/settings`，两个地址都能用），
 脚本会把这一页接管成一个完整的设置后台：
 
 | 分类 | 能改什么 |

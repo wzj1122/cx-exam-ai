@@ -4,7 +4,8 @@ CXAI.UI = (function () {
   let host = null;
 
   /** 独立设置中心的默认地址（换部署位时改这里，或用配置项 ui.settingsURL 覆盖） */
-  const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings.html';
+  // Cloudflare Pages 会把 /settings.html 308 跳到 /settings，这里直接用规范路径，少一跳
+  const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings';
   let root = null;
   let state = { running: false, paused: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
 
