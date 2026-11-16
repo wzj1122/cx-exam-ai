@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.8.2
+// @version      1.8.3
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.8.2";
-CXAI.__builtAt = "2026-11-16T16:06:36.058Z";
+CXAI.__version = "1.8.3";
+CXAI.__builtAt = "2026-11-16T16:12:19.063Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -51,16 +51,25 @@ CXAI.PRESETS = [
     id: 'deepseek',
     label: 'DeepSeek',
     baseURL: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
+    model: '',
     apiStyle: 'openai',
     vision: false,
-    hint: '文本模型，便宜，适合做判题主力'
+    hint: '文本模型，便宜，适合做判题主力。模型名留空 —— 填好 Key 点「拉取」，按端点返回的清单选。'
+  },
+  {
+    id: 'tokenrhythm',
+    label: '基元律动',
+    baseURL: 'https://tokenrhythm.studio/v1',
+    model: '',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '基元律动（TokenRhythm），OpenAI 兼容接口。填 Key 后点「拉取」，模型以清单为准。'
   },
   {
     id: 'qwen-vl',
     label: '通义千问 VL',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen-vl-max',
+    model: '',
     apiStyle: 'openai',
     vision: true,
     hint: '阿里云百炼的视觉模型，能直接读题图；Key 在 DashScope 控制台申请'
@@ -69,7 +78,7 @@ CXAI.PRESETS = [
     id: 'qwen',
     label: '通义千问',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen-plus',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     hint: '纯文本，便宜、并发宽松，适合当议会里的普通一票'
@@ -78,25 +87,16 @@ CXAI.PRESETS = [
     id: 'glm',
     label: '智谱 GLM',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
-    model: 'glm-4-plus',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     hint: '中文题感不错；Key 在智谱开放平台申请'
   },
   {
-    id: 'kimi',
-    label: 'Kimi（Moonshot）',
-    baseURL: 'https://api.moonshot.cn/v1',
-    model: 'moonshot-v1-8k',
-    apiStyle: 'openai',
-    vision: false,
-    hint: '长文本强，读长题干不吃力'
-  },
-  {
     id: 'openai',
     label: 'OpenAI',
     baseURL: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini',
+    model: '',
     apiStyle: 'openai',
     vision: true,
     hint: '国内直连多半要走代理；也可以把 Base URL 指向任何 OpenAI 兼容中转'
@@ -105,41 +105,30 @@ CXAI.PRESETS = [
     id: 'ollama',
     label: 'Ollama',
     baseURL: 'http://127.0.0.1:11434/v1',
-    model: 'qwen2.5:7b',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     keyOptional: true,
-    hint: '本地跑，不用 Key；模型名写 ollama list 里那个'
+    hint: '本地跑，不用 Key；点「拉取」会列出已经 pull 下来的模型'
   },
   {
     id: 'lmstudio',
     label: 'LM Studio',
     baseURL: 'http://127.0.0.1:1234/v1',
-    model: 'local-model',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     keyOptional: true,
-    hint: '本地服务器开在 1234；模型名填当前加载的那个'
+    hint: '本地服务器开在 1234；点「拉取」选当前加载的那个'
   },
   {
     id: 'custom',
-    label: '自定义',
+    label: '自定义模型',
     baseURL: '',
     model: '',
     apiStyle: 'openai',
     vision: false,
-    hint: '默认按 OpenAI 兼容接口（/chat/completions）发请求；要走 Anthropic 协议（/v1/messages）就在下面「接口协议」里切一下。'
-  },
-  {
-    id: 'magpie',
-    label: 'magpie',
-    baseURL: 'http://127.0.0.1:3425/v1',
-    apiKey: 'magpie',
-    model: 'deepseek/deepseek-chat',
-    apiStyle: 'openai',
-    vision: true,
-    keyOptional: true,
-    hint: '本地网关 127.0.0.1:3425，同一端口兼容 OpenAI / Anthropic；模型名写 provider/model，Key 随便填 magpie'
+    hint: '任何 OpenAI 兼容端点都填这里。要 Anthropic 协议就在高级设置的「接口协议」里切。'
   }
 ];
 
@@ -5342,9 +5331,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     const hit = list.filter((x) => x.baseURL && norm(x.baseURL) === norm(p && p.baseURL))[0];
     if (hit) return hit.id;
     if (p && p.preset && list.some((x) => x.id === p.preset)) return p.preset;
-    try {
-      if (p && CXAI.isLocalURL(p.baseURL)) return 'magpie';
-    } catch (e) {}
+    // 本地网关已无专属预设（magpie 已删）：命中 ollama / lmstudio 的地址上面就返回了，其余算自定义
     return 'custom';
   }
 
@@ -6141,7 +6128,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div class="lg">用法：</div>
       <div class="lg">1. 点 ⚙ → 模型列表里选「预设」自动填好，或手填任意兼容接口</div>
       <div class="lg">2. 图片题：在「图片题处理」选策略；要直传就把模型勾上「支持图片输入」</div>
-      <div class="lg">3. 本地网关（magpie / Ollama / LM Studio）：Base URL 填本机端口，勾「允许空 Key」</div>
+      <div class="lg">3. 本地网关（Ollama / LM Studio 等）：Base URL 填本机端口，Key 可留空</div>
       <div class="lg">4. 打开考试页（整卷 / 单题模式均可），点「开始答题」</div>
       <div class="lg warn">低置信度题目标黄，建议人工复核后再交卷</div>
       <div class="lg">Ctrl+Shift+X 呼出面板；交卷只在显式开启时自动点</div>`;
@@ -7310,16 +7297,13 @@ CXAI.Settings = (function () {
 
   /** 反推一个 provider 用的是哪个预设（和 07-ui 里的同名逻辑保持一致） */
   function presetOf(p) {
-    if (p && p.preset) return p.preset;
-    const host = String((p && p.baseURL) || '').toLowerCase();
-    if (/api\.deepseek\.com/.test(host)) return 'deepseek';
-    if (/dashscope\.aliyuncs\.com/.test(host)) return 'qwen';
-    if (/open\.bigmodel\.cn/.test(host)) return 'glm';
-    if (/api\.moonshot\.cn/.test(host)) return 'kimi';
-    if (/api\.openai\.com/.test(host)) return 'openai';
-    if (/127\.0\.0\.1:3425|magpie/.test(host)) return 'magpie';
-    if (/127\.0\.0\.1:11434|localhost:11434|ollama/.test(host)) return 'ollama';
-    if (/127\.0\.0\.1:1234|localhost:1234/.test(host)) return 'lmstudio';
+    const list = presets();
+    const norm = (u) => String(u || '').replace(/\/+$/, '').toLowerCase();
+    // 先按 Base URL 精确反查：用户改了地址就不再算那个预设
+    const hit = list.filter((x) => x.baseURL && norm(x.baseURL) === norm(p && p.baseURL))[0];
+    if (hit) return hit.id;
+    // 再认存的 preset 字段，但必须是当前仍存在的预设（旧配置里的 magpie / kimi 已删除）
+    if (p && p.preset && list.some((x) => x.id === p.preset)) return p.preset;
     return 'custom';
   }
 
@@ -7687,7 +7671,11 @@ CXAI.Settings = (function () {
           <input class="cs-in" data-f="model" data-i="${i}" value="${esc(p.model)}" placeholder="deepseek-chat / qwen-vl-max …">
           <button class="cs-btn mini" data-act="fetch" data-i="${i}"${busy}>拉取</button>
         </div>
-        ${list ? modelPickerHtml(list, i) : ''}
+        ${list
+          ? modelPickerHtml(list, i)
+          : p.model
+            ? ''
+            : '<div class="hint" style="color:#b45309">还没选模型 —— 填好 Key 后点「拉取」，按清单选一个</div>'}
       </div>
       ${adv
         ? `<div class="cs-fld"><label>接口协议</label>
@@ -7725,20 +7713,20 @@ CXAI.Settings = (function () {
 </div>`;
   }
   function emptyState() {
-    const QUICK = ['deepseek', 'qwen-vl', 'qwen', 'glm', 'kimi', 'openai', 'magpie', 'ollama', 'lmstudio'];
+    const QUICK = ['deepseek', 'tokenrhythm', 'qwen-vl', 'qwen', 'glm', 'openai', 'ollama', 'lmstudio'];
     const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
     return `
   <div class="cs-note" style="margin-bottom:12px">
     <b>还没有配置任何模型。</b>选一个预设就能起步（会填好地址和模型名，只差你自己的 Key）；
-    用本地网关（magpie / Ollama / LM Studio）的话，Key 可以留空，装好就能跑。
+    用本地网关（Ollama / LM Studio 等）的话，Key 可以留空，装好就能跑。
   </div>
   <div class="cs-presets">
     ${list
       .map(
         (p) => `<button class="cs-pre" data-act="pv-add-preset" data-preset="${esc(p.id)}" title="${esc(p.baseURL || '')}">
         <span class="nm">${esc(p.label)}</span>
-        <span class="bd">${esc(String(p.model || ''))}</span>
-        <span class="bs">${esc((p.baseURL || '').replace(/^https?:\/\//, ''))}</span>
+        <span class="bd">${esc(p.model || '（填 Key 后拉取选模型）')}</span>
+        <span class="bs">${esc((p.baseURL || '').replace(/^https?:\/\//, '') || '自定义地址')}</span>
       </button>`
       )
       .join('')}
@@ -7750,7 +7738,7 @@ CXAI.Settings = (function () {
     return `
 <section class="cs-card">
   <h2>模型 <span class="tag">判题与读图都从这里配</span></h2>
-  <p class="desc">每个模型 = 一条 OpenAI 兼容端点。填 Base URL + Key + 模型名即可；本地网关（magpie / Ollama / LM Studio）可以留空 Key。
+  <p class="desc">每个模型 = 一条 OpenAI 兼容端点。填 Base URL + Key + 模型名即可；本地网关（Ollama / LM Studio 等）可以留空 Key。
   点「拉取」会向端点要一遍模型清单，直接选一个填进去，省得手打。</p>
   <div id="cs-pvbox">${ps.map((p, i) => providerCard(p, i)).join('') || emptyState()}</div>
   <div class="cs-row" style="margin-top:14px">
@@ -8109,7 +8097,9 @@ CXAI.Settings = (function () {
         visionId: '',
         strategy: 'ocr',
         out: '',
-        testing: false
+        testing: false,
+        fetching: false,
+        list: null
       };
     }
     return S.wz;
@@ -8131,21 +8121,21 @@ CXAI.Settings = (function () {
   }
 
   function wizardStep1(w) {
-    const QUICK = ['deepseek', 'qwen-vl', 'qwen', 'glm', 'kimi', 'openai', 'magpie', 'ollama', 'lmstudio'];
+    const QUICK = ['deepseek', 'tokenrhythm', 'qwen-vl', 'qwen', 'glm', 'openai', 'ollama', 'lmstudio'];
     const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
     const pre = presetById(w.pick);
     return `
 ${wizardSteps(1)}
 <section class="cs-card">
   <h2>先加一个模型 <span class="tag">第 1 步 / 共 3 步</span></h2>
-  <p class="desc">选一家（地址和模型名会自动填好），再填上你自己的 API Key。用本地网关（magpie / Ollama / LM Studio）的话 Key 可以留空。</p>
+  <p class="desc">选一家（地址和模型名会自动填好），再填上你自己的 API Key。用本地网关（Ollama / LM Studio 等）的话 Key 可以留空。</p>
   <div class="cs-presets">
     ${list
       .map(
         (p) => `<button class="cs-pre${w.pick === p.id ? ' on' : ''}" data-act="wz-pick" data-preset="${esc(p.id)}">
         <span class="nm">${esc(p.label)}</span>
-        <span class="bd">${esc(p.model || '')}</span>
-        <span class="bs">${esc(String(p.baseURL || '').replace(/^https?:\/\//, ''))}</span>
+        <span class="bd">${esc(p.model || '（填 Key 后拉取选模型）')}</span>
+        <span class="bs">${esc(String(p.baseURL || '').replace(/^https?:\/\//, '') || '自定义地址')}</span>
         ${w.pick === p.id ? '<span class="go">已选中 ↓</span>' : ''}
       </button>`
       )
@@ -8157,7 +8147,17 @@ ${wizardSteps(1)}
             <input class="cs-in" type="password" data-wz="key" value="${esc(w.key)}" autocomplete="off"
               placeholder="${pre.keyOptional ? '本地网关随便填，或留空' : 'sk-…'}"></div>
           <div class="cs-fld"><label>模型名</label>
-            <input class="cs-in" data-wz="model" value="${esc(w.model || pre.model || '')}" placeholder="${esc(pre.model || '')}"></div>
+            <div class="cs-row">
+              <input class="cs-in" data-wz="model" value="${esc(w.model || pre.model || '')}" placeholder="留空也行，点「拉取」按清单选">
+              <button class="cs-btn" data-act="wz-fetch"${w.fetching ? ' disabled' : ''}>${w.fetching ? '拉取中…' : '拉取'}</button>
+            </div>
+            ${w.list && w.list.length
+              ? `<select class="cs-sel" data-act="wz-pick-model" style="margin-top:6px">
+                   <option value="">从拉到的 ${w.list.length} 个模型里选…</option>
+                   ${w.list.map((m) => '<option value="' + esc(m.id) + '">' + esc(m.label || m.id) + '</option>').join('')}
+                 </select>`
+              : '<div class="hint">模型名以端点最新返回的清单为准，所以默认不预设</div>'}
+          </div>
         </div>
         <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">地址不对？手动改 Base URL</summary>
           <input class="cs-in" style="margin-top:8px" data-wz="base" value="${esc(w.base || pre.baseURL || '')}">
@@ -8263,7 +8263,8 @@ ${wizardSteps(3)}
     const base = String(w.base || pre.baseURL || '').trim();
     const model = String(w.model || pre.model || '').trim();
     const key = String(w.key || '').trim();
-    if (!base || !model) return { ok: false, msg: '地址和模型名要填全' };
+    if (!base) return { ok: false, msg: 'Base URL 是空的' };
+    if (!model) return { ok: false, msg: '还没有模型名：点「拉取」选一个，或直接手填' };
     if (!key && !pre.keyOptional && !CXAI.isLocalURL(base)) return { ok: false, msg: '这家需要填 API Key' };
     const c = cfg();
     const list = c.ai.providers || [];
@@ -8333,6 +8334,50 @@ ${wizardSteps(3)}
     S.tab = 'model';
     renderFrame();
     toast('配置完成 · 回到考试页刷新即可', 'ok');
+  }
+
+  /** 向导第 1 步：按当前 Key / Base URL 拉一次模型清单，模型名以清单为准 */
+  async function wizardFetch() {
+    const w = wizardState();
+    const pre = presetById(w.pick);
+    if (!pre) return;
+    const base = String(w.base || pre.baseURL || '').trim();
+    if (!base) {
+      toast('先填 Base URL', 'warn');
+      return;
+    }
+    const probe = CXAI.normalizeProvider(
+      {
+        baseURL: base,
+        model: String(w.model || pre.model || '').trim() || 'probe',
+        apiKey: String(w.key || '').trim(),
+        apiStyle: pre.apiStyle || 'openai',
+        keyOptional: !!pre.keyOptional || CXAI.isLocalURL(base)
+      },
+      0
+    );
+    w.fetching = true;
+    w.out = '正在拉取模型清单…';
+    renderFrame();
+    try {
+      const list = await CXAI.AI.listModels(probe);
+      w.list = list || [];
+      w.fetching = false;
+      if (w.list.length) {
+        if (!String(w.model || '').trim()) w.model = w.list[0].id;
+        w.out = '✓ 拉到 ' + w.list.length + ' 个模型 · 已选 ' + w.model;
+        toast('拉到 ' + w.list.length + ' 个模型', 'ok');
+      } else {
+        w.out = '端点没返回模型清单，手填模型名即可';
+        toast('没拉到清单，手填模型名', 'warn');
+      }
+    } catch (e) {
+      w.fetching = false;
+      w.list = null;
+      w.out = '✗ ' + (e && e.message ? e.message : e);
+      toast('拉取失败：' + w.out, 'bad');
+    }
+    renderFrame();
   }
 
   async function wizardTest() {
@@ -8611,8 +8656,18 @@ ${wizardSteps(3)}
     try {
       const list = await CXAI.AI.listModels(p);
       S.models[p.id] = list || [];
-      if (!list || !list.length) toast('端点没返回模型清单，手填模型名即可', 'warn');
-      else toast('拉到 ' + list.length + ' 个模型', 'ok');
+      if (!list || !list.length) {
+        toast('端点没返回模型清单，手填模型名即可', 'warn');
+      } else {
+        // 以拉取结果为准：模型名为空就自动填第一个，用户随时能从下拉里换
+        const blank = !String(((cfg().ai.providers || [])[i] || {}).model || '').trim();
+        if (blank) {
+          updProvider(i, 'model', list[0].id);
+          toast('拉到 ' + list.length + ' 个，已选 ' + list[0].id, 'ok');
+        } else {
+          toast('拉到 ' + list.length + ' 个模型', 'ok');
+        }
+      }
       renderMain();
     } catch (e) {
       toast('拉取失败：' + (e && e.message ? e.message : e), 'bad');
@@ -8843,6 +8898,9 @@ ${wizardSteps(3)}
       case 'wz-test':
         wizardTest();
         break;
+      case 'wz-fetch':
+        wizardFetch();
+        break;
       case 'wz-next': {
         const w = wizardState();
         if (w.step === 1) {
@@ -8959,6 +9017,16 @@ ${wizardSteps(3)}
       const id = t.value;
       if (id) {
         addPresetProvider(id);
+      }
+      return;
+    }
+
+    // 向导：从拉到的清单里选模型
+    if (act === 'wz-pick-model') {
+      const w = wizardState();
+      if (t.value) {
+        w.model = t.value;
+        renderFrame();
       }
       return;
     }

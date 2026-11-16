@@ -16,16 +16,25 @@ CXAI.PRESETS = [
     id: 'deepseek',
     label: 'DeepSeek',
     baseURL: 'https://api.deepseek.com/v1',
-    model: 'deepseek-chat',
+    model: '',
     apiStyle: 'openai',
     vision: false,
-    hint: '文本模型，便宜，适合做判题主力'
+    hint: '文本模型，便宜，适合做判题主力。模型名留空 —— 填好 Key 点「拉取」，按端点返回的清单选。'
+  },
+  {
+    id: 'tokenrhythm',
+    label: '基元律动',
+    baseURL: 'https://tokenrhythm.studio/v1',
+    model: '',
+    apiStyle: 'openai',
+    vision: false,
+    hint: '基元律动（TokenRhythm），OpenAI 兼容接口。填 Key 后点「拉取」，模型以清单为准。'
   },
   {
     id: 'qwen-vl',
     label: '通义千问 VL',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen-vl-max',
+    model: '',
     apiStyle: 'openai',
     vision: true,
     hint: '阿里云百炼的视觉模型，能直接读题图；Key 在 DashScope 控制台申请'
@@ -34,7 +43,7 @@ CXAI.PRESETS = [
     id: 'qwen',
     label: '通义千问',
     baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    model: 'qwen-plus',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     hint: '纯文本，便宜、并发宽松，适合当议会里的普通一票'
@@ -43,25 +52,16 @@ CXAI.PRESETS = [
     id: 'glm',
     label: '智谱 GLM',
     baseURL: 'https://open.bigmodel.cn/api/paas/v4',
-    model: 'glm-4-plus',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     hint: '中文题感不错；Key 在智谱开放平台申请'
   },
   {
-    id: 'kimi',
-    label: 'Kimi（Moonshot）',
-    baseURL: 'https://api.moonshot.cn/v1',
-    model: 'moonshot-v1-8k',
-    apiStyle: 'openai',
-    vision: false,
-    hint: '长文本强，读长题干不吃力'
-  },
-  {
     id: 'openai',
     label: 'OpenAI',
     baseURL: 'https://api.openai.com/v1',
-    model: 'gpt-4o-mini',
+    model: '',
     apiStyle: 'openai',
     vision: true,
     hint: '国内直连多半要走代理；也可以把 Base URL 指向任何 OpenAI 兼容中转'
@@ -70,41 +70,30 @@ CXAI.PRESETS = [
     id: 'ollama',
     label: 'Ollama',
     baseURL: 'http://127.0.0.1:11434/v1',
-    model: 'qwen2.5:7b',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     keyOptional: true,
-    hint: '本地跑，不用 Key；模型名写 ollama list 里那个'
+    hint: '本地跑，不用 Key；点「拉取」会列出已经 pull 下来的模型'
   },
   {
     id: 'lmstudio',
     label: 'LM Studio',
     baseURL: 'http://127.0.0.1:1234/v1',
-    model: 'local-model',
+    model: '',
     apiStyle: 'openai',
     vision: false,
     keyOptional: true,
-    hint: '本地服务器开在 1234；模型名填当前加载的那个'
+    hint: '本地服务器开在 1234；点「拉取」选当前加载的那个'
   },
   {
     id: 'custom',
-    label: '自定义',
+    label: '自定义模型',
     baseURL: '',
     model: '',
     apiStyle: 'openai',
     vision: false,
-    hint: '默认按 OpenAI 兼容接口（/chat/completions）发请求；要走 Anthropic 协议（/v1/messages）就在下面「接口协议」里切一下。'
-  },
-  {
-    id: 'magpie',
-    label: 'magpie',
-    baseURL: 'http://127.0.0.1:3425/v1',
-    apiKey: 'magpie',
-    model: 'deepseek/deepseek-chat',
-    apiStyle: 'openai',
-    vision: true,
-    keyOptional: true,
-    hint: '本地网关 127.0.0.1:3425，同一端口兼容 OpenAI / Anthropic；模型名写 provider/model，Key 随便填 magpie'
+    hint: '任何 OpenAI 兼容端点都填这里。要 Anthropic 协议就在高级设置的「接口协议」里切。'
   }
 ];
 

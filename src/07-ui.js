@@ -942,9 +942,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     const hit = list.filter((x) => x.baseURL && norm(x.baseURL) === norm(p && p.baseURL))[0];
     if (hit) return hit.id;
     if (p && p.preset && list.some((x) => x.id === p.preset)) return p.preset;
-    try {
-      if (p && CXAI.isLocalURL(p.baseURL)) return 'magpie';
-    } catch (e) {}
+    // 本地网关已无专属预设（magpie 已删）：命中 ollama / lmstudio 的地址上面就返回了，其余算自定义
     return 'custom';
   }
 
@@ -1741,7 +1739,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div class="lg">用法：</div>
       <div class="lg">1. 点 ⚙ → 模型列表里选「预设」自动填好，或手填任意兼容接口</div>
       <div class="lg">2. 图片题：在「图片题处理」选策略；要直传就把模型勾上「支持图片输入」</div>
-      <div class="lg">3. 本地网关（magpie / Ollama / LM Studio）：Base URL 填本机端口，勾「允许空 Key」</div>
+      <div class="lg">3. 本地网关（Ollama / LM Studio 等）：Base URL 填本机端口，Key 可留空</div>
       <div class="lg">4. 打开考试页（整卷 / 单题模式均可），点「开始答题」</div>
       <div class="lg warn">低置信度题目标黄，建议人工复核后再交卷</div>
       <div class="lg">Ctrl+Shift+X 呼出面板；交卷只在显式开启时自动点</div>`;

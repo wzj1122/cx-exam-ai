@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.8.2（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.8.3（`package.json`）
 
 # MAINTENANCE
 
@@ -14,7 +14,7 @@
 - 页面形态：整卷预览（`/mooc2/exam/preview`）、作业（`/mooc2/work/dowork`）、章节测验（`.TiMu`）、单题逐题模式
 - 题型：单选、多选、判断、填空、简答/论述、连线/阅读（按选择题降级处理）
 - 图片题：本地抓图 → canvas 缩放压缩 → 直传视觉模型（inline）或先转写成文字再判题（ocr）；策略可配 auto/inline/ocr/off
-- 模型接入：OpenAI `/chat/completions`、Anthropic `/v1/messages`、Gemini `generateContent` 三种风格；支持本地网关（magpie `127.0.0.1:3425/v1`、Ollama `11434`、LM Studio `1234`）空 Key 直连
+- 模型接入：OpenAI `/chat/completions`、Anthropic `/v1/messages`、Gemini `generateContent` 三种风格；支持本地网关（Ollama `11434`、LM Studio `1234`、magpie `3425` 这类任意本地端口；预设里已移除 magpie，用「自定义模型」填地址）空 Key 直连
 - 字形加密：`font-cxsecret` 类内联 base64 字体还原（FRB2 特征表匹配）
 - 反检测：前台状态伪装、弹窗自动确认、拟人节奏与完整指针事件序列
 
@@ -58,16 +58,16 @@ cx-exam-ai/
 | 文件 | 对外接口 | 职责 | 依赖 |
 |---|---|---|---|
 | `src/00-header.js` | — | `@match`/`@grant`/`@connect` 元数据（v1.8.0 起含 `cx-exam-ai.pages.dev` / `github.io` / `127.0.0.1`，设置中心要用）；`@run-at document-start` | 无 |
-| `src/01-core.js` | `CXAI.DEFAULT_CONFIG` `CXAI.PRESETS` `CXAI.isLocalURL` `CXAI.normalizeProvider` `CXAI.Store` `CXAI.Cfg` `CXAI.Log` `CXAI.U` | 默认配置（judge 参数 + `ai.vision` 对象 + 3 个预置 provider）、10 条接入预设（deepseek/qwen-vl/qwen/glm/kimi/openai/ollama/lmstudio/magpie/custom）、provider 归一化（apiStyle/role/keyOptional/maxTokens/extraBody/extraHeaders）、GM_* 存储回退 localStorage、`U.{sleep,rand,randInt,uid,clamp,mergeDeep,deepGet,safeJson,normText,similarity,escapeHtml,truncate,withTimeout}` | 无 |
+| `src/01-core.js` | `CXAI.DEFAULT_CONFIG` `CXAI.PRESETS` `CXAI.isLocalURL` `CXAI.normalizeProvider` `CXAI.Store` `CXAI.Cfg` `CXAI.Log` `CXAI.U` | 默认配置（judge 参数 + `ai.vision` 对象 + **0 个预置 provider**）、**9 条接入预设**（deepseek/tokenrhythm/qwen-vl/qwen/glm/openai/ollama/lmstudio/custom，`model` 全部留空、以 `AI.listModels` 拉到的清单为准）、provider 归一化（apiStyle/role/keyOptional/maxTokens/extraBody/extraHeaders）、GM_* 存储回退 localStorage、`U.{sleep,rand,randInt,uid,clamp,mergeDeep,deepGet,safeJson,normText,similarity,escapeHtml,truncate,withTimeout}` | 无 |
 | `src/02-font.js` | `CXAI.Font` | 抽取 head 内 base64 字体 → canvas 360px 渲染 → 积分图盒式降采样 → 与 FRB2 特征表算汉明距离，输出 glyph→char 映射 | `CXAI.U` |
 | `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页） | `CXAI.U` |
 | `src/03b-vision.js` | `CXAI.Vision.{cfg,isEnabled,prepare,pickProvider,panelHasVision,transcribe,composePromptBlock,load,clear,stats}` | 图片题通道：`fetchBlob`（GM_xmlhttpRequest 带 Referer 优先，降级 fetch credentials:include）→ `blobToDataUrl`（FileReader / arrayBuffer+btoa 兜底）→ `compress`（canvas 长边缩放到 1400、JPEG 0.82，无 Image/canvas 时原样返回）→ 10 分钟内存缓存；`prepare` 丢占位图（<600B）与超总字节图；`transcribe` 用读图模型把图转成 `{text,questionText,options,kind,confidence}` | `CXAI.Cfg` `CXAI.AI` `CXAI.U` |
 | `src/04-ai.js` | `CXAI.AI.{solve,ping,listModels,callProvider,buildRequest,extractText,parseModelResult,resolveAnswerKeys,resolveVision,tally,buildPanel}` + 内部 `httpMethod(method,url,headers,body,timeout)`（`httpJson` 是它的 POST 快捷方式） | 三风格请求体构建（openai/anthropic/gemini，含 system 提升、图片块、extraBody/extraHeaders 深合并）、响应文本抽取、**`listModels` 拉取各家 `/models`**（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models?key=` 并过滤非 generateContent）、三套 Prompt + 读图上下文注入、答案归一化、加权投票、三级收敛 | `CXAI.Cfg` `CXAI.Vision` `CXAI.U` `CXAI.Log` |
 | `src/05-apply.js` | `CXAI.Apply.{humanClick,apply,answerChoice,answerBlank,clickOne,isChecked,saveOne,findSubmitButton,typeInto}` | 指针事件序列 + 随机落点；点后轮询选中态；失败逐级扩大候选元素重试；填空支持 textarea/input/contenteditable iframe | `CXAI.U` `CXAI.Cfg` |
 | `src/06-guard.js` | `CXAI.Guard.{install,uninstall,pace,dismissDialogs}` | `document.hidden`/`visibilityState`/`hasFocus` 伪装、吞掉 `visibilitychange`/`blur`、`confirm` 自动 true、弹窗白名单点击、题间节奏（含每 N 题长停顿与 3% 概率犹豫） | `CXAI.Cfg` `CXAI.U` `CXAI.Log` |
-| `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（`deepseek`/`custom`/`magpie`）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行；`settingsURL()` / `openSettingsPage()` 打开独立设置中心，设置面板底部「独立设置页 ↗」 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
+| `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（取自 `CXAI.PRESETS`，9 个）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行；`settingsURL()` / `openSettingsPage()` 打开独立设置中心，设置面板底部「独立设置页 ↗」 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
 | `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导；v1.8.0 起 `ready()` 先问 `CXAI.Settings.isHere()`，命中就整页接管设置中心并 return | 全部模块 |
-| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html`（Pages 上是 `/settings`）整页接管。默认「简单版」三栏（模型/判题/读图），`ui.advanced` 打开后才是六栏完整版；首次无模型时走 `wizardStep1/2/3` 三步向导（`S.wzActive` 控制，勿用 providers 是否为空判断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取 + `AI.ping` 单卡测试；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
+| `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html`（Pages 上是 `/settings`）整页接管。默认「简单版」三栏（模型/判题/读图），`ui.advanced` 打开后才是六栏完整版；首次无模型时走 `wizardStep1/2/3` 三步向导（`S.wzActive` 控制，勿用 providers 是否为空判断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取（模型名为空时自动选第一个）+ `AI.ping` 单卡测试；向导第 1 步同样可拉取；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
 | `index.html` | — | Cloudflare Pages 落地页：三处一键安装入口（本站 `/dist/cx-exam-ai.user.js`、GitHub raw、Greasy Fork）、四件事、独立设置中心入口、三步上手、收款码。样式全内联，无外部依赖；改版式只动这一个文件 | `dist/cx-exam-ai.user.js`（下载路径）、`images/*.png` |
 | `settings.html` | — | 设置中心骨架：深色兜底页（含未接管时的排查步骤）+ `<html data-cxai-settings>` 标记。body 会被脚本清空后整页渲染，所以这里**只放兜底与标记，别指望它自己渲染表单** | `src/09-settings.js`（渲染方）、`index.html`（入口） |
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
@@ -225,6 +225,19 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.3（2026-11-17）预设换血：基元律动上线、magpie/Kimi 下线、模型名一律留空
+
+- `CXAI.PRESETS` 重写为 9 条：`deepseek / tokenrhythm（基元律动，https://tokenrhythm.studio/v1）/ qwen-vl / qwen / glm / openai / ollama / lmstudio / custom（自定义模型）`。
+  删除 `magpie` 与 `kimi`；**所有预设 `model` 置空**（以拉取到的清单为准）。
+- `presetOf()`（09）与 `guessPreset()`（07）都不再按 host 硬编码猜、也不再兜底到 `magpie`：
+  先按 `PRESETS[].baseURL` 精确反查，再认存的 `preset` 字段**但必须是当前仍存在的预设**，否则算 `custom`。
+  这样老配置里 `preset:'magpie'` 不会渲染出空下拉。
+- 拉取逻辑：`fetchModels()` 在 `model` 为空时自动采用清单第一项；向导新增 `wizardFetch()` + `data-act="wz-fetch"` +
+  `wz-pick-model` 下拉，第 1 步就能拉清单选模型；「下一步」的校验提示改为"点「拉取」选一个，或手填"。
+- 空态/向导预设卡的模型名位置显示「（填 Key 后拉取选模型）」，不再留空。
+- `tools/test-dom.js` 断言同步：9 条预设、含 tokenrhythm、不含 magpie/kimi、所有预设 `model` 为空。
+- 验证：`check` 11 模块；`test-dom` **114 通过 / 0 失败**（新增 3 条断言）。
 
 ### v1.8.2（2026-11-17）设置中心：简单 / 高级两档 + 首次三步向导
 

@@ -654,7 +654,7 @@ function ok(cond, label, extra) {
   ok(n1.apiStyle === 'openai' && n1.role === 'judge', '缺省风格/角色归一', { s: n1.apiStyle, r: n1.role });
   ok(CXAI.isLocalURL('http://localhost:11434/v1') === true, 'localhost 判为本地');
   ok(CXAI.isLocalURL('https://api.deepseek.com/v1') === false, '公网地址不算本地');
-  ok((CXAI.PRESETS || []).some((x) => /magpie/i.test(x.id)), '预设含 magpie 本地网关');
+  ok((CXAI.PRESETS || []).some((x) => /ollama/i.test(x.id)), '预设含 ollama 本地网关');
   const an = await CXAI.AI.callProvider(
     { id: 'a', label: 'A', baseURL: 'https://mock.local', apiStyle: 'anthropic', apiKey: 'k', model: 'claude-x', maxTokens: 256 },
     [{ role: 'system', content: '最终裁决者' }, { role: 'user', content: '题干：1+1=?' }],
@@ -761,12 +761,15 @@ function ok(cond, label, extra) {
 
   console.log('\n[13] v1.3 预设精简 + 读图模型/判题模型分工');
   const pids = (CXAI.PRESETS || []).map((p) => p.id);
-  // v1.8.1 起预设补全到 10 条（原来只有 deepseek / custom / magpie，文档却写 10 条属虚报）
-  ok(pids.length === 10, '预设覆盖 10 家（含两家本地网关）', pids);
+  // v1.8.3：9 家，模型名全部留空（以「拉取」到的清单为准），删 kimi / magpie，加基元律动
+  ok(pids.length === 9, '预设覆盖 9 家（含两家本地网关）', pids);
+  ok(pids[0] === 'deepseek' && pids.indexOf('custom') > 0, '顺序：deepseek 在最前，custom 在后', pids);
+  ok(pids.indexOf('tokenrhythm') > 0, '预设含基元律动', pids);
+  ok(!pids.some((x) => /magpie|kimi/i.test(x)), '预设不含已删的 magpie / kimi', pids);
   ok(
-    pids[0] === 'deepseek' && pids.indexOf('custom') > 0 && pids.indexOf('magpie') > pids.indexOf('custom'),
-    '顺序：deepseek 在最前，custom / magpie 排在后面',
-    pids
+    (CXAI.PRESETS || []).every((x) => x.id === 'custom' || String(x.model || '') === ''),
+    '所有预设默认不指定模型（空等拉取）',
+    (CXAI.PRESETS || []).map((x) => x.id + ':' + (x.model || ''))
   );
   const customPre = (CXAI.PRESETS || []).filter((p) => p.id === 'custom')[0];
   ok(!!customPre && customPre.apiStyle === 'openai', '自定义默认 OpenAI 兼容', customPre && customPre.apiStyle);

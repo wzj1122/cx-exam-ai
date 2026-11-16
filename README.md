@@ -56,9 +56,13 @@
 
 | 预设 | Base URL | 模型名 |
 |---|---|---|
-| DeepSeek | `https://api.deepseek.com/v1` | `deepseek-chat` |
-| magpie（本地） | `http://127.0.0.1:3425/v1` | `deepseek/deepseek-chat`，Key 填 `magpie` |
-| 自定义 | 自己填 | 自己填，默认按 OpenAI 兼容接口发请求 |
+| DeepSeek | `https://api.deepseek.com/v1` | 留空 → 点「拉取」按清单选 |
+| 基元律动 | `https://tokenrhythm.studio/v1` | 同上 |
+| 通义千问 VL / 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 同上 |
+| 智谱 GLM | `https://open.bigmodel.cn/api/paas/v4` | 同上 |
+| OpenAI | `https://api.openai.com/v1` | 同上 |
+| Ollama / LM Studio | `127.0.0.1:11434/v1`、`127.0.0.1:1234/v1` | 同上，Key 可空 |
+| 自定义模型 | 自己填 | 自己填，默认按 OpenAI 兼容接口发请求 |
 
 填好 Base URL 和 Key 后点模型名右侧的「拉取」，脚本会向供应商的 `/models` 要一份清单，再从「▾」浮层里挑。点「测试连接」看到 `连通 (xxx ms)` 即可。
 
@@ -146,11 +150,13 @@
 
 ## 接自己的模型 / 本地网关
 
-「设置 → 判题模型」每行顶部有**预设下拉**，只有三个：**DeepSeek / 自定义 / magpie**。选中自动填好 Base URL 与模型名，仍可手改。每行只露「预设 / Base URL / API Key / 模型名（含「拉取」「▾」）」。
+「设置 → 判题模型」每行顶部有**预设下拉**，共九个：**DeepSeek / 基元律动 / 通义千问 VL / 通义千问 / 智谱 GLM / OpenAI / Ollama / LM Studio / 自定义模型**。
+
+**所有预设都不预设模型名** —— 模型名以端点最新返回的 `/models` 清单为准：选中预设、填好 Key，点「拉取」，脚本会把清单列出来让你选（模型名为空时自动选第一个，随时能换）。每行只露「预设 / Base URL / API Key / 模型名（含「拉取」「▾」）」。
 
 **自定义默认按 OpenAI 兼容协议**（`POST {base}/chat/completions`，`Authorization: Bearer`）；如果你的端点只吃 Anthropic 协议（`POST {base}/v1/messages`，`x-api-key` + `anthropic-version`），把该行预设选成「自定义」后会多出「接口协议」下拉，切到 `Anthropic 兼容` 即可，Base URL 不用改。
 
-- **接口风格**三选一：`OpenAI /chat/completions`、`Anthropic /v1/messages`、`Gemini generateContent`。magpie 同一端口三种都支持，选任意都行。
+- **接口风格**三选一：`OpenAI /chat/completions`、`Anthropic /v1/messages`、`Gemini generateContent`。magpie 这类本地网关同一端口三种都支持，选任意都行（预设里已不含 magpie，用「自定义模型」填它的地址即可）。
 - **允许空 Key**：Base URL 是 `127.0.0.1` / `localhost` / `10.x` / `192.168.x` / `172.16-31.x` 时自动勾上，本地网关不必编个假 Key。
 - **额外请求体/请求头 JSON**：如 `{"top_p":0.9}`、`{"X-Title":"cx-exam"}`，会深合并进请求。
 
@@ -208,6 +214,14 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.8.3（2026-11-17）预设换血：加基元律动、去 magpie/Kimi、模型名一律留空
+
+- 新增预设 **基元律动**（`https://tokenrhythm.studio/v1`，OpenAI 兼容）。
+- 删除预设 **magpie** 与 **Kimi**；「自定义」改名 **自定义模型**。现在共 9 个预设。
+- **所有预设都不再预设模型名**（`model: ''`）：一律以点「拉取」后端点返回的清单为准，模型名为空时自动选第一个，可随时在同一行的下拉里换。
+- 首次向导的第 1 步也加了「拉取」按钮与模型下拉，选完预设直接拉清单选模型，不用手打。
+- 旧配置里存的 `preset: 'magpie' / 'kimi'` 不会报错：反查逻辑只认当前存在的预设，查不到就显示「自定义模型」，Base URL / 模型名原样保留。
 
 ### v1.8.2（2026-11-17）设置中心分简单版 / 高级版 + 首次三步向导
 
