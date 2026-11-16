@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.8.3（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.8.5（`package.json`）
 
 # MAINTENANCE
 
@@ -225,6 +225,28 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.8.5（2026-11-17）引导页可连续添加多个模型
+
+- **问题**：向导第 1 步只能加一个模型（点「下一步」直接进第 2 步），而判题议会本来就需要多个模型各自作答再投票。
+- 第 1 步改为「已添加列表 + 继续添加」结构：
+  - `wizardStep1()` 顶部渲染已添加的 provider（label / model / Base URL / 删除），`data-act="wz-del"`
+  - 「+ 添加这个模型」`data-act="wz-add"` → `wizardCommitProvider()` 落库后**清空表单并留在第 1 步**，可继续选下一家
+  - 「下一步」在 `providers.length >= 1` 时可用；若表单里还填着未提交的预设，会先替用户提交再切步
+  - 第 3 步的读图下拉自然列出全部已添加模型
+- 新增样式 `.cs-added / .cs-added-row / .cs-sub`。
+- 验证：`check` 11 模块；`test-dom` 114/0；无头探针
+  `cards=9 / after1=1 / formReset=true / after2=2 / afterDel=1 / step2=true / step3opts=1`（删到 1 个时下拉 1 项，正确）。
+
+### v1.8.4（2026-11-17）引导页补上「自定义模型」
+
+- **BUGFIX**：`QUICK` 预设清单（`emptyState()` 与 `wizardStep1()` 共用）只列了 8 家有 `baseURL` 的预设，
+  把 `custom` 漏掉了 —— 用户在引导页看不到「自定义模型」。现已改为 9 个，与实际预设一致。
+- 选「自定义模型」时，第 1 步把 **Base URL 作为必填字段直接露出来**（其余预设仍折叠在「地址不对？」里），
+  并提示"只吃 Anthropic 协议的走完引导后在高级设置里切接口协议"。
+- 切换预设时清空上一次的拉取结果（`w.list = null`），避免残留别的端点的模型清单。
+- 验证：`check` 11 模块；`test-dom` 114/0；无头探针 `cards=9 / customCard=true / baseVisible=true /
+  baseEmpty=true / fetchBtn=true / 空 Base URL 点下一步被拦住 / 填完后进入第 2 步`。
 
 ### v1.8.3（2026-11-17）预设换血：基元律动上线、magpie/Kimi 下线、模型名一律留空
 

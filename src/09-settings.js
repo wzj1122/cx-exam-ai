@@ -295,6 +295,17 @@ CXAI.Settings = (function () {
 .cs-pv .cs-grid { margin-top:12px; }
 
 /* ---- 列表 / 输出 ---- */
+.cs-added { border:1px solid var(--line); border-radius:11px; overflow:hidden; margin-bottom:14px; background:#fff; }
+.cs-added-hd { padding:8px 12px; background:#f7f9fc; border-bottom:1px solid var(--line); font-size:11.5px; color:#6b7280; }
+.cs-added-row { display:flex; align-items:center; gap:9px; padding:9px 12px; border-bottom:1px solid #f1f4f9; font-size:12px; }
+.cs-added-row:last-child { border-bottom:none; }
+.cs-added-row .dot { width:7px; height:7px; border-radius:50%; background:#22c55e; flex:none; }
+.cs-added-row .nm { font-weight:600; color:#1f2937; flex:none; max-width:140px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-added-row .md { color:#4b5563; flex:none; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-added-row .bs { color:#9aa3b2; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cs-added-row .del { color:#b91c1c; font-size:11.5px; cursor:pointer; flex:none; padding:2px 6px; border-radius:6px; }
+.cs-added-row .del:hover { background:#fef2f2; }
+.cs-sub { font-size:11.5px; color:#9aa3b2; margin:0 0 8px; }
 .cs-presets { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
 @media (max-width:760px) { .cs-presets { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .cs-pre { display:flex; flex-direction:column; gap:2px; align-items:flex-start; text-align:left;
@@ -509,7 +520,7 @@ CXAI.Settings = (function () {
 </div>`;
   }
   function emptyState() {
-    const QUICK = ['deepseek', 'tokenrhythm', 'qwen-vl', 'qwen', 'glm', 'openai', 'ollama', 'lmstudio'];
+    const QUICK = ['deepseek', 'tokenrhythm', 'qwen-vl', 'qwen', 'glm', 'openai', 'ollama', 'lmstudio', 'custom'];
     const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
     return `
   <div class="cs-note" style="margin-bottom:12px">
@@ -917,14 +928,32 @@ CXAI.Settings = (function () {
   }
 
   function wizardStep1(w) {
-    const QUICK = ['deepseek', 'tokenrhythm', 'qwen-vl', 'qwen', 'glm', 'openai', 'ollama', 'lmstudio'];
+    const QUICK = ['deepseek', 'tokenrhythm', 'qwen-vl', 'qwen', 'glm', 'openai', 'ollama', 'lmstudio', 'custom'];
     const list = presets().filter((p) => QUICK.indexOf(p.id) >= 0);
     const pre = presetById(w.pick);
+    const added = cfg().ai.providers || [];
     return `
 ${wizardSteps(1)}
 <section class="cs-card">
-  <h2>先加一个模型 <span class="tag">第 1 步 / 共 3 步</span></h2>
-  <p class="desc">选一家（地址和模型名会自动填好），再填上你自己的 API Key。用本地网关（Ollama / LM Studio 等）的话 Key 可以留空。</p>
+  <h2>先加模型 <span class="tag">第 1 步 / 共 3 步 · 可加多个</span></h2>
+  <p class="desc">判题时多个模型会各自作答再投票，所以这里可以加好几个：选一家、填 Key、点「添加这个模型」，想加第二个就再选一次。用本地网关（Ollama / LM Studio 等）的话 Key 可以留空。</p>
+  ${added.length
+      ? `<div class="cs-added">
+          <div class="cs-added-hd">已添加 ${added.length} 个模型（判题会一起参与）</div>
+          ${added
+            .map(
+              (p) => `<div class="cs-added-row">
+              <span class="dot"></span>
+              <span class="nm">${esc(p.label || p.model || p.id)}</span>
+              <span class="md">${esc(p.model || '（未选模型）')}</span>
+              <span class="bs">${esc(p.baseURL || '')}</span>
+              <span class="del" data-act="wz-del" data-id="${esc(p.id)}">删除</span>
+            </div>`
+            )
+            .join('')}
+        </div>`
+      : ''}
+  <div class="cs-sub">${added.length ? '再加一个：' : '选一家：'}</div>
   <div class="cs-presets">
     ${list
       .map(
@@ -939,6 +968,11 @@ ${wizardSteps(1)}
   </div>
   ${pre
       ? `<div class="cs-grid" style="margin-top:16px">
+          ${w.pick === 'custom'
+            ? `<div class="cs-fld" style="grid-column:1 / -1"><label>Base URL（必填）</label>
+                <input class="cs-in" data-wz="base" value="${esc(w.base)}" placeholder="https://你的端点/v1">
+                <div class="hint">任何 OpenAI 兼容端点都行；只吃 Anthropic 协议的，走完引导后在高级设置里把「接口协议」切过去。</div></div>`
+            : ''}
           <div class="cs-fld"><label>API Key${pre.keyOptional ? '（这家可留空）' : ''}</label>
             <input class="cs-in" type="password" data-wz="key" value="${esc(w.key)}" autocomplete="off"
               placeholder="${pre.keyOptional ? '本地网关随便填，或留空' : 'sk-…'}"></div>
@@ -955,15 +989,18 @@ ${wizardSteps(1)}
               : '<div class="hint">模型名以端点最新返回的清单为准，所以默认不预设</div>'}
           </div>
         </div>
-        <details style="margin-top:10px"><summary class="hint" style="cursor:pointer">地址不对？手动改 Base URL</summary>
-          <input class="cs-in" style="margin-top:8px" data-wz="base" value="${esc(w.base || pre.baseURL || '')}">
-        </details>`
-      : '<div class="cs-note" style="margin-top:14px">先点上面任意一家，再填 Key。</div>'}
+        ${w.pick === 'custom'
+          ? ''
+          : `<details style="margin-top:10px"><summary class="hint" style="cursor:pointer">地址不对？手动改 Base URL</summary>
+              <input class="cs-in" style="margin-top:8px" data-wz="base" value="${esc(w.base || pre.baseURL || '')}">
+            </details>`}`
+      : '<div class="cs-note" style="margin-top:14px">上面点一家，再填 Key。已经有清单里的模型就直接点「下一步」。</div>'}
   <div class="cs-row" style="margin-top:16px;flex-wrap:wrap">
     <button class="cs-btn" data-act="wz-test"${pre ? '' : ' disabled'}>${w.testing ? '测试中…' : '测试连通'}</button>
-    <span class="hint" id="cs-wzout" style="flex:1;min-width:160px">${esc(w.out || '')}</span>
+    <span class="hint" id="cs-wzout" style="flex:1;min-width:150px">${esc(w.out || '')}</span>
+    ${pre ? '<button class="cs-btn pri" data-act="wz-add">+ 添加这个模型</button>' : ''}
     <button class="cs-btn" data-act="wz-skip" title="先跳过引导，直接进设置页">先跳过</button>
-    <button class="cs-btn pri" data-act="wz-next"${pre ? '' : ' disabled'}>下一步 →</button>
+    <button class="cs-btn${added.length ? ' pri' : ''}" data-act="wz-next"${added.length || pre ? '' : ' disabled'}>下一步 →</button>
   </div>
 </section>`;
   }
@@ -1681,6 +1718,7 @@ ${wizardSteps(3)}
         w.key = '';
         w.model = pre ? pre.model || '' : '';
         w.base = pre ? pre.baseURL || '' : '';
+        w.list = null;
         w.out = '';
         renderFrame();
         break;
@@ -1697,12 +1735,53 @@ ${wizardSteps(3)}
       case 'wz-fetch':
         wizardFetch();
         break;
+      case 'wz-add': {
+        const r = wizardCommitProvider();
+        if (!r.ok) {
+          toast(r.msg, 'warn');
+          break;
+        }
+        const w = wizardState();
+        const label = r.provider ? r.provider.label || r.provider.model : '';
+        w.pick = '';
+        w.key = '';
+        w.model = '';
+        w.base = '';
+        w.list = null;
+        w.out = '';
+        renderFrame();
+        toast('已添加 ' + label + ' · 可以继续加，或点「下一步」', 'ok');
+        break;
+      }
+      case 'wz-del': {
+        const id = el.getAttribute('data-id');
+        const c = cfg();
+        c.ai.providers = (c.ai.providers || []).filter((p) => p.id !== id);
+        CXAI.Cfg.save();
+        const w = wizardState();
+        w.list = null;
+        renderFrame();
+        toast('已删除', 'ok');
+        break;
+      }
       case 'wz-next': {
         const w = wizardState();
         if (w.step === 1) {
-          const r = wizardCommitProvider();
-          if (!r.ok) {
-            toast(r.msg, 'warn');
+          // 表里还填着未提交的那个，先替用户加进去
+          if (w.pick) {
+            const r = wizardCommitProvider();
+            if (!r.ok) {
+              toast(r.msg, 'warn');
+              break;
+            }
+            w.pick = '';
+            w.key = '';
+            w.model = '';
+            w.base = '';
+            w.list = null;
+          }
+          if (!(cfg().ai.providers || []).length) {
+            toast('至少添加一个模型', 'warn');
             break;
           }
           w.step = 2;
