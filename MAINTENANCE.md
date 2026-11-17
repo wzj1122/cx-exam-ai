@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.1（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.2（`package.json`）
 
 # MAINTENANCE
 
@@ -274,6 +274,12 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.2（2026-11-17）附件题缺视觉输入时硬失败（可执行提示）
+
+- `04-ai.solve()`：`attachMeta.mode==='pages'` 且 `vctx.imageParts`/`vctx.vision` 都为空时抛错，文案里区分三种原因（`ai.vision.enabled=false`/`strategy=off`、页图全部加载失败、面板无视觉模型），并指向「设置 → 读图 → 读图模型」。
+- 目的：附件题的题干只有页图，没有视觉输入时模型只能回"题目正文缺失"，这句话会被 `apply` 当答案写进 UEditor —— 宁可报错也不要写垃圾。
+- 实测依据：只配纯文本模型时必现；PDF 文字层虽有中文，但数学公式全丢（`pdftotext` 实测），所以"抽文字给纯文本模型"不可作为替代方案。
 
 ### v1.10.1（2026-11-17）一键发布：GitHub + Cloudflare 一条命令
 

@@ -748,6 +748,28 @@ CXAI.AI = (function () {
       CXAI.Log.warn('读图准备失败：' + e.message);
     }
 
+    // ---- 附件题硬约束 ----
+    // 附件题的题干是一张张 PDF 页图，模型看不到图就只能回"题目正文缺失，需补充具体小题"。
+    // 那种回答对答题框毫无价值，还会被当成答案写进去，所以这里直接抛可执行的提示。
+    if (question && question.attachMeta && question.attachMeta.mode === 'pages') {
+      const hasInline = !!(vctx.imageParts && vctx.imageParts.length);
+      const hasOcr = !!(
+        vctx.vision && String((vctx.vision.text || '') + (vctx.vision.questionText || '')).trim()
+      );
+      if (!hasInline && !hasOcr) {
+        const vc = CXAI.Vision.cfg();
+        let why;
+        if (!vc.enabled || vc.strategy === 'off') why = '读图通道被关闭（ai.vision.enabled=false 或 strategy=off）';
+        else if (vctx.dropped) why = 'PDF 页图一张也没加载成功（共 ' + vctx.dropped + ' 张）';
+        else why = '当前面板里没有能看图的模型';
+        throw new Error(
+          '附件题必须读 PDF 页图，但' +
+            why +
+            '。去 设置 → 读图，把「读图模型」指向一个支持视觉的模型（通义千问 VL / Gemini / 任意勾了“支持视觉”的自定义模型），保存后重跑这道题。'
+        );
+      }
+    }
+
     // ---- Round 1：并行独立作答 ----
     const round1 = await runSolveRound(panel, question, vctx);
     if (round1.drafts.length === 0) {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.10.1
+// @version      1.10.2
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.10.1";
-CXAI.__builtAt = "2026-11-17T02:37:36.276Z";
+CXAI.__version = "1.10.2";
+CXAI.__builtAt = "2026-11-17T02:40:45.412Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -3947,6 +3947,28 @@ CXAI.AI = (function () {
       vctx = await resolveVision(question, panel);
     } catch (e) {
       CXAI.Log.warn('读图准备失败：' + e.message);
+    }
+
+    // ---- 附件题硬约束 ----
+    // 附件题的题干是一张张 PDF 页图，模型看不到图就只能回"题目正文缺失，需补充具体小题"。
+    // 那种回答对答题框毫无价值，还会被当成答案写进去，所以这里直接抛可执行的提示。
+    if (question && question.attachMeta && question.attachMeta.mode === 'pages') {
+      const hasInline = !!(vctx.imageParts && vctx.imageParts.length);
+      const hasOcr = !!(
+        vctx.vision && String((vctx.vision.text || '') + (vctx.vision.questionText || '')).trim()
+      );
+      if (!hasInline && !hasOcr) {
+        const vc = CXAI.Vision.cfg();
+        let why;
+        if (!vc.enabled || vc.strategy === 'off') why = '读图通道被关闭（ai.vision.enabled=false 或 strategy=off）';
+        else if (vctx.dropped) why = 'PDF 页图一张也没加载成功（共 ' + vctx.dropped + ' 张）';
+        else why = '当前面板里没有能看图的模型';
+        throw new Error(
+          '附件题必须读 PDF 页图，但' +
+            why +
+            '。去 设置 → 读图，把「读图模型」指向一个支持视觉的模型（通义千问 VL / Gemini / 任意勾了“支持视觉”的自定义模型），保存后重跑这道题。'
+        );
+      }
     }
 
     // ---- Round 1：并行独立作答 ----
