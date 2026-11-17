@@ -26,7 +26,12 @@
  * 全程可降级：两条路都失败 → 只把附件名与直链写进题干，warn 交给 UI，绝不中断整卷。
  */
 (function () {
-  const CXAI = (window.CXAI = window.CXAI || {});
+  /**
+   * 注意：这里**不要**写 `const CXAI = (window.CXAI = window.CXAI || {})`。
+   * build.js 把所有模块拼进同一个外层 IIFE，模块之间共享外层的 `var CXAI`；
+   * 各自 `window.CXAI = ...` 会另造一个对象，而 `08-main` 末尾的 `window.CXAI = CXAI`
+   * 会把那个临时对象整个覆盖掉 —— 症状就是 CXAI.Attach 永远是 undefined。
+   */
 
   const PDF_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
   const MAX_PAGES = 6;
@@ -422,6 +427,45 @@
     else if (cur.indexOf('【附件材料】') < 0) question.stem = cur + '\n' + tag;
   }
 
+  /**
+   * 页图 URL → dataURL。
+   * 走页面 fetch（s3.cldisk.com 允许跨域，实测 200），而不是 GM_xmlhttpRequest：
+   * GM 请求会带自定义 Referer，跨域时触发 preflight，s3 不认 OPTIONS —— 图直接丢。
+   * 转成 dataURL 后 03b 的 Vision.load() 是直通分支，不再发任何请求，最稳。
+   */
+  async function pageToDataUrl(url, edge, quality) {
+    const r = await fetch(url, { credentials: 'include' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const blob = await r.blob();
+    if (!blob || !blob.size) throw new Error('空图片');
+    if (typeof createImageBitmap === 'function' && typeof document !== 'undefined') {
+      try {
+        const bmp = await createImageBitmap(blob);
+        const scale = Math.min(1, (edge || 1400) / Math.max(bmp.width, bmp.height));
+        const w = Math.max(1, Math.round(bmp.width * scale));
+        const h = Math.max(1, Math.round(bmp.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(bmp, 0, 0, w, h);
+        try {
+          if (bmp.close) bmp.close();
+        } catch (e) {}
+        const out = canvas.toDataURL('image/jpeg', quality || 0.85);
+        if (out && out.length > 2000) return out;
+      } catch (e) {}
+    }
+    return await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result || ''));
+      fr.onerror = () => reject(new Error('读取图片失败'));
+      fr.readAsDataURL(blob);
+    });
+  }
+
   function applyImages(question, meta, images) {
     question.attachMeta = meta;
     if (!question.images) question.images = [];
@@ -470,14 +514,27 @@
     try {
       const imgs = await pageImageUrls(a);
       if (imgs.length) {
+        const sliced = imgs.slice(0, c.maxPages);
+        const dataUrls = [];
+        for (const u of sliced) {
+          try {
+            const d = await pageToDataUrl(u, c.renderEdge, c.quality);
+            if (d) dataUrls.push(d);
+          } catch (e) {
+            warnOnce('img:' + u, '页图转存失败：' + e.message);
+          }
+        }
+        const picked = dataUrls.length ? dataUrls : sliced;
         meta.mode = 'pages';
-        meta.source = 'screen';
+        meta.source = dataUrls.length ? 'screen+inline' : 'screen';
         meta.pages = imgs.length;
-        const picked = imgs.slice(0, c.maxPages);
         cache.set(a.objectid, { at: Date.now(), meta: meta, pages: picked });
         applyImages(question, meta, picked);
         try {
-          CXAI.Log.info('附件题：' + meta.filename + ' · ' + imgs.length + ' 页，已取页面原生页图');
+          CXAI.Log.info(
+            '附件题：' + meta.filename + ' · ' + imgs.length + ' 页，' +
+              (dataUrls.length ? dataUrls.length + ' 页已内联成图' : '仅拿到图地址')
+          );
         } catch (e) {}
         return question.attachMeta;
       }
@@ -540,6 +597,7 @@
     collect: collect,
     previewUrl: previewUrl,
     pageImageUrls: pageImageUrls,
+    pageToDataUrl: pageToDataUrl,
     hashPath: hashPath,
     md5: md5hex,
     probeImage: probeImage,

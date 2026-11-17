@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.2（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.3（`package.json`）
 
 # MAINTENANCE
 
@@ -274,6 +274,14 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.3（2026-11-17）修 CXAI.Attach 丢失（模板拼接陷阱）+ 页图内联
+
+- **根因**：`03c-attach.js` 是唯一在模块 IIFE 里自建命名空间的模块（`const CXAI = (window.CXAI = window.CXAI || {})`），其它模块都直接用 `build.js` 外层 IIFE 的 `var CXAI`。`08-main` 末尾 `(unsafeWindow||window).CXAI = CXAI` 会覆盖 03c 造的那个临时对象 —— `CXAI.Attach` 恒为 `undefined`，`04-ai.solve()` 里 `if (CXAI.Attach && ...)` 静默跳过，附件题退化成"只有文件名"，模型只能回「题目正文缺失」。VM 打点实测：`before-03c=undefined / after-03c=object / final=undefined`；删掉该行后 `final=object`。
+- **页图获取**：`GM_xmlhttpRequest` 带自定义 `Referer`，跨域触发 preflight，s3 无 `OPTIONS` → 图全丢。改为 `pageToDataUrl()`：页面 `fetch`（s3 允许跨域，实测 200）→ `createImageBitmap` + canvas → JPEG 0.85 / 长边 1400 dataURL，塞进 `question.images`；`03b.Vision.load()` 对 dataURL 是直通分支，零请求。
+- **失败兜底**：dataURL 一张都没成时退回原始图 URL；仍失败则 `solve()` 抛可执行错误。
+- **实测**：真实 magpie 网关（`127.0.0.1:3425`，`auto/qwen3.8-flash`）+ s3 两张页图 → 输出 5 选择 / 5 填空 / 4 计算证明题答案，`confidence 0.9`，37s。
+- **守则补充**：新增 `src/NN-*.js` 模块不要自己创建 `window.CXAI`，直接用外层闭包的 `CXAI`。
 
 ### v1.10.2（2026-11-17）附件题缺视觉输入时硬失败（可执行提示）
 
