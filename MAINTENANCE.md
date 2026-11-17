@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.0（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.1（`package.json`）
 
 # MAINTENANCE
 
@@ -78,6 +78,7 @@ cx-exam-ai/
 | `LICENSE` | — | MIT，版权人 `wzj1122` | 无 |
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
 | `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main`
+| `tools/release.js` | `node tools/release.js [--bump patch\|minor\|major] [--version x.y.z] [--dry] [--skip-test] [--no-deploy] [--no-verify] [-m 说明]` | 一键发布：版本同步 → build → check → test-dom → build-site → 白名单 commit → push → wrangler pages deploy → 线上回读 `@version`。只 add 白名单路径，暂存区出现 profile/logs 立即中止 | `build.js` `tools/check.js` `tools/test-dom.js` `tools/build-site.js` `wrangler.jsonc` |
 | `tools/verify-cdp.mjs` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | 真实浏览器端到端验证：自起两个静态服务（8790/8791 = 两个 origin，复现跨域存储隔离）+ headless Chrome（CDP），跑「设置中心向导 → 配置码 → 云同步(KV) → 考试页落库 → 悬浮球/面板」27 项断言，用 `Input.dispatchMouseEvent` 发真实双击（球的交互是 pointer 链，合成 click 无效） | `dist/` `.site/` `tools/shim.js` `tools/fixtures/exam-mock.html` |
 | `tools/fixtures/exam-mock.html` | — | 模拟学习通考试页（`.questionLi` + `.stem_answer` + `check_answer` 点选行为），给 `verify-cdp.mjs` 当考试页夹具 | `tools/verify-cdp.mjs` |
 | `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` 与 `settings.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
@@ -210,6 +211,30 @@ Engine.start()
     `history.replaceState` 清掉 hash（避免重复导入、避免配置留在地址/历史里）；
   - 备用通道：设置页「复制配置码」/ JSON 导出 → 考试页面板「备份 → 导入」。
 
+### 5d. 一键发布（tools/release.js）
+
+```bash
+npm run release -- --bump patch|minor|major   # 升版本后发布
+npm run release -- --version 1.11.0           # 指定版本
+npm run release:dry                           # 只构建+自检+测试+生成 .site/
+```
+
+八步流水线，**任一步非零退出立即中止**：
+
+| # | 步骤 | 说明 |
+|---|---|---|
+| 0 | 版本号 | `package.json.version` 为唯一来源，写入 `src/00-header.js` 的 `@version`；两处不一致直接 die |
+| 1 | `node build.js` | `dist/cx-exam-ai.user.js`（唯一交付物，脚本不手改） |
+| 2 | `node tools/check.js` | 模块编号/语法/契约自检 |
+| 3 | `node tools/test-dom.js` | 离线集成测试（可 `--skip-test`） |
+| 4 | `node tools/build-site.js` | 生成 `.site/`（Pages 发布目录，**只有** index/settings/dist/images） |
+| 5 | `git add` + `commit` | 只 add 白名单路径；暂存区出现 `logs/`/`.cdp-profile/`/`.chrome-profile/`/`.shot-*` 立即中止；无改动则跳过 |
+| 6 | `git push origin main` | Greasy Fork 从 main 自动同步（ID 605687） |
+| 7 | `npx wrangler pages deploy --branch=main` | 上传 `.site/` + Functions bundle（`--no-deploy` 可跳过） |
+| 8 | 线上回读 | `curl` Pages 上的 `dist/cx-exam-ai.user.js` 校验 `@version`（`--no-verify` 可跳过；CDN 时延只告警不失败） |
+
+参数全集见 `CLAUDE.md`「正式发布流程」。**不要**改回"手动 build + 手动 push + 手动 wrangler"三连，版本号两处漏改是历史高频事故。
+
 ### 5. 状态与配置
 
 - 配置全部落 `CXAI.Store`（GM_getValue/setValue，回退 localStorage），键 `CXAI.CONFIG_KEY`
@@ -249,6 +274,14 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.1（2026-11-17）一键发布：GitHub + Cloudflare 一条命令
+
+- 新增 `tools/release.js`：八步流水线（版本同步 → build → check → test-dom → build-site → 白名单 commit → push → wrangler deploy → 线上回读），任一步失败即中止。
+- `package.json` 新增 `npm run release` / `npm run release:dry`。
+- `CLAUDE.md`：正式发布流程改为「一条命令」，保留手动步骤作兜底；写明白名单与禁止项。
+- `README.md`：开发章节补「一条命令发新版」。
+- `MAINTENANCE.md`：新增「5d. 一键发布」流程表与 `tools/release.js` 文件说明。
 
 ### v1.10.0（2026-11-17）附件题（PDF 当题干）
 

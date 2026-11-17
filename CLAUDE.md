@@ -25,14 +25,42 @@
 
 ## 发布规则
 
-### 正式发布流程
+### 正式发布流程（一条命令）
+
+```bash
+npm run release -- --bump patch   # 或 --bump minor / --version 1.11.0
+```
+
+`tools/release.js` 依次做：**版本号同步（package.json → 00-header @version）→ `node build.js` → `node tools/check.js` → `node tools/test-dom.js` → `node tools/build-site.js` → `git add`（白名单）→ `git commit` → `git push origin main` → `npx wrangler pages deploy --branch=main` → 线上回读 `@version`**。任一步失败立即中止，不会出现"推了源码没推 dist"或"版本号两处不一致"。
+
+常用参数：
+
+| 参数 | 作用 |
+|---|---|
+| `--dry` | 只跑构建 + 自检 + 测试 + `.site/`，不提交、不推送、不部署 |
+| `--bump patch\|minor\|major` | 先升版本再发布（功能新增用 minor，纯修复用 patch） |
+| `--version x.y.z` | 指定版本发布（与 `--bump` 二选一） |
+| `--skip-test` | 跳过离线测试（不建议） |
+| `--no-deploy` | 只推 GitHub，不动 Cloudflare |
+| `--no-verify` | 跳过线上版本号回读 |
+| `-m "说明"` | 自定义提交信息（默认 `v<version>: 发布`） |
+
+安全约束（脚本内置，不要绕过）：
+
+- 只 `git add` 白名单路径（`src dist tools functions images docs` + 根目录文档与配置），**永不 `git add -A` / `git add -f`**；暂存区一旦出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*` 直接中止。
+- `dist/` 只由 `build.js` 生成，脚本不手改产物。
+- 工作区没有改动时只部署不提交（不会造空提交）。
+- Greasy Fork 从 `main` 自动同步（ID `605687`），推送即触发，不需要单独操作。
+
+### 手动发布（脚本不可用时）
 
 1. 改 `src/`，同步改 `src/00-header.js` 的 `@version` 与 `package.json` 的 `version`（两处必须一致）
 2. `node build.js` 重建 `dist/cx-exam-ai.user.js`
 3. `node tools/check.js` + `node tools/test-dom.js` 全绿
 4. 更新 `README.md` 的更新日志与 `MAINTENANCE.md` 的变更记录
 5. Commit + Push 到 `main`（Greasy Fork 从 `main` 同步，推送即触发）
-6. 需要时创建 GitHub Release（tag 形如 `v1.7.0`）
+6. `npm run site && npx wrangler pages deploy --branch=main`（Cloudflare Pages）
+7. 需要时创建 GitHub Release（tag 形如 `v1.10.0`）
 
 ### 版本号约定
 

@@ -189,8 +189,20 @@ node tools/check.js    # 语法 + 模块契约自检
 node tools/test-dom.js # 离线集成测试（自建 DOM 垫片 + 模拟模型端点）
 node tools/build-site.js # 生成 Cloudflare 发布目录 .site/（只含 index.html + settings.html + dist/ + images/）
 node tools/verify-cdp.mjs # 真实浏览器端到端验证（CDP 驱动 Chrome，两个 origin 模拟跨域）
-npx wrangler pages deploy --project-name=cx-exam-ai --branch=main   # 发布到 Cloudflare Pages
+npx wrangler pages deploy --project-name=cx-exam-ai --branch=main   # 只发布 .site/ 到 Cloudflare Pages
 ```
+
+### 一条命令发新版（GitHub + Cloudflare）
+
+```bash
+npm run release -- --bump patch    # 升 PATCH 位并发布；功能新增用 minor
+npm run release -- --version 1.11.0
+npm run release:dry                # 只构建+自检+测试，不提交不部署
+```
+
+`tools/release.js` 会依次：同步版本号（`package.json` → `src/00-header.js` 的 `@version`）→ 构建 `dist/` → 自检 → 离线测试 → 生成 `.site/` → 按白名单 `git add` → `commit` → `push origin main` → `wrangler pages deploy --branch=main` → 回读线上 `@version` 校验。中间任何一步失败就中止，不会留下"源码推了、`dist` 没推"或"两处版本号不一致"的半成品。
+
+`--dry`（或 `npm run release:dry`）把最后三步换成跳过，适合先看构建和测试是否全绿。
 
 零依赖，不需要 `npm install`。两层测试：
 
