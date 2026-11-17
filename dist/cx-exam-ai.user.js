@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.10.3
+// @version      1.10.4
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.10.3";
-CXAI.__builtAt = "2026-11-17T02:50:53.983Z";
+CXAI.__version = "1.10.4";
+CXAI.__builtAt = "2026-11-17T02:59:55.163Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -208,6 +208,12 @@ CXAI.DEFAULT_CONFIG = {
     autoNext: true,
     /** 全部答完后自动交卷（危险，默认关闭） */
     autoSubmit: false,
+    /**
+     * 优先切「整卷预览」：单题翻页模式下先点页面上的整卷预览入口，
+     * 一页装下全部题目再作答（省掉逐题翻页，也避免翻页丢答案）。
+     * 关掉后一律在当前页逐题作答。
+     */
+    preferPreview: true,
     /**
      * 附件题干通道：题目正文放在 PDF/Office 附件里（2026-11 期中考试实测的新题型）。
      * 打开后会把附件渲染成页图送读图、并把"作答框=整卷答题区"的说明写进 prompt。
@@ -5616,6 +5622,26 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
 
   /* ---------------- 渲染 ---------------- */
 
+  /**
+   * 把浮球坐标夹进当前视口。
+   * 为什么必须有：`uiPos` 是持久化的，换个显示器、把窗口从 2048 缩到 1024、
+   * 或者笔记本拔掉外接屏之后，存下来的 left/top 就落在视口外 ——
+   * 浮球 34px 大、`.panel` 又是相对 `.wrap` 的 absolute，于是整块 UI 一起消失，
+   * 用户看到的就是"脚本不见了"（2026-11-17 实测：视口 1024×1153，存的 left=2006）。
+   */
+  function clampBallPos(left, top) {
+    const w = window.innerWidth || 1024;
+    const h = window.innerHeight || 768;
+    const maxL = Math.max(2, w - 42);
+    const maxT = Math.max(2, h - 42);
+    const l = Math.round(Number(left));
+    const t = Math.round(Number(top));
+    return {
+      left: Math.min(maxL, Math.max(2, isFinite(l) ? l : maxL)),
+      top: Math.min(maxT, Math.max(2, isFinite(t) ? t : maxT))
+    };
+  }
+
   /** 面板贴着球的一侧展开：球在左半屏就往右开，别溢出屏幕 */
   function placePanel(ballLeft) {
     const p = $('#panel');
@@ -5704,15 +5730,42 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     try {
       const pos = CXAI.Store.get('uiPos', null);
       if (pos && pos.left != null) {
-        wrap.style.left = pos.left + 'px';
-        wrap.style.top = pos.top + 'px';
+        const c = clampBallPos(pos.left, pos.top);
+        wrap.style.left = c.left + 'px';
+        wrap.style.top = c.top + 'px';
         wrap.style.right = 'auto';
         wrap.style.bottom = 'auto';
+        if (c.left !== Math.round(Number(pos.left)) || c.top !== Math.round(Number(pos.top))) {
+          // 旧坐标已越界：顺手写回修正值，免得下次打开又跑出去
+          try {
+            CXAI.Store.set('uiPos', c);
+          } catch (e) {}
+        }
       }
       const m = CXAI.Store.get('ballMode', '');
       if (m === 'auto' || m === 'single') state.mode = m;
     } catch (e) {}
     placePanel();
+
+    // 窗口尺寸变化（含换显示器、缩放、全屏切换）后把球和面板拉回视口内
+    try {
+      window.addEventListener('resize', () => {
+        try {
+          const r = wrap.getBoundingClientRect();
+          const c = clampBallPos(r.left, r.top);
+          if (Math.abs(c.left - r.left) > 1 || Math.abs(c.top - r.top) > 1) {
+            wrap.style.left = c.left + 'px';
+            wrap.style.top = c.top + 'px';
+            wrap.style.right = 'auto';
+            wrap.style.bottom = 'auto';
+            try {
+              CXAI.Store.set('uiPos', c);
+            } catch (e) {}
+          }
+          placePanel(c.left);
+        } catch (e) {}
+      });
+    } catch (e) {}
 
     let drag = null;
     let lpTimer = null;
@@ -7007,9 +7060,15 @@ CXAI.Engine = (function () {
       }
       // 有「整卷预览」入口就先切过去：一页装下全部题目，答题全程不用翻页
       // （ocsjs 也是这么干的）。只在单题模式下尝试，且一程只尝试一次，失败自动回退。
+      // 触发条件：单题翻页模式，或者"题量比当前页可见的多"（说明还在逐题渲染）。
+      // 光看 page.mode==='single' 不够：有些卷子 nextBtn 取不到，mode 会被判成 whole，
+      // 结果明明有 10 题却只在一页里看到 1 题，整卷预览永远不触发（2026-11-17 实测反馈）。
+      const shownNow = document.querySelectorAll('.questionLi').length;
+      const totalNow = CXAI.Scraper.totalCount ? CXAI.Scraper.totalCount() : shownNow;
+      const needPreview = page.mode === 'single' || (totalNow > shownNow && shownNow > 0);
       if (
         page.kind !== 'chapter' &&
-        page.mode === 'single' &&
+        needPreview &&
         !st.previewTried &&
         CXAI.Cfg.get('answer.preferPreview', true)
       ) {

@@ -839,9 +839,15 @@ CXAI.Engine = (function () {
       }
       // 有「整卷预览」入口就先切过去：一页装下全部题目，答题全程不用翻页
       // （ocsjs 也是这么干的）。只在单题模式下尝试，且一程只尝试一次，失败自动回退。
+      // 触发条件：单题翻页模式，或者"题量比当前页可见的多"（说明还在逐题渲染）。
+      // 光看 page.mode==='single' 不够：有些卷子 nextBtn 取不到，mode 会被判成 whole，
+      // 结果明明有 10 题却只在一页里看到 1 题，整卷预览永远不触发（2026-11-17 实测反馈）。
+      const shownNow = document.querySelectorAll('.questionLi').length;
+      const totalNow = CXAI.Scraper.totalCount ? CXAI.Scraper.totalCount() : shownNow;
+      const needPreview = page.mode === 'single' || (totalNow > shownNow && shownNow > 0);
       if (
         page.kind !== 'chapter' &&
-        page.mode === 'single' &&
+        needPreview &&
         !st.previewTried &&
         CXAI.Cfg.get('answer.preferPreview', true)
       ) {

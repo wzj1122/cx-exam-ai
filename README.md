@@ -236,6 +236,12 @@ cx-exam-ai/
 
 ## 更新日志
 
+### v1.10.4（2026-11-17）修浮球跑出视口 + 整卷预览不触发
+
+- **修 bug（用户实测）**：浮球位置 `uiPos` 是持久化的，换显示器/缩小窗口后存下来的 `left:2006px` 落在 1024 宽的视口外；`.panel` 又是相对 `.wrap` 的 absolute 定位 → 球和面板整块飞到屏幕外，表现就是"脚本不见了"。现在恢复位置时用 `clampBallPos()` 夹进视口（并写回修正值），另加 `resize` 监听，窗口尺寸一变就重新夹+重排面板。
+- **修 bug**：整卷预览原本只在 `page.mode==='single'` 时触发；有些卷子取不到 `nextBtn`，`mode` 被判成 `whole`，于是"题量 10 题、当前页只渲染 1 题"时永远不切预览。现在条件放宽为 `single || (题量 > 当前页可见题数)`。
+- `answer.preferPreview` 补进 `DEFAULT_CONFIG`（原来只在代码里当默认值传，设置中心读不到）。
+
 ### v1.10.3（2026-11-17）修 CXAI.Attach 丢失 + 附件页图内联
 
 - **修 bug（关键）**：`03c-attach.js` 曾自己写 `const CXAI = (window.CXAI = window.CXAI || {})`，是全脚本唯一这么写的模块。`build.js` 把模块拼进同一个外层 IIFE，`08-main` 末尾 `window.CXAI = CXAI` 会把那个临时对象整个覆盖 —— 结果 `CXAI.Attach` 永远 `undefined`，`solve()` 里的附件环节被静默跳过，模型只看到文件名，于是回「无法确定（题目正文缺失）」。现在改为直接使用外层 `CXAI`。

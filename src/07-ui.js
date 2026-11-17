@@ -437,6 +437,26 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
 
   /* ---------------- 渲染 ---------------- */
 
+  /**
+   * 把浮球坐标夹进当前视口。
+   * 为什么必须有：`uiPos` 是持久化的，换个显示器、把窗口从 2048 缩到 1024、
+   * 或者笔记本拔掉外接屏之后，存下来的 left/top 就落在视口外 ——
+   * 浮球 34px 大、`.panel` 又是相对 `.wrap` 的 absolute，于是整块 UI 一起消失，
+   * 用户看到的就是"脚本不见了"（2026-11-17 实测：视口 1024×1153，存的 left=2006）。
+   */
+  function clampBallPos(left, top) {
+    const w = window.innerWidth || 1024;
+    const h = window.innerHeight || 768;
+    const maxL = Math.max(2, w - 42);
+    const maxT = Math.max(2, h - 42);
+    const l = Math.round(Number(left));
+    const t = Math.round(Number(top));
+    return {
+      left: Math.min(maxL, Math.max(2, isFinite(l) ? l : maxL)),
+      top: Math.min(maxT, Math.max(2, isFinite(t) ? t : maxT))
+    };
+  }
+
   /** 面板贴着球的一侧展开：球在左半屏就往右开，别溢出屏幕 */
   function placePanel(ballLeft) {
     const p = $('#panel');
@@ -525,15 +545,42 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     try {
       const pos = CXAI.Store.get('uiPos', null);
       if (pos && pos.left != null) {
-        wrap.style.left = pos.left + 'px';
-        wrap.style.top = pos.top + 'px';
+        const c = clampBallPos(pos.left, pos.top);
+        wrap.style.left = c.left + 'px';
+        wrap.style.top = c.top + 'px';
         wrap.style.right = 'auto';
         wrap.style.bottom = 'auto';
+        if (c.left !== Math.round(Number(pos.left)) || c.top !== Math.round(Number(pos.top))) {
+          // 旧坐标已越界：顺手写回修正值，免得下次打开又跑出去
+          try {
+            CXAI.Store.set('uiPos', c);
+          } catch (e) {}
+        }
       }
       const m = CXAI.Store.get('ballMode', '');
       if (m === 'auto' || m === 'single') state.mode = m;
     } catch (e) {}
     placePanel();
+
+    // 窗口尺寸变化（含换显示器、缩放、全屏切换）后把球和面板拉回视口内
+    try {
+      window.addEventListener('resize', () => {
+        try {
+          const r = wrap.getBoundingClientRect();
+          const c = clampBallPos(r.left, r.top);
+          if (Math.abs(c.left - r.left) > 1 || Math.abs(c.top - r.top) > 1) {
+            wrap.style.left = c.left + 'px';
+            wrap.style.top = c.top + 'px';
+            wrap.style.right = 'auto';
+            wrap.style.bottom = 'auto';
+            try {
+              CXAI.Store.set('uiPos', c);
+            } catch (e) {}
+          }
+          placePanel(c.left);
+        } catch (e) {}
+      });
+    } catch (e) {}
 
     let drag = null;
     let lpTimer = null;

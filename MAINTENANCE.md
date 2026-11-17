@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.3（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.4（`package.json`）
 
 # MAINTENANCE
 
@@ -274,6 +274,13 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.4（2026-11-17）浮球越界兜底 + 整卷预览触发条件放宽
+
+- `07-ui.js`：新增 `clampBallPos(left, top)`；`setupBall()` 恢复 `uiPos` 时夹进视口并回写；新增 `window.resize` 监听重新夹+`placePanel`。根因：`uiPos` 持久化了旧窗口坐标（实测 `left=2006`、视口 1024 宽），`.panel` 是 `.wrap` 内 absolute，整块 UI 一起飞出屏幕。
+- `08-main.js`：整卷预览触发条件从 `page.mode==='single'` 放宽到 `single || (totalCount > 当前可见 .questionLi 数)`，解决"nextBtn 取不到 → mode=whole → 十题卷子只渲染一题却从不切预览"。
+- `01-core.js`：`DEFAULT_CONFIG.answer.preferPreview = true`（补上守则不变量：所有 `Cfg.get` 路径必须在 DEFAULT_CONFIG 里）。
+- 实测：视口 1024×1153 下 `saved={left:982,top:1111}`，球 `rect.x=982` 回到视口内。
 
 ### v1.10.3（2026-11-17）修 CXAI.Attach 丢失（模板拼接陷阱）+ 页图内联
 
