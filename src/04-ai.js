@@ -345,6 +345,21 @@ CXAI.AI = (function () {
 
   function buildSolveMessages(q, hint, vctx, provider) {
     const lines = [`【题型】${q.typeLabel}`, `【题干】${q.stem || '(题干为空)'}`];
+    if (q.attachMeta) {
+      const m = q.attachMeta;
+      const note =
+        m.mode === 'pages'
+          ? '，已逐页转成图片附在下方，请先完整读完附件再作答'
+          : m.mode === 'link'
+          ? '，附件没能转成图片/文字，只能按文件名与题干线索尽力作答'
+          : '，附件通道已关闭，只能按文件名与题干线索尽力作答';
+      lines.push(`【附件材料】${m.filename || '附件'}${m.pages ? '（共 ' + m.pages + ' 页）' : ''}${note}。`);
+      lines.push(
+        '【作答要求】本题的作答框就是整份材料的答题区：请通读附件，把材料里出现的每一道题按顺序作答，' +
+          '格式为「1. …」换行「2. …」，不要只回答其中一题，也不要复述题目；' +
+          (m.mode === 'pages' ? '' : '缺少材料正文时 confidence 不得高于 0.35。')
+      );
+    }
     const nImg = q.images ? q.images.length : 0;
     const mode = vctx && vctx.mode;
     if (nImg) {
@@ -645,10 +660,16 @@ CXAI.AI = (function () {
 
   async function runSolveRound(panel, q, vctx) {
     const judgeCfg = CXAI.Cfg.get('ai.judge', {});
+    // 长答案题型（附件整卷 / 简答 / 论述 / 计算）默认 700 token 会被截断成半句话，
+    // 截断后没法写进答题框，所以这里单独抬高上限。
+    const longForm = !!(q && (q.attachMeta || q.type === 'completion' || q.type === 'reader'));
     const tasks = panel.map((p) => async () => {
       const messages = buildSolveMessages(q, undefined, vctx, p);
       const t0 = Date.now();
-      const res = await callProvider(p, messages, { temperature: p.temperature });
+      const res = await callProvider(p, messages, {
+        temperature: p.temperature,
+        maxTokens: longForm ? Math.max(Number(p.maxTokens || 0), 4000) : undefined
+      });
       const parsed = parseModelResult(res.text, q);
       if (!parsed) throw new Error('答案无法解析：' + CXAI.U.truncate(res.text, 120));
       return {
@@ -710,6 +731,14 @@ CXAI.AI = (function () {
     const judgeCfg = CXAI.Cfg.get('ai.judge', {});
     const panel = buildPanel();
     if (panel.length === 0) throw new Error('模型面板为空');
+
+    // ---- Round 0 之前：附件题干（题目在 PDF/Office 附件里）→ 渲染成题图 ----
+    // 附件题的 stem 是空的，不先把附件变成 question.images，模型就是闭卷瞎答。
+    try {
+      if (CXAI.Attach && question && !question.attachMeta) await CXAI.Attach.enrich(question);
+    } catch (e) {
+      CXAI.Log.warn('附件题干准备失败：' + e.message);
+    }
 
     // ---- Round 0：读图通道（图片 → data URL 或 文字转写） ----
     let vctx = { mode: 'none', imageParts: [], vision: null, dropped: 0 };

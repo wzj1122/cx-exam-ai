@@ -172,7 +172,13 @@ CXAI.DEFAULT_CONFIG = {
     /** 全部答完后自动点击"下一题"翻页（单题模式） */
     autoNext: true,
     /** 全部答完后自动交卷（危险，默认关闭） */
-    autoSubmit: false
+    autoSubmit: false,
+    /**
+     * 附件题干通道：题目正文放在 PDF/Office 附件里（2026-11 期中考试实测的新题型）。
+     * 打开后会把附件渲染成页图送读图、并把"作答框=整卷答题区"的说明写进 prompt。
+     * 关掉只是不渲染附件（题干仍会带【附件材料】文件名）。
+     */
+    attach: true
   },
   /** 节奏控制与人机伪装（CXAI.Guard 读取；延时单位 ms） */
   guard: {

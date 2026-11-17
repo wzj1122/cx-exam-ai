@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.9.2（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.0（`package.json`）
 
 # MAINTENANCE
 
@@ -40,6 +40,7 @@ cx-exam-ai/
 │   ├── 02-font.js            字形加密还原
 │   ├── 03-scraper.js         页面识别、题型判定、题目解析
 │   ├── 03b-vision.js         图片题读图层（抓图/压缩/data URL/转写）
+│   ├── 03c-attach.js         附件题通道（PDF 页图推导 + 探测）
 │   ├── 04-ai.js              模型调用、三风格请求体、Prompt、多重判定流水线
 │   ├── 05-apply.js           拟人化点选、填空写入、保存/交卷按钮定位
 │   ├── 06-guard.js           环境伪装、弹窗确认、节奏控制
@@ -64,6 +65,7 @@ cx-exam-ai/
 | `src/02-font.js` | `CXAI.Font` | 抽取 head 内 base64 字体 → canvas 360px 渲染 → 积分图盒式降采样 → 与 FRB2 特征表算汉明距离，输出 glyph→char 映射 | `CXAI.U` |
 | `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页） | `CXAI.U` |
 | `src/03b-vision.js` | `CXAI.Vision.{cfg,isEnabled,prepare,pickProvider,panelHasVision,transcribe,composePromptBlock,load,clear,stats}` | 图片题通道：`fetchBlob`（GM_xmlhttpRequest 带 Referer 优先，降级 fetch credentials:include）→ `blobToDataUrl`（FileReader / arrayBuffer+btoa 兜底）→ `compress`（canvas 长边缩放到 1400、JPEG 0.82，无 Image/canvas 时原样返回）→ 10 分钟内存缓存；`prepare` 丢占位图（<600B）与超总字节图；`transcribe` 用读图模型把图转成 `{text,questionText,options,kind,confidence}` | `CXAI.Cfg` `CXAI.AI` `CXAI.U` |
+| `src/03c-attach.js` | `CXAI.Attach.{collect,previewUrl,pageImageUrls,hashPath,md5,probeImage,directUrl,enrich,pagesOf,clear,cfg}` | 附件题通道：附件枚举 → 页图地址推导（md5 末三字节）→ HEAD 探测页数 → 页图进 `question.images`；兜底为 `.btnDown` 直链 + pdf.js 渲染（页面有 pdfjsLib 时才走） | `CXAI.U` `CXAI.Log` `CXAI.Cfg` |
 | `src/04-ai.js` | `CXAI.AI.{solve,ping,listModels,callProvider,buildRequest,extractText,parseModelResult,resolveAnswerKeys,resolveVision,tally,buildPanel}` + 内部 `httpMethod(method,url,headers,body,timeout)`（`httpJson` 是它的 POST 快捷方式） | 三风格请求体构建（openai/anthropic/gemini，含 system 提升、图片块、extraBody/extraHeaders 深合并）、响应文本抽取、**`listModels` 拉取各家 `/models`**（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models?key=` 并过滤非 generateContent）、三套 Prompt + 读图上下文注入、答案归一化、加权投票、三级收敛 | `CXAI.Cfg` `CXAI.Vision` `CXAI.U` `CXAI.Log` |
 | `src/05-apply.js` | `CXAI.Apply.{humanClick,apply,answerChoice,answerBlank,clickOne,isChecked,saveOne,findSubmitButton,typeInto}` | 指针事件序列 + 随机落点；点后轮询选中态；失败逐级扩大候选元素重试；填空支持 textarea/input/contenteditable iframe | `CXAI.U` `CXAI.Cfg` |
 | `src/06-guard.js` | `CXAI.Guard.{install,uninstall,pace,dismissDialogs}` | `document.hidden`/`visibilityState`/`hasFocus` 伪装、吞掉 `visibilitychange`/`blur`、`confirm` 自动 true、弹窗白名单点击、题间节奏（含每 N 题长停顿与 3% 概率犹豫） | `CXAI.Cfg` `CXAI.U` `CXAI.Log` |
@@ -247,6 +249,15 @@ Engine.start()
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.0（2026-11-17）附件题（PDF 当题干）
+
+- 新增 `src/03c-attach.js`：附件题干通道。`collect()` 产出 `attachments`，`enrich(question)` 把附件页图塞进 `question.images` 后交给 03b 读图。
+- 页图规则：`s3.cldisk.com/sv-w9/doc/<md5(objectid)[13..15]>/<objectid>/thumb/N.png`，`HEAD` 探页数（404 页会返回 1200×675 占位图，不能用 `img.onload` 判存在）。
+- `03-scraper`：`parseOne` 采集附件；题干清理后为空时用 `【附件材料】文件名` 兜底（否则被 `collect()` 过滤）；`TYPE_LABEL_BY_CODE` 按题型码显示正确中文名。
+- `04-ai`：`solve()` 前 `Attach.enrich()`；prompt 增【附件材料】与整卷作答要求；`runSolveRound` 对长答案题型 `maxTokens=4000`。
+- `01-core`：新增 `answer.attach`（默认 true）。
+- 实测：期中考试 1 题（type=4）+ 2 页 PDF → `pageImageUrls` 返回 2 张页图，`enrich` 后 `images=2`、`mode=pages`、`src=screen`。
 
 ### v1.9.2（2026-11-17）整卷填空自动落盘 + 脚本内设置面板下线
 

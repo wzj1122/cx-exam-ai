@@ -32,6 +32,30 @@ CXAI.Scraper = (function () {
     unknown: '未知题型'
   };
 
+  /**
+   * 题型码 → 中文标签。`TYPE_MAP` 把 2/4/5/6/7/8/9/10 全归成 completion（落盘都走填空路径），
+   * 但界面上把它们一律显示成"填空题"是错的——超星 4 是简答题、5 论述题、6 计算题、
+   * 8 名词解释、9 分录题、10 编程题。2026-11 期中考试实测：整卷只有 1 道 type=4，
+   * 面板却写着"填空题"，用户以为是抓错了题。
+   * 这里只影响显示，不改 `type`（apply 的分支判断依赖 `type`）。
+   */
+  const TYPE_LABEL_BY_CODE = {
+    0: '单选题',
+    1: '多选题',
+    2: '填空题',
+    3: '判断题',
+    4: '简答题',
+    5: '论述题',
+    6: '计算题',
+    7: '其他题',
+    8: '名词解释',
+    9: '分录题',
+    10: '编程题',
+    11: '连线题',
+    14: '完形填空',
+    15: '阅读理解'
+  };
+
   const JUDGE_WORDS = ['正确', '错误', '对', '错', '是', '否', '√', '×', 'true', 'false', 't', 'f', 'yes', 'no'];
 
   /* ---------- 页面类型 ---------- */
@@ -104,8 +128,19 @@ CXAI.Scraper = (function () {
       .replace(/[\t\r]+/g, ' ')
       .replace(/\u00a0/g, ' ')
       .replace(/^\s*\d+\s*[、.．]\s*/, '')
+      // 题型标签的两种排版都要剥：
+      //   「简答题」            —— 题型词开头
+      //   「(简答题, 100.0 分)」—— 整个题干就是一个括号标签（附件题实测就长这样）
       .replace(
         /^\s*(单项选择题|多项选择题|不定项选择题|判断题|填空题|简答题|论述题|计算题|名词解释题?|案例分析题?|材料分析题?|阅读理解|完形填空|连线题|排序题|其他题)\s*[（(][^）)]*[）)]?\s*/,
+        ''
+      )
+      .replace(
+        /^\s*[（(]\s*(单项选择题|多项选择题|不定项选择题|判断题|填空题|简答题|论述题|计算题|名词解释题?|案例分析题?|材料分析题?|其他题)\s*[,，、]?\s*\d+(?:\.\d+)?\s*分\s*[）)]\s*/,
+        ''
+      )
+      .replace(
+        /^\s*[（(]\s*(单项选择题|多项选择题|不定项选择题|判断题|填空题|简答题|论述题|计算题|名词解释题?|案例分析题?|材料分析题?|其他题)\s*[）)]\s*/,
         ''
       )
       .replace(/[（(]\s*\d+(?:\.\d+)?\s*分\s*[）)]/g, '')
@@ -140,6 +175,55 @@ CXAI.Scraper = (function () {
   function typeFromValue(v) {
     const n = parseInt(v, 10);
     return TYPE_MAP[n] || 'unknown';
+  }
+
+  /** 题型码原始数字（显示用；`readTypeInput` 只返回归一化后的 type） */
+  function typeCodeFromValue(v) {
+    const n = parseInt(v, 10);
+    return isFinite(n) ? n : null;
+  }
+
+  function readTypeRaw(root) {
+    let candidates = [];
+    try {
+      candidates = Array.from(
+        root.querySelectorAll('input[name^="type"], input[id^="answertype"], input[answertype]')
+      );
+    } catch (e) {}
+    for (const el of candidates) {
+      const name = el.getAttribute('name') || '';
+      const id = el.getAttribute('id') || '';
+      if (/^type\d+$/.test(name)) return typeCodeFromValue(el.value);
+      if (/^answertype/.test(id) || el.hasAttribute('answertype')) {
+        return typeCodeFromValue(el.value || el.getAttribute('answertype'));
+      }
+    }
+    const any = document.querySelector('input[name^="type"], input[answertype]');
+    return any ? typeCodeFromValue(any.value || any.getAttribute('answertype')) : null;
+  }
+
+  /**
+   * 附件题干（2026-11 期中考试实测的新形态）：题干 DOM 是空的，只有
+   * `iframe.attach-iframe[module=insertAttach][objectid=…][filename=…]`，
+   * 真正题目在一份 PDF 里。这里先把附件元信息抓出来，具体下载/渲染交给 03c-attach。
+   */
+  function readAttachments(root) {
+    try {
+      if (CXAI.Attach && typeof CXAI.Attach.collect === 'function') return CXAI.Attach.collect(root);
+    } catch (e) {}
+    const out = [];
+    try {
+      Array.from(root.querySelectorAll('iframe.attach-iframe, iframe[module="insertAttach"]')).forEach((el) => {
+        const objectid = el.getAttribute('objectid') || el.getAttribute('objectId') || '';
+        if (!objectid) return;
+        out.push({
+          objectid: objectid,
+          filename: el.getAttribute('filename') || '',
+          filetype: el.getAttribute('filetype') || ''
+        });
+      });
+    } catch (e) {}
+    return out;
   }
 
   function guessType(stem, options) {
@@ -312,9 +396,14 @@ CXAI.Scraper = (function () {
 
   function parseOne(root, index, pageKind) {
     const typeFromInput = readTypeInput(root, pageKind);
+    const typeCode = readTypeRaw(root);
+    const attachments = readAttachments(root);
     const optionEls = readOptionElements(root);
     const stemRaw = readStem(root);
     const stem = cleanStem(stemRaw);
+    // 附件题：题干被清理后就空了（只剩题型标签），题目在附件里。
+    // 这里必须给个占位题干，否则 collect() 会把整题当空容器丢掉（只保留"有题干或有选项"的题）。
+    const stemFinal = stem || (attachments.length ? '【附件材料】' + (attachments[0].filename || '附件') : '');
 
     const options = optionEls.map((el, i) => {
       const raw = (el.innerText || el.textContent || '').trim();
@@ -341,15 +430,17 @@ CXAI.Scraper = (function () {
 
     const q = {
       index,
-      key: CXAI.U.normText(stem).slice(0, 120) || 'q' + index,
+      key: CXAI.U.normText(stemFinal).slice(0, 120) || 'q' + index,
       qid: qidOf(root),
       type,
-      typeLabel: TYPE_LABEL[type] || '未知题型',
-      stem,
+      typeLabel: TYPE_LABEL_BY_CODE[typeCode] || TYPE_LABEL[type] || '未知题型',
+      typeCode: typeCode,
+      stem: stemFinal,
       stemRaw: String(stemRaw || '').replace(/\s+/g, ' ').trim(),
       options,
       inputs: type === 'completion' ? readTextInputs(root) : [],
       images: readImages(root),
+      attachments: attachments,
       score: extractScore(root),
       root,
       answered: false
