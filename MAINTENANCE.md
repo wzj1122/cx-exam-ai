@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.5（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.6（`package.json`）
 
 # MAINTENANCE
 
@@ -274,6 +274,12 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.6（2026-11-17）附件页图 CORS 凭证修正
+
+- **根因**：`pageToDataUrl()` 里 `fetch(url,{credentials:'include'})`。s3 回 `ACAO: *` 且无 `Allow-Credentials`，带凭证的跨域请求被浏览器判为 CORS 失败 → `Failed to fetch` → `enrich` 拿不到图 → `solve()` 抛"页图一张也没加载成功（共 2 张）"。同时刻 `curl` 同一 URL 返回 200/269623 字节，排除网络问题。
+- **修法**：三级降级 —— ① `fetch(url,{mode:'cors'})`（不带凭证）② `fetch(url,{mode:'cors',credentials:'include'})` ③ `<img crossOrigin='anonymous'>` + canvas。
+- 实测：修复前 `fetchErr:"Failed to fetch"`；修复后 `dLen` 正常返回 dataURL。
 
 ### v1.10.5（2026-11-17）简答/论述答案被拆半（editorList 空壳实例）
 

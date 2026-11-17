@@ -434,36 +434,78 @@
    * 转成 dataURL 后 03b 的 Vision.load() 是直通分支，不再发任何请求，最稳。
    */
   async function pageToDataUrl(url, edge, quality) {
-    const r = await fetch(url, { credentials: 'include' });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const blob = await r.blob();
-    if (!blob || !blob.size) throw new Error('空图片');
-    if (typeof createImageBitmap === 'function' && typeof document !== 'undefined') {
-      try {
-        const bmp = await createImageBitmap(blob);
-        const scale = Math.min(1, (edge || 1400) / Math.max(bmp.width, bmp.height));
-        const w = Math.max(1, Math.round(bmp.width * scale));
-        const h = Math.max(1, Math.round(bmp.height * scale));
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, w, h);
-        ctx.drawImage(bmp, 0, 0, w, h);
+    const cap = (w, h) => {
+      const scale = Math.min(1, (edge || 1400) / Math.max(w, h));
+      return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+    };
+    const draw = (src, sw, sh) => {
+      const size = cap(sw, sh);
+      const cv = document.createElement('canvas');
+      cv.width = size.w;
+      cv.height = size.h;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, size.w, size.h);
+      ctx.drawImage(src, 0, 0, size.w, size.h);
+      const out = cv.toDataURL('image/jpeg', quality || 0.85);
+      if (out && out.length > 2000) return out;
+      throw new Error('canvas 输出为空');
+    };
+    const fromBlob = async (blob) => {
+      if (!blob || !blob.size) throw new Error('空图片');
+      if (typeof createImageBitmap === 'function') {
         try {
-          if (bmp.close) bmp.close();
+          const bmp = await createImageBitmap(blob);
+          try {
+            return draw(bmp, bmp.width, bmp.height);
+          } finally {
+            try {
+              if (bmp.close) bmp.close();
+            } catch (e) {}
+          }
         } catch (e) {}
-        const out = canvas.toDataURL('image/jpeg', quality || 0.85);
-        if (out && out.length > 2000) return out;
-      } catch (e) {}
+      }
+      return await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || ''));
+        fr.onerror = () => reject(new Error('读取图片失败'));
+        fr.readAsDataURL(blob);
+      });
+    };
+
+    // ① 普通跨域 fetch：s3 的图不需要 cookie，反而**不能**带 credentials ——
+    //    `credentials:'include'` 要求 `Access-Control-Allow-Credentials: true`，
+    //    而 s3 只回 `Access-Control-Allow-Origin: *`，两者组合必被浏览器拒（Failed to fetch）。
+    const inits = [{ mode: 'cors' }, { mode: 'cors', credentials: 'include' }];
+    let lastErr = null;
+    for (const init of inits) {
+      try {
+        const r = await fetch(url, init);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return await fromBlob(await r.blob());
+      } catch (e) {
+        lastErr = e;
+      }
     }
-    return await new Promise((resolve, reject) => {
-      const fr = new FileReader();
-      fr.onload = () => resolve(String(fr.result || ''));
-      fr.onerror = () => reject(new Error('读取图片失败'));
-      fr.readAsDataURL(blob);
-    });
+
+    // ② 最后一道：<img> + crossOrigin（img 不吃 CSP connect-src，只要 CDN 给了 ACAO 就能画进 canvas）
+    try {
+      return await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            resolve(draw(img, img.naturalWidth, img.naturalHeight));
+          } catch (e) {
+            reject(e);
+          }
+        };
+        img.onerror = () => reject(new Error('图片加载失败'));
+        img.src = url;
+      });
+    } catch (e) {
+      throw new Error((lastErr && lastErr.message ? lastErr.message : '图片读取失败') + ' / ' + e.message);
+    }
   }
 
   function applyImages(question, meta, images) {

@@ -236,6 +236,12 @@ cx-exam-ai/
 
 ## 更新日志
 
+### v1.10.6（2026-11-17）修附件页图拉不到（CORS 凭证）
+
+- **修 bug**：`pageToDataUrl()` 用 `fetch(url,{credentials:'include'})` 取 s3 页图。s3 只回 `Access-Control-Allow-Origin: *`，带凭证的跨域请求要求 `Allow-Credentials: true`，两者组合浏览器直接 `Failed to fetch` —— 于是「页图一张也没加载成功（共 2 张）」。同一时刻 `curl` 拉同一张图是 200 / 269KB，所以问题完全在凭证这一项。
+- 现在三级降级：普通跨域 `fetch`（不带凭证）→ 带凭证 `fetch` → `<img crossOrigin=anonymous>` + canvas。
+- 实测：页面内 `fetch` 恢复 200，`pageToDataUrl` 输出 dataURL。
+
 ### v1.10.5（2026-11-17）修简答题答案只写一半
 
 - **修 bug（真机实测）**：`05-apply.editorList()` 把 `q.inputs` 里的 UEditor iframe（id 形如 `ueditor_0`）也当成编辑器 id 去 `getEditor()`，凭空造出一个空壳实例 → 简答题被判定成"两个空"，`splitBlanks(text, 2)` 按 `|||` 把整段答案拆成两半，结果 16 题的整卷答案只有前 8 题进了 `textarea`（`apply` 却回报 `filled:2/ok:true`）。
