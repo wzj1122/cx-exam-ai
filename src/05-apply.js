@@ -624,9 +624,17 @@ CXAI.Apply = (function () {
       });
     } catch (e) {}
     (q.inputs || []).forEach((el) => {
-      if (el && el.id && ids.indexOf(el.id) < 0) ids.push(el.id);
+      if (!el || !el.id) return;
+      const tag = String(el.tagName || '').toUpperCase();
+      // 只认真正的表单控件。`q.inputs` 里还混着 UEditor 的 iframe（id 形如 ueditor_0），
+      // 它不是编辑器 id —— 拿它去 getEditor 会造出一个"空壳实例"（setContent 有、body 是空壳），
+      // 于是简答题被当成"两个空"，答案按 ||| 拆成两半，只写进去前半段。
+      // 2026-11-17 实测：16 题整卷答案只落进 textarea 前 8 行。
+      if (tag !== 'TEXTAREA' && tag !== 'INPUT') return;
+      if (ids.indexOf(el.id) < 0) ids.push(el.id);
     });
-    if (qid) ids.push('answer' + qid);
+    // 兜底：页面上一个 textarea 都没抓到，才按惯例试 answer{qid}
+    if (!ids.length && qid) ids.push('answer' + qid);
     for (const id of ids) {
       try {
         const ed = api.getEditor(id);

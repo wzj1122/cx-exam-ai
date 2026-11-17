@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.4（`package.json`）
+> 最后更新：2026-11-17 ｜ 当前版本：1.10.5（`package.json`）
 
 # MAINTENANCE
 
@@ -274,6 +274,12 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.10.5（2026-11-17）简答/论述答案被拆半（editorList 空壳实例）
+
+- **根因**：`editorList()` 收集 id 时把 `q.inputs` 里所有带 id 的元素都塞进去，包括 UEditor 的 `<iframe id="ueditor_0">`。`UE.getEditor('ueditor_0')` 会为一个不存在的容器造"空壳实例"（`setContent` 存在、`body` 是新建的空文档），空壳通过 `ed.body` 校验 → `eds.length=2` → `splitBlanks(text,2)` 按 `|||` 把整段答案拆成两半，`answerBlank` 只把前半段 `sync()` 回 `textarea`。真机现象：16 题整卷答案只落盘 8 行，`apply` 仍回报 `ok:true, filled:2`。
+- **修法**：`q.inputs` 只接受 `TEXTAREA` / `INPUT`；`answer{qid}` 兜底改为"一个 textarea 都没抓到"时才用。
+- 实测：修复前 `pageValue="1. C 2. B 3. C 4. B 5. D 6. 0.6 7. 0.7 8. 0.8"`；修复后 600+ 字全文落盘。
 
 ### v1.10.4（2026-11-17）浮球越界兜底 + 整卷预览触发条件放宽
 

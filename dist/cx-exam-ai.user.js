@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.10.4
+// @version      1.10.5
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.10.4";
-CXAI.__builtAt = "2026-11-17T02:59:55.163Z";
+CXAI.__version = "1.10.5";
+CXAI.__builtAt = "2026-11-17T03:04:43.785Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -4772,9 +4772,17 @@ CXAI.Apply = (function () {
       });
     } catch (e) {}
     (q.inputs || []).forEach((el) => {
-      if (el && el.id && ids.indexOf(el.id) < 0) ids.push(el.id);
+      if (!el || !el.id) return;
+      const tag = String(el.tagName || '').toUpperCase();
+      // 只认真正的表单控件。`q.inputs` 里还混着 UEditor 的 iframe（id 形如 ueditor_0），
+      // 它不是编辑器 id —— 拿它去 getEditor 会造出一个"空壳实例"（setContent 有、body 是空壳），
+      // 于是简答题被当成"两个空"，答案按 ||| 拆成两半，只写进去前半段。
+      // 2026-11-17 实测：16 题整卷答案只落进 textarea 前 8 行。
+      if (tag !== 'TEXTAREA' && tag !== 'INPUT') return;
+      if (ids.indexOf(el.id) < 0) ids.push(el.id);
     });
-    if (qid) ids.push('answer' + qid);
+    // 兜底：页面上一个 textarea 都没抓到，才按惯例试 answer{qid}
+    if (!ids.length && qid) ids.push('answer' + qid);
     for (const id of ids) {
       try {
         const ed = api.getEditor(id);

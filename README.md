@@ -236,6 +236,12 @@ cx-exam-ai/
 
 ## 更新日志
 
+### v1.10.5（2026-11-17）修简答题答案只写一半
+
+- **修 bug（真机实测）**：`05-apply.editorList()` 把 `q.inputs` 里的 UEditor iframe（id 形如 `ueditor_0`）也当成编辑器 id 去 `getEditor()`，凭空造出一个空壳实例 → 简答题被判定成"两个空"，`splitBlanks(text, 2)` 按 `|||` 把整段答案拆成两半，结果 16 题的整卷答案只有前 8 题进了 `textarea`（`apply` 却回报 `filled:2/ok:true`）。
+- 现在只接受 `TEXTAREA` / `INPUT` 作为编辑器 id；`answer{qid}` 仅在完全没抓到 textarea 时才兜底。
+- 实测修复前：`actual:"1. C 2. B … 8. 0.8"`（截断）；修复后整段 600+ 字完整落盘。
+
 ### v1.10.4（2026-11-17）修浮球跑出视口 + 整卷预览不触发
 
 - **修 bug（用户实测）**：浮球位置 `uiPos` 是持久化的，换显示器/缩小窗口后存下来的 `left:2006px` 落在 1024 宽的视口外；`.panel` 又是相对 `.wrap` 的 absolute 定位 → 球和面板整块飞到屏幕外，表现就是"脚本不见了"。现在恢复位置时用 `clampBallPos()` 夹进视口（并写回修正值），另加 `resize` 监听，窗口尺寸一变就重新夹+重排面板。
