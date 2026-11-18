@@ -421,10 +421,16 @@ CXAI.Engine = (function () {
     }));
     const blankLike =
       hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
-    if (CXAI.Cfg.get('apply.saveEach', false) || (wholePage && blankLike)) {
+    // 填空/简答一律点一次本题的「保存」：单题页每题也都有自己的保存按钮，
+    // 旧实现只在整卷（questionLi>1）时才点，单题模式填完就直接翻页 —— 内容会丢
+    //（2026-11-19 用户实测：第 3 题填完 风|||雅|||颂，保存按钮始终没被点）。
+    if (CXAI.Cfg.get('apply.saveEach', false) || blankLike) {
       const saved = await CXAI.Apply.saveOne(q);
-      if (wholePage && blankLike && !saved) {
-        CXAI.Log.warn(`#${no} 是${q.typeLabel || '填空'}题，但没找到该题的「保存」按钮，内容可能会丢`);
+      if (!saved) {
+        if (wholePage && blankLike) CXAI.Log.warn(`#${no} 是${q.typeLabel || '填空'}题，但没找到该题的「保存」按钮，内容可能会丢`);
+        else CXAI.Log.info(`#${no} 页面上没有单独的「保存」按钮（由页面统一提交）`);
+      } else {
+        CXAI.Log.ok(`#${no} 已点本题「保存」`);
       }
     }
 
@@ -776,8 +782,8 @@ CXAI.Engine = (function () {
     } else {
       CXAI.Log.error(`#${q.no} 写入失败：${applied && applied.error}`);
     }
-    // 整卷/预览里的填空·简答：每题都有自己的「保存」按钮，不点会在页面重绘时丢内容
-    if (whole && applied && applied.ok) {
+    // 填空·简答：单题页和整卷页每题都有自己的「保存」按钮，不点会丢内容
+    if (applied && applied.ok) {
       const hasInput = !!(q.inputs && q.inputs.some((el) => el && el.isConnected));
       const blankLike =
         hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
@@ -934,16 +940,51 @@ CXAI.Engine = (function () {
    * 超星页面自己的 getTheQuestionByStart(start) 收的是 URL 里的 start 值，等于题号-1。
    */
   function jumpTo(n) {
-    const target = Math.max(0, Number(n) || 0) - 1;
+    const num = Math.max(1, Number(n) || 1);
+    const target = num - 1;
+
+    // ① 整卷预览 / 章节页是"单页滚动"：直接滚到第 n 题并闪一下高亮。
+    //    旧实现只会调 getTheQuestionByStart（预览页没有）→ 改成改 URL 重载，
+    //    单页预览里等于什么也没发生，这就是"点题号没反应"。
+    let el = null;
+    try {
+      el = document.getElementById('q' + num) || document.getElementById('question' + num);
+    } catch (e) {}
+    if (!el) {
+      const qs = CXAI.Scraper.collect().questions || [];
+      if (qs[target] && qs[target].root) el = qs[target].root;
+    }
+    if (el && el.scrollIntoView) {
+      try {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (e) {
+        try {
+          el.scrollIntoView();
+        } catch (e2) {}
+      }
+      try {
+        const old = el.style.outline;
+        el.style.outline = '2px solid #6d8bff';
+        setTimeout(() => {
+          try {
+            el.style.outline = old;
+          } catch (e) {}
+        }, 1600);
+      } catch (e) {}
+      CXAI.Log.info('已跳到第 ' + num + ' 题');
+      return;
+    }
+
+    // ② 单题翻页模式：页面自己的 getTheQuestionByStart(start)，start = 题号-1
     const cur = CXAI.Scraper.currentIndex();
     if (cur && target === cur - 1) {
-      CXAI.Log.info('已经在第 ' + n + ' 题');
+      CXAI.Log.info('已经在第 ' + num + ' 题');
       return;
     }
     const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
     try {
       if (typeof w.getTheQuestionByStart === 'function') {
-        CXAI.Log.info('跳转到第 ' + n + ' 题');
+        CXAI.Log.info('跳转到第 ' + num + ' 题');
         w.getTheQuestionByStart(target);
         return;
       }

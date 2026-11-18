@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.3（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.4（`package.json`）
 
 # MAINTENANCE
 
@@ -338,6 +338,16 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.4（2026-11-19）真机三连修
+
+| 改动 | 文件 |
+|---|---|
+| `fire()` 不再传 `view: window`（油猴沙箱里构造 MouseEvent 会抛异常），并加 `Event` 兜底 | `src/05-apply.js` |
+| 填空/简答落盘后一律点本题「保存」（单题页也点），日志区分有无独立保存按钮 | `src/08-main.js` |
+| `jumpTo` 优先 `#qN` / 题块 `scrollIntoView` 并高亮；单题页才走 `getTheQuestionByStart` | `src/08-main.js` |
+| `readGroupBlanks` 支持 `.hoverDiv` + `span[data][qid]` 形态（完型/阅读/共用选项），按空 UUID 分组 | `src/03-scraper.js` |
+| `answerGroup` 回读支持 `input[name="answer<题号>"]` 的 JSON（键=空 UUID） | `src/05-apply.js` |
 
 ### v1.11.3（2026-11-19）验收口径与配置收口
 

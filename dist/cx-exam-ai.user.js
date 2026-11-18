@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.3
+// @version      1.11.4
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.3";
-CXAI.__builtAt = "2026-11-18T18:33:06.113Z";
+CXAI.__version = "1.11.4";
+CXAI.__builtAt = "2026-11-18T18:52:43.049Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -1905,6 +1905,39 @@ CXAI.Scraper = (function () {
    * 这里按 qid 分组，组顺序即页面小题顺序（2026-11-18 真机实测两类页面同构）。
    */
   function readGroupBlanks(root) {
+    /**
+     * 形态二（2026-11-19 真机：完型填空 / 阅读理解 / 共用选项题）：
+     *   每个空是一组 `.hoverDiv`，onclick="saveSingleSelect(this,'<题号>')"，
+     *   内层 `<span data="A" qid="<空UUID>">A</span>`。点 .hoverDiv 触发页面自己的保存，
+     *   答案写进 `input[name="answer<题号>"]` 的 JSON（键是空 UUID）。
+     * 旧实现只认 `.addChoice[qid]`，这些题 group 恒为 0，于是全部"没有可写入的答题框"。
+     */
+    const byUuid = new Map();
+    try {
+      Array.from(root.querySelectorAll('.hoverDiv')).forEach((el) => {
+        const tag = el.querySelector('span[data][qid], span[data]');
+        if (!tag) return;
+        const uuid = String(tag.getAttribute('qid') || '');
+        const key = String(tag.getAttribute('data') || '').trim().toUpperCase();
+        if (!uuid || !key) return;
+        if (!byUuid.has(uuid)) byUuid.set(uuid, []);
+        byUuid.get(uuid).push({
+          key: key,
+          data: key,
+          text: String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(),
+          el: el,
+          holder: el,
+          add: el,
+          uuid: uuid
+        });
+      });
+    } catch (e) {}
+    if (byUuid.size) {
+      return Array.from(byUuid.entries()).map(function (pair) {
+        return { qid: pair[0], options: pair[1], answerEl: null, json: true };
+      });
+    }
+
     let els = [];
     try {
       els = Array.from(root.querySelectorAll('.addChoice[qid]'));
@@ -2592,6 +2625,7 @@ CXAI.Scraper = (function () {
   }
 
   return {
+    readGroupBlanks,
     detectPage,
     collect,
     parseOne,
@@ -5427,7 +5461,15 @@ CXAI.Apply = (function () {
     if (isPointer && typeof PointerEvent === 'function') {
       ev = new PointerEvent(type, Object.assign({ bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse' }, extra || {}));
     } else if (isMouse) {
-      ev = new MouseEvent(type, Object.assign({ bubbles: true, cancelable: true, composed: true, view: window }, extra || {}));
+      // 油猴沙箱里的 window 不是真 Window：`view: window` 会让 MouseEvent 构造直接抛
+      // "Failed to read the 'view' property from 'UIEventInit'"，整题落盘随之中断。
+      // view 对 dispatchEvent 没有作用，去掉它；真需要时再试 unsafeWindow。
+      const opts = Object.assign({ bubbles: true, cancelable: true, composed: true }, extra || {});
+      try {
+        ev = new MouseEvent(type, opts);
+      } catch (e) {
+        ev = new Event(type, { bubbles: true, cancelable: true });
+      }
     } else {
       ev = new Event(type, { bubbles: true, cancelable: true });
     }
@@ -6273,6 +6315,40 @@ CXAI.Apply = (function () {
    * 每个小题的答案是 1~4 个字母（选项的 data 属性），点对应 .hoverDiv 会触发页面自己的
    * addChoice(this) → 写进 #answer{qid}。写完按 #answer{qid} 的实际值验收。
    */
+  /**
+   * 读某个空当前的真实答案。
+   *   ① 独立隐藏域 #answer{uuid}（作业页 / 部分考试页）
+   *   ② 完型 / 阅读 / 共用选项题：input[name="answer<题号>"] 里是 JSON
+   *      { "<空UUID>": "{\"answer\":\"A\",\"score\":0.0}", ... }
+   */
+  function readBlankState(mainQid, uuid) {
+    try {
+      const el = document.querySelector('#answer' + uuid);
+      if (el && String(el.value || '').trim()) return String(el.value);
+    } catch (e) {}
+    try {
+      const box =
+        document.querySelector('input[name="answer' + mainQid + '"]') ||
+        document.querySelector('input[id="answer' + mainQid + '"]');
+      if (box && box.value) {
+        const obj = JSON.parse(box.value);
+        const list = Array.isArray(obj) ? obj : [obj];
+        for (const item of list) {
+          if (!item || !item[uuid]) continue;
+          let v = item[uuid];
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch (e) {}
+          }
+          const ans = v && typeof v === 'object' ? v.answer : v;
+          if (ans) return String(ans);
+        }
+      }
+    } catch (e) {}
+    return '';
+  }
+
   async function answerGroup(q, result) {
     const blanks = (q && q.group) || [];
     if (!blanks.length) {
@@ -6348,11 +6424,7 @@ CXAI.Apply = (function () {
         await humanClick(target);
       } catch (e) {}
       await sleep(CXAI.U.randInt(120, 320));
-      let got = '';
-      try {
-        const el = document.querySelector('#answer' + b.qid);
-        got = el ? String(el.value || '') : '';
-      } catch (e) {}
+      let got = readBlankState(q.qid, b.qid);
       // 真实指针点有时打不到位（元素被遮/坐标偏移）：补一次元素自身的 click，
       // 页面逻辑是行内 onclick="addChoice(this)"，合成 click 同样生效。
       if (got.toUpperCase().indexOf(want) < 0) {
@@ -6360,10 +6432,7 @@ CXAI.Apply = (function () {
           target.click();
         } catch (e) {}
         await sleep(CXAI.U.randInt(80, 200));
-        try {
-          const el = document.querySelector('#answer' + b.qid);
-          got = el ? String(el.value || '') : '';
-        } catch (e) {}
+        got = readBlankState(q.qid, b.qid);
       }
       if (got.toUpperCase().indexOf(want) >= 0) {
         filled++;
@@ -8672,10 +8741,16 @@ CXAI.Engine = (function () {
     }));
     const blankLike =
       hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
-    if (CXAI.Cfg.get('apply.saveEach', false) || (wholePage && blankLike)) {
+    // 填空/简答一律点一次本题的「保存」：单题页每题也都有自己的保存按钮，
+    // 旧实现只在整卷（questionLi>1）时才点，单题模式填完就直接翻页 —— 内容会丢
+    //（2026-11-19 用户实测：第 3 题填完 风|||雅|||颂，保存按钮始终没被点）。
+    if (CXAI.Cfg.get('apply.saveEach', false) || blankLike) {
       const saved = await CXAI.Apply.saveOne(q);
-      if (wholePage && blankLike && !saved) {
-        CXAI.Log.warn(`#${no} 是${q.typeLabel || '填空'}题，但没找到该题的「保存」按钮，内容可能会丢`);
+      if (!saved) {
+        if (wholePage && blankLike) CXAI.Log.warn(`#${no} 是${q.typeLabel || '填空'}题，但没找到该题的「保存」按钮，内容可能会丢`);
+        else CXAI.Log.info(`#${no} 页面上没有单独的「保存」按钮（由页面统一提交）`);
+      } else {
+        CXAI.Log.ok(`#${no} 已点本题「保存」`);
       }
     }
 
@@ -9027,8 +9102,8 @@ CXAI.Engine = (function () {
     } else {
       CXAI.Log.error(`#${q.no} 写入失败：${applied && applied.error}`);
     }
-    // 整卷/预览里的填空·简答：每题都有自己的「保存」按钮，不点会在页面重绘时丢内容
-    if (whole && applied && applied.ok) {
+    // 填空·简答：单题页和整卷页每题都有自己的「保存」按钮，不点会丢内容
+    if (applied && applied.ok) {
       const hasInput = !!(q.inputs && q.inputs.some((el) => el && el.isConnected));
       const blankLike =
         hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
@@ -9185,16 +9260,51 @@ CXAI.Engine = (function () {
    * 超星页面自己的 getTheQuestionByStart(start) 收的是 URL 里的 start 值，等于题号-1。
    */
   function jumpTo(n) {
-    const target = Math.max(0, Number(n) || 0) - 1;
+    const num = Math.max(1, Number(n) || 1);
+    const target = num - 1;
+
+    // ① 整卷预览 / 章节页是"单页滚动"：直接滚到第 n 题并闪一下高亮。
+    //    旧实现只会调 getTheQuestionByStart（预览页没有）→ 改成改 URL 重载，
+    //    单页预览里等于什么也没发生，这就是"点题号没反应"。
+    let el = null;
+    try {
+      el = document.getElementById('q' + num) || document.getElementById('question' + num);
+    } catch (e) {}
+    if (!el) {
+      const qs = CXAI.Scraper.collect().questions || [];
+      if (qs[target] && qs[target].root) el = qs[target].root;
+    }
+    if (el && el.scrollIntoView) {
+      try {
+        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } catch (e) {
+        try {
+          el.scrollIntoView();
+        } catch (e2) {}
+      }
+      try {
+        const old = el.style.outline;
+        el.style.outline = '2px solid #6d8bff';
+        setTimeout(() => {
+          try {
+            el.style.outline = old;
+          } catch (e) {}
+        }, 1600);
+      } catch (e) {}
+      CXAI.Log.info('已跳到第 ' + num + ' 题');
+      return;
+    }
+
+    // ② 单题翻页模式：页面自己的 getTheQuestionByStart(start)，start = 题号-1
     const cur = CXAI.Scraper.currentIndex();
     if (cur && target === cur - 1) {
-      CXAI.Log.info('已经在第 ' + n + ' 题');
+      CXAI.Log.info('已经在第 ' + num + ' 题');
       return;
     }
     const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
     try {
       if (typeof w.getTheQuestionByStart === 'function') {
-        CXAI.Log.info('跳转到第 ' + n + ' 题');
+        CXAI.Log.info('跳转到第 ' + num + ' 题');
         w.getTheQuestionByStart(target);
         return;
       }

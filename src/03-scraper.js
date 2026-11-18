@@ -561,6 +561,39 @@ CXAI.Scraper = (function () {
    * 这里按 qid 分组，组顺序即页面小题顺序（2026-11-18 真机实测两类页面同构）。
    */
   function readGroupBlanks(root) {
+    /**
+     * 形态二（2026-11-19 真机：完型填空 / 阅读理解 / 共用选项题）：
+     *   每个空是一组 `.hoverDiv`，onclick="saveSingleSelect(this,'<题号>')"，
+     *   内层 `<span data="A" qid="<空UUID>">A</span>`。点 .hoverDiv 触发页面自己的保存，
+     *   答案写进 `input[name="answer<题号>"]` 的 JSON（键是空 UUID）。
+     * 旧实现只认 `.addChoice[qid]`，这些题 group 恒为 0，于是全部"没有可写入的答题框"。
+     */
+    const byUuid = new Map();
+    try {
+      Array.from(root.querySelectorAll('.hoverDiv')).forEach((el) => {
+        const tag = el.querySelector('span[data][qid], span[data]');
+        if (!tag) return;
+        const uuid = String(tag.getAttribute('qid') || '');
+        const key = String(tag.getAttribute('data') || '').trim().toUpperCase();
+        if (!uuid || !key) return;
+        if (!byUuid.has(uuid)) byUuid.set(uuid, []);
+        byUuid.get(uuid).push({
+          key: key,
+          data: key,
+          text: String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(),
+          el: el,
+          holder: el,
+          add: el,
+          uuid: uuid
+        });
+      });
+    } catch (e) {}
+    if (byUuid.size) {
+      return Array.from(byUuid.entries()).map(function (pair) {
+        return { qid: pair[0], options: pair[1], answerEl: null, json: true };
+      });
+    }
+
     let els = [];
     try {
       els = Array.from(root.querySelectorAll('.addChoice[qid]'));
@@ -1248,6 +1281,7 @@ CXAI.Scraper = (function () {
   }
 
   return {
+    readGroupBlanks,
     detectPage,
     collect,
     parseOne,

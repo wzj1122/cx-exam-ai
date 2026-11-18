@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.3-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.4-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,13 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.4（2026-11-19）真机三连修
+
+- **点选事件不再抛异常**：油猴沙箱里 `new MouseEvent(..., {view: window})` 会报 “Failed to read the 'view' property”，导致填完题后续保存/收尾中断。改为不传 `view` 并加 `Event` 兜底。
+- **填空/简答一定点「保存」**：单题页每题也有自己的保存按钮，旧实现只在整卷（题块>1）时点，单题模式填完直接翻页会丢内容；现在单题/整卷都点，并区分「页面没有单独保存按钮」。
+- **整卷预览里点题号真能跳**：预览页是单页滚动，旧实现只会调单题页的 `getTheQuestionByStart`，退化成改 URL 重载（看着没反应）。现在优先 `#qN` / 题块 `scrollIntoView` 并短暂高亮。
+- **完型/阅读/共用选项题可答**：这类题选项是 `.hoverDiv` + `span[data][qid=<空UUID>]`，点它触发页面 `saveSingleSelect()`，答案存在 `input[name="answer<题号>"]` JSON 里。抓取改为按空 UUID 分组，回读改为解析该 JSON（此前 group 恒为 0 → 一律“没有可写入的答题框”）。
 
 ### v1.11.3（2026-11-19）验收口径与配置收口
 

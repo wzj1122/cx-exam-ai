@@ -21,7 +21,15 @@ CXAI.Apply = (function () {
     if (isPointer && typeof PointerEvent === 'function') {
       ev = new PointerEvent(type, Object.assign({ bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse' }, extra || {}));
     } else if (isMouse) {
-      ev = new MouseEvent(type, Object.assign({ bubbles: true, cancelable: true, composed: true, view: window }, extra || {}));
+      // 油猴沙箱里的 window 不是真 Window：`view: window` 会让 MouseEvent 构造直接抛
+      // "Failed to read the 'view' property from 'UIEventInit'"，整题落盘随之中断。
+      // view 对 dispatchEvent 没有作用，去掉它；真需要时再试 unsafeWindow。
+      const opts = Object.assign({ bubbles: true, cancelable: true, composed: true }, extra || {});
+      try {
+        ev = new MouseEvent(type, opts);
+      } catch (e) {
+        ev = new Event(type, { bubbles: true, cancelable: true });
+      }
     } else {
       ev = new Event(type, { bubbles: true, cancelable: true });
     }
@@ -867,6 +875,40 @@ CXAI.Apply = (function () {
    * 每个小题的答案是 1~4 个字母（选项的 data 属性），点对应 .hoverDiv 会触发页面自己的
    * addChoice(this) → 写进 #answer{qid}。写完按 #answer{qid} 的实际值验收。
    */
+  /**
+   * 读某个空当前的真实答案。
+   *   ① 独立隐藏域 #answer{uuid}（作业页 / 部分考试页）
+   *   ② 完型 / 阅读 / 共用选项题：input[name="answer<题号>"] 里是 JSON
+   *      { "<空UUID>": "{\"answer\":\"A\",\"score\":0.0}", ... }
+   */
+  function readBlankState(mainQid, uuid) {
+    try {
+      const el = document.querySelector('#answer' + uuid);
+      if (el && String(el.value || '').trim()) return String(el.value);
+    } catch (e) {}
+    try {
+      const box =
+        document.querySelector('input[name="answer' + mainQid + '"]') ||
+        document.querySelector('input[id="answer' + mainQid + '"]');
+      if (box && box.value) {
+        const obj = JSON.parse(box.value);
+        const list = Array.isArray(obj) ? obj : [obj];
+        for (const item of list) {
+          if (!item || !item[uuid]) continue;
+          let v = item[uuid];
+          if (typeof v === 'string') {
+            try {
+              v = JSON.parse(v);
+            } catch (e) {}
+          }
+          const ans = v && typeof v === 'object' ? v.answer : v;
+          if (ans) return String(ans);
+        }
+      }
+    } catch (e) {}
+    return '';
+  }
+
   async function answerGroup(q, result) {
     const blanks = (q && q.group) || [];
     if (!blanks.length) {
@@ -942,11 +984,7 @@ CXAI.Apply = (function () {
         await humanClick(target);
       } catch (e) {}
       await sleep(CXAI.U.randInt(120, 320));
-      let got = '';
-      try {
-        const el = document.querySelector('#answer' + b.qid);
-        got = el ? String(el.value || '') : '';
-      } catch (e) {}
+      let got = readBlankState(q.qid, b.qid);
       // 真实指针点有时打不到位（元素被遮/坐标偏移）：补一次元素自身的 click，
       // 页面逻辑是行内 onclick="addChoice(this)"，合成 click 同样生效。
       if (got.toUpperCase().indexOf(want) < 0) {
@@ -954,10 +992,7 @@ CXAI.Apply = (function () {
           target.click();
         } catch (e) {}
         await sleep(CXAI.U.randInt(80, 200));
-        try {
-          const el = document.querySelector('#answer' + b.qid);
-          got = el ? String(el.value || '') : '';
-        } catch (e) {}
+        got = readBlankState(q.qid, b.qid);
       }
       if (got.toUpperCase().indexOf(want) >= 0) {
         filled++;
