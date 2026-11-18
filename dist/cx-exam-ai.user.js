@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.4
+// @version      1.11.5
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.4";
-CXAI.__builtAt = "2026-11-18T18:52:43.049Z";
+CXAI.__version = "1.11.5";
+CXAI.__builtAt = "2026-11-18T18:59:50.139Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -1938,6 +1938,39 @@ CXAI.Scraper = (function () {
       });
     }
 
+    /**
+     * 形态三（共用选项题）：每个空是 `.B-answerCon[index]`，里面
+     * `<span choice_name="A" onclick="saveBTypeSelect(this,'<题号>')">A</span>`。
+     * 页面自己的 addChoiceByBType 负责标记，submitForm 负责提交。
+     */
+    try {
+      const bts = Array.from(root.querySelectorAll('.B-answerCon'));
+      if (bts.length) {
+        const blanks = bts
+          .map(function (el) {
+            const opts = Array.from(el.querySelectorAll('span[choice_name]'))
+              .map(function (sp) {
+                const key = String(sp.getAttribute('choice_name') || '').trim().toUpperCase();
+                return { key: key, data: key, text: key, el: sp, holder: el, add: sp };
+              })
+              .filter(function (o) {
+                return o.key;
+              });
+            return {
+              qid: 'bt' + (el.getAttribute('index') || ''),
+              index: String(el.getAttribute('index') || ''),
+              btype: true,
+              answerEl: null,
+              options: opts
+            };
+          })
+          .filter(function (b) {
+            return b.options.length;
+          });
+        if (blanks.length) return blanks;
+      }
+    } catch (e) {}
+
     let els = [];
     try {
       els = Array.from(root.querySelectorAll('.addChoice[qid]'));
@@ -2030,7 +2063,9 @@ CXAI.Scraper = (function () {
       shell: shell,
       shellLabel: SHELL_LABEL[shell] || shell,
       // 小题组的各小题选项（完型 6 空 / 阅读 3 小题这种），非小题组一律空数组
-      group: shell === 'group' ? readGroupBlanks(root) : [],
+      // 小题组的承载形态不止 shell=group：共用选项题是 shell=manual，
+      // 统一解析，解析不到自然返回 []
+      group: readGroupBlanks(root),
       media: readMedia(root),
       stem: stemFinal,
       stemRaw: String(stemRaw || '').replace(/\s+/g, ' ').trim(),
@@ -6349,6 +6384,38 @@ CXAI.Apply = (function () {
     return '';
   }
 
+  /** 选项元素上是否已经出现"选中"标记（页面标记类名不统一，按正则兜） */
+  function optionMarked(b, want) {
+    try {
+      const hit = (b.options || []).filter((o) => String(o.key || '').toUpperCase() === want)[0];
+      if (!hit) return false;
+      const re = /(^|\s)(check_?answer|checked|selected|cur|active|chosed|chosen)\S*/i;
+      return [hit.el, hit.holder].filter(Boolean).some((n) => re.test(String(n.className || '')));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 某个空当前是否已有答案（JSON 隐藏域优先，共用选项题看 B-answerCon 的标记） */
+  function blankStateOf(b, mainQid) {
+    if (b && b.btype) {
+      let holder = null;
+      try {
+        holder = document.querySelector('#sigleQuestionDiv_' + mainQid + ' .B-answerCon[index="' + b.index + '"]');
+      } catch (e) {}
+      if (!holder) {
+        try {
+          holder = document.querySelectorAll('.B-answerCon')[Number(b.index) - 1] || null;
+        } catch (e) {}
+      }
+      if (!holder) return '';
+      const re = /(^|\s)(check_?answer|checked|selected|cur|active|chosed|chosen)\S*/i;
+      const hit = Array.from(holder.querySelectorAll('span[choice_name]')).filter((sp) => re.test(String(sp.className || '')))[0];
+      return hit ? String(hit.getAttribute('choice_name') || '').toUpperCase() : '';
+    }
+    return readBlankState(mainQid, b && b.qid);
+  }
+
   async function answerGroup(q, result) {
     const blanks = (q && q.group) || [];
     if (!blanks.length) {
@@ -6423,22 +6490,36 @@ CXAI.Apply = (function () {
       try {
         await humanClick(target);
       } catch (e) {}
-      await sleep(CXAI.U.randInt(120, 320));
-      let got = readBlankState(q.qid, b.qid);
-      // 真实指针点有时打不到位（元素被遮/坐标偏移）：补一次元素自身的 click，
-      // 页面逻辑是行内 onclick="addChoice(this)"，合成 click 同样生效。
-      if (got.toUpperCase().indexOf(want) < 0) {
+
+      // 先轮询回读：页面的 submitForm / JSON 落库都有延迟（完型实测 300~1200ms）。
+      // 旧实现读一次没读到就再点一次 —— 那一下等于把刚选中的选项又点掉，
+      // 表现就是"4、5 两个空来回点"（2026-11-19 用户实测）。
+      let got = '';
+      for (let t = 0; t < 6; t++) {
+        await sleep(220);
+        got = blankStateOf(b, q.qid);
+        if (!got && optionMarked(b, want)) got = want;
+        if (got && got.toUpperCase().indexOf(want) >= 0) break;
+      }
+
+      // 只有"DOM 里也没留下选中标记"才补一次原生 click（元素被遮/坐标偏移时）
+      if (got.toUpperCase().indexOf(want) < 0 && !optionMarked(b, want)) {
         try {
           target.click();
         } catch (e) {}
-        await sleep(CXAI.U.randInt(80, 200));
-        got = readBlankState(q.qid, b.qid);
+        for (let t = 0; t < 5; t++) {
+          await sleep(240);
+          got = blankStateOf(b, q.qid);
+          if (!got && optionMarked(b, want)) got = want;
+          if (got && got.toUpperCase().indexOf(want) >= 0) break;
+        }
       }
+
       if (got.toUpperCase().indexOf(want) >= 0) {
         filled++;
         wrote.push(want);
       }
-      await sleep(CXAI.U.randInt(160, 420));
+      await sleep(CXAI.U.randInt(120, 300));
     }
     const miss = blanks.length - filled;
     // 全落盘才算成功：只写进去一半就报 ok，面板会显示"已答"，考生以为交完了

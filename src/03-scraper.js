@@ -594,6 +594,39 @@ CXAI.Scraper = (function () {
       });
     }
 
+    /**
+     * 形态三（共用选项题）：每个空是 `.B-answerCon[index]`，里面
+     * `<span choice_name="A" onclick="saveBTypeSelect(this,'<题号>')">A</span>`。
+     * 页面自己的 addChoiceByBType 负责标记，submitForm 负责提交。
+     */
+    try {
+      const bts = Array.from(root.querySelectorAll('.B-answerCon'));
+      if (bts.length) {
+        const blanks = bts
+          .map(function (el) {
+            const opts = Array.from(el.querySelectorAll('span[choice_name]'))
+              .map(function (sp) {
+                const key = String(sp.getAttribute('choice_name') || '').trim().toUpperCase();
+                return { key: key, data: key, text: key, el: sp, holder: el, add: sp };
+              })
+              .filter(function (o) {
+                return o.key;
+              });
+            return {
+              qid: 'bt' + (el.getAttribute('index') || ''),
+              index: String(el.getAttribute('index') || ''),
+              btype: true,
+              answerEl: null,
+              options: opts
+            };
+          })
+          .filter(function (b) {
+            return b.options.length;
+          });
+        if (blanks.length) return blanks;
+      }
+    } catch (e) {}
+
     let els = [];
     try {
       els = Array.from(root.querySelectorAll('.addChoice[qid]'));
@@ -686,7 +719,9 @@ CXAI.Scraper = (function () {
       shell: shell,
       shellLabel: SHELL_LABEL[shell] || shell,
       // 小题组的各小题选项（完型 6 空 / 阅读 3 小题这种），非小题组一律空数组
-      group: shell === 'group' ? readGroupBlanks(root) : [],
+      // 小题组的承载形态不止 shell=group：共用选项题是 shell=manual，
+      // 统一解析，解析不到自然返回 []
+      group: readGroupBlanks(root),
       media: readMedia(root),
       stem: stemFinal,
       stemRaw: String(stemRaw || '').replace(/\s+/g, ' ').trim(),

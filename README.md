@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.4-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.5-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.5（2026-11-19）小题组落盘修正
+
+- **不再来回点空**：完型/阅读的答案回读有 300~1200ms 延迟，旧逻辑「读不到就再点一次」会把刚选中的选项点掉（实测第 8 题 4、5 空来回跳）。改为先轮询回读（最多 6×220ms），只有 DOM 里也没有选中标记时才补一次原生 click。
+- **共用选项题可答**：新增 `.B-answerCon[index]` + `span[choice_name]` 形态解析（`shell=manual` 也参与小题组解析），点 `saveBTypeSelect()` 并回读该空的标记字母。
+- **group 解析不再看 shell**：`group` 统一由 `readGroupBlanks()` 产出，`shell=manual/group` 都能识别。
 
 ### v1.11.4（2026-11-19）真机三连修
 

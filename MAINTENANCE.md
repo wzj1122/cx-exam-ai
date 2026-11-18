@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.4（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.5（`package.json`）
 
 # MAINTENANCE
 
@@ -338,6 +338,15 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.5（2026-11-19）小题组落盘修正
+
+| 改动 | 文件 |
+|---|---|
+| 小题组点击后轮询回读（JSON/标记），禁止"读不到就再点一次"造成的 toggle 掉选 | `src/05-apply.js` |
+| 新增 `optionMarked` / `blankStateOf`：JSON 隐藏域 + 选项标记双通道回读 | `src/05-apply.js` |
+| 新增 `.B-answerCon[index]` + `span[choice_name]`（共用选项题）解析 | `src/03-scraper.js` |
+| `group` 不再依赖 `shell==='group'`，所有题型统一尝试解析小题组 | `src/03-scraper.js` |
 
 ### v1.11.4（2026-11-19）真机三连修
 

@@ -909,6 +909,38 @@ CXAI.Apply = (function () {
     return '';
   }
 
+  /** 选项元素上是否已经出现"选中"标记（页面标记类名不统一，按正则兜） */
+  function optionMarked(b, want) {
+    try {
+      const hit = (b.options || []).filter((o) => String(o.key || '').toUpperCase() === want)[0];
+      if (!hit) return false;
+      const re = /(^|\s)(check_?answer|checked|selected|cur|active|chosed|chosen)\S*/i;
+      return [hit.el, hit.holder].filter(Boolean).some((n) => re.test(String(n.className || '')));
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /** 某个空当前是否已有答案（JSON 隐藏域优先，共用选项题看 B-answerCon 的标记） */
+  function blankStateOf(b, mainQid) {
+    if (b && b.btype) {
+      let holder = null;
+      try {
+        holder = document.querySelector('#sigleQuestionDiv_' + mainQid + ' .B-answerCon[index="' + b.index + '"]');
+      } catch (e) {}
+      if (!holder) {
+        try {
+          holder = document.querySelectorAll('.B-answerCon')[Number(b.index) - 1] || null;
+        } catch (e) {}
+      }
+      if (!holder) return '';
+      const re = /(^|\s)(check_?answer|checked|selected|cur|active|chosed|chosen)\S*/i;
+      const hit = Array.from(holder.querySelectorAll('span[choice_name]')).filter((sp) => re.test(String(sp.className || '')))[0];
+      return hit ? String(hit.getAttribute('choice_name') || '').toUpperCase() : '';
+    }
+    return readBlankState(mainQid, b && b.qid);
+  }
+
   async function answerGroup(q, result) {
     const blanks = (q && q.group) || [];
     if (!blanks.length) {
@@ -983,22 +1015,36 @@ CXAI.Apply = (function () {
       try {
         await humanClick(target);
       } catch (e) {}
-      await sleep(CXAI.U.randInt(120, 320));
-      let got = readBlankState(q.qid, b.qid);
-      // 真实指针点有时打不到位（元素被遮/坐标偏移）：补一次元素自身的 click，
-      // 页面逻辑是行内 onclick="addChoice(this)"，合成 click 同样生效。
-      if (got.toUpperCase().indexOf(want) < 0) {
+
+      // 先轮询回读：页面的 submitForm / JSON 落库都有延迟（完型实测 300~1200ms）。
+      // 旧实现读一次没读到就再点一次 —— 那一下等于把刚选中的选项又点掉，
+      // 表现就是"4、5 两个空来回点"（2026-11-19 用户实测）。
+      let got = '';
+      for (let t = 0; t < 6; t++) {
+        await sleep(220);
+        got = blankStateOf(b, q.qid);
+        if (!got && optionMarked(b, want)) got = want;
+        if (got && got.toUpperCase().indexOf(want) >= 0) break;
+      }
+
+      // 只有"DOM 里也没留下选中标记"才补一次原生 click（元素被遮/坐标偏移时）
+      if (got.toUpperCase().indexOf(want) < 0 && !optionMarked(b, want)) {
         try {
           target.click();
         } catch (e) {}
-        await sleep(CXAI.U.randInt(80, 200));
-        got = readBlankState(q.qid, b.qid);
+        for (let t = 0; t < 5; t++) {
+          await sleep(240);
+          got = blankStateOf(b, q.qid);
+          if (!got && optionMarked(b, want)) got = want;
+          if (got && got.toUpperCase().indexOf(want) >= 0) break;
+        }
       }
+
       if (got.toUpperCase().indexOf(want) >= 0) {
         filled++;
         wrote.push(want);
       }
-      await sleep(CXAI.U.randInt(160, 420));
+      await sleep(CXAI.U.randInt(120, 300));
     }
     const miss = blanks.length - filled;
     // 全落盘才算成功：只写进去一半就报 ok，面板会显示"已答"，考生以为交完了
