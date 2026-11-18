@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.13
+// @version      1.11.14
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.13";
-CXAI.__builtAt = "2026-11-18T19:52:04.129Z";
+CXAI.__version = "1.11.14";
+CXAI.__builtAt = "2026-11-18T19:55:44.622Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -4740,8 +4740,9 @@ CXAI.AI = (function () {
               .join('\n')
         );
         lines.push(
-          '【作答格式】共 ' + blanks.length + ' 小题，按顺序只输出字母，用 "|||" 分隔（例如 A|||C|||B）；' +
-            '写 "1:A 2:C" 这种带题号的写法也接受。不要复述题目，不要漏答任何一小题。'
+          '【作答格式】共 ' + blanks.length + ' 小题，必须输出 **恰好 ' + blanks.length + ' 段**字母，按顺序用 "|||" 分隔' +
+            '（例如 ' + blanks.map(function (_, i) { return String.fromCharCode(65 + (i % 4)); }).join('|||') + '）；' +
+            '少一段就视为无效答案。写 "1:A 2:C" 这种带题号的写法也接受。不要复述题目，不要漏答任何一小题。'
         );
       } else {
         lines.push(
@@ -8847,7 +8848,9 @@ CXAI.Engine = (function () {
     if (!txt) return false;
     const segs = txt.split(/\s*\|\|\|\s*/).map((x) => x.trim()).filter(Boolean);
     const letters = segs.filter((x) => /^[A-Ha-h]{1,4}$/.test(x)).length;
-    return letters === 0;
+    // 没字母（散文）或字母段数少于空数（2 个空只回 1 个）都算不可用：
+    // 后者是旧 prompt 没有小题题干时留下的残答，会让整题永远只落一半。
+    return letters === 0 || letters < q.group.length;
   }
 
   function cachedAnswer(q) {

@@ -256,7 +256,9 @@ CXAI.Engine = (function () {
     if (!txt) return false;
     const segs = txt.split(/\s*\|\|\|\s*/).map((x) => x.trim()).filter(Boolean);
     const letters = segs.filter((x) => /^[A-Ha-h]{1,4}$/.test(x)).length;
-    return letters === 0;
+    // 没字母（散文）或字母段数少于空数（2 个空只回 1 个）都算不可用：
+    // 后者是旧 prompt 没有小题题干时留下的残答，会让整题永远只落一半。
+    return letters === 0 || letters < q.group.length;
   }
 
   function cachedAnswer(q) {

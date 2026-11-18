@@ -440,8 +440,9 @@ CXAI.AI = (function () {
               .join('\n')
         );
         lines.push(
-          '【作答格式】共 ' + blanks.length + ' 小题，按顺序只输出字母，用 "|||" 分隔（例如 A|||C|||B）；' +
-            '写 "1:A 2:C" 这种带题号的写法也接受。不要复述题目，不要漏答任何一小题。'
+          '【作答格式】共 ' + blanks.length + ' 小题，必须输出 **恰好 ' + blanks.length + ' 段**字母，按顺序用 "|||" 分隔' +
+            '（例如 ' + blanks.map(function (_, i) { return String.fromCharCode(65 + (i % 4)); }).join('|||') + '）；' +
+            '少一段就视为无效答案。写 "1:A 2:C" 这种带题号的写法也接受。不要复述题目，不要漏答任何一小题。'
         );
       } else {
         lines.push(

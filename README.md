@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.13-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.14-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,11 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.14（2026-11-19）小题组必须 N 段
+
+- **缓存残答作废**：小题组缓存里字母段数少于空数（2 个空只回 1 个字母）也判为不可用，重新判定。第 6 题一直只落 1/2，就是旧 prompt 缺小题题干时留下的单字母缓存被反复命中。
+- **prompt 强制段数**：「共 N 小题，必须输出**恰好 N 段**字母，按顺序用 ||| 分隔，少一段视为无效」，并给出与 N 等长的示例。
 
 ### v1.11.13（2026-11-19）残缺题直接判「题目有问题」
 
