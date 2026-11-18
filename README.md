@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.10-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.11-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.11（2026-11-19）页面答案口径统一
+
+- **面板「页面答案」与 AI 答案同口径**：新增 `Scraper.answerView(q)`，多空填空按 `风|||雅|||颂`、小题组按 `B|||C|||A|||B|||D|||A` 显示。此前 `pageValue` 只读第一个隐藏域，面板里永远只有一个字（第 3 题）、或者把整串 UUID JSON 贴出来（第 6/8/9 题）。
+- **富文本去标签/去重**：UEditor 读出来是 `<p>风</p>`，同一个空还常有 iframe + textarea 两份值；统一剥标签、压空白、按内容去重（小题组按位置保留重复字母）。
+- 视图只用于展示与日志，落盘验收仍以隐藏域为准。
 
 ### v1.11.10（2026-11-19）字母答案放行 + 单一高亮
 

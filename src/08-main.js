@@ -171,7 +171,11 @@ CXAI.Engine = (function () {
   /** 把一道题的结论写进面板清单（跨页持久化），同时读回页面真实选中态做对比 */
   function recordQ(q, result, applied, status) {
     try {
-      const live = (CXAI.Scraper.pageValue(q) || {}).value || '';
+      // 展示口径：多空/小题组统一成 A|||B（pageValue 只读第一空，会显示成「风」）
+      const live =
+        (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+        (CXAI.Scraper.pageValue(q) || {}).value ||
+        '';
       CXAI.UI.pushQuestion({
         index: q.no || (Number(q.index) || 0) + 1,
         qid: q.qid || '',
@@ -413,7 +417,11 @@ CXAI.Engine = (function () {
       applied = await CXAI.Apply.apply(attempt === 0 ? q : relive(q), result);
       if (applied.ok) break;
     }
-    const live = (CXAI.Scraper.pageValue(q) || {}).value || applied.actual || '';
+    const live =
+      (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+      (CXAI.Scraper.pageValue(q) || {}).value ||
+      applied.actual ||
+      '';
     if (!applied.ok) {
       st.failed++;
       if (applied.manual) {

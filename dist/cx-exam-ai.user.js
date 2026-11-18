@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.10
+// @version      1.11.11
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.10";
-CXAI.__builtAt = "2026-11-18T19:34:44.217Z";
+CXAI.__version = "1.11.11";
+CXAI.__builtAt = "2026-11-18T19:42:04.095Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -2116,6 +2116,107 @@ CXAI.Scraper = (function () {
   /* ---------------- 页面真实答案 / 题库无关的确定性线索 ---------------- */
 
   /** 超星的题号：.questionLi[data]，其次题型隐藏域名字里的题号（type123 / answertype123） */
+  /**
+   * 页面答案的"可读视图"：和 AI 答案统一成 `A|||B` 口径。
+   *   - pageValue 只读第一个隐藏域/第一个输入框，面板里就成了「风」（AI 是 风|||雅|||颂）；
+   *   - 小题组把 `input[name=answer<题号>]` 的 UUID JSON 原样显示，又长又看不懂。
+   * 这里按题面形态逐空取值再拼，只用于展示与日志，不参与验收。
+   */
+  function answerView(q) {
+    if (!q) return '';
+    // 富文本（UEditor）里读出来是 <p>风</p>，而且同一空常常同时有 iframe 与 textarea
+    // 两份值：这里统一去标签、压空白、按内容去重，面板才会显示成「风|||雅|||颂」。
+    const clean = function (x) {
+      return String(x == null ? '' : x)
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    };
+    const join = function (arr) {
+      const seen = {};
+      const out = [];
+      arr.forEach(function (x) {
+        const v = clean(x);
+        if (!v || seen[v]) return;
+        seen[v] = 1;
+        out.push(v.length > 160 ? v.slice(0, 160) + '…' : v);
+      });
+      return out.join('|||');
+    };
+    const readJsonBlanks = function () {
+      const out = [];
+      let box = null;
+      try {
+        box =
+          document.querySelector('input[name="answer' + q.qid + '"]') ||
+          document.querySelector('input[id="answer' + q.qid + '"]');
+      } catch (e) {}
+      if (!box || !box.value) return null;
+      let obj = null;
+      try { obj = JSON.parse(box.value); } catch (e) { return null; }
+      const list = Array.isArray(obj) ? obj : [obj];
+      return list;
+    };
+
+    // ① 小题组：逐空取字母（完型/阅读是 UUID 键，共用选项是 name/content）
+    if (q.group && q.group.length) {
+      const list = readJsonBlanks();
+      const out = q.group.map(function (b) {
+        let v = '';
+        try {
+          const el = document.querySelector('#answer' + b.qid);
+          if (el && String(el.value || '').trim()) v = String(el.value).trim();
+        } catch (e) {}
+        if (!v && list) {
+          if (b.btype) {
+            const hit = list.filter(function (it) { return String(it && it.name) === String(b.index); })[0];
+            if (hit) v = String(hit.content || '');
+          } else {
+            for (const item of list) {
+              if (!item) continue;
+              let x = item[b.qid];
+              if (x == null) continue;
+              if (typeof x === 'string') {
+                try { x = JSON.parse(x); } catch (e) {}
+              }
+              const ans = x && typeof x === 'object' ? x.answer : x;
+              if (ans) { v = String(ans); break; }
+            }
+          }
+        }
+        return String(v || '').toUpperCase().replace(/[^A-H]/g, '').slice(0, 4);
+      });
+      // 小题组的空是"按位置"的，两个空答案相同是合法的（A|||C|||C），不能去重
+      return out.join('|||');
+    }
+
+    // ② 文本题：逐空读输入框 / 富文本
+    const noChoice = !(q.options && q.options.length);
+    if (noChoice) {
+      const vals = [];
+      (q.inputs || []).forEach(function (el) {
+        if (!el || !el.isConnected) return;
+        let v = '';
+        if (el.tagName === 'IFRAME') {
+          try {
+            v = el.contentDocument && el.contentDocument.body ? String(el.contentDocument.body.innerText || '').trim() : '';
+          } catch (e) {}
+        } else {
+          v = String(el.value || '').trim();
+        }
+        if (v) vals.push(v);
+      });
+      if (vals.length) return join(vals);
+    }
+
+    // ③ 选择题：页面自己的字母
+    try {
+      return String((pageValue(q) || {}).value || '').trim();
+    } catch (e) {
+      return '';
+    }
+  }
+
   function qidOf(root) {
     if (!root) return '';
     try {
@@ -2680,6 +2781,7 @@ CXAI.Scraper = (function () {
 
   return {
     readGroupBlanks,
+    answerView,
     detectPage,
     collect,
     parseOne,
@@ -8624,7 +8726,11 @@ CXAI.Engine = (function () {
   /** 把一道题的结论写进面板清单（跨页持久化），同时读回页面真实选中态做对比 */
   function recordQ(q, result, applied, status) {
     try {
-      const live = (CXAI.Scraper.pageValue(q) || {}).value || '';
+      // 展示口径：多空/小题组统一成 A|||B（pageValue 只读第一空，会显示成「风」）
+      const live =
+        (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+        (CXAI.Scraper.pageValue(q) || {}).value ||
+        '';
       CXAI.UI.pushQuestion({
         index: q.no || (Number(q.index) || 0) + 1,
         qid: q.qid || '',
@@ -8866,7 +8972,11 @@ CXAI.Engine = (function () {
       applied = await CXAI.Apply.apply(attempt === 0 ? q : relive(q), result);
       if (applied.ok) break;
     }
-    const live = (CXAI.Scraper.pageValue(q) || {}).value || applied.actual || '';
+    const live =
+      (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+      (CXAI.Scraper.pageValue(q) || {}).value ||
+      applied.actual ||
+      '';
     if (!applied.ok) {
       st.failed++;
       if (applied.manual) {
