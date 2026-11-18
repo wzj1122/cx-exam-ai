@@ -294,7 +294,12 @@ CXAI.Engine = (function () {
       if (CXAI.Mark) CXAI.Mark.pending(q);
     } catch (e) {}
     const no = q.no || (Number(q.index) || 0) + 1;
-    const liveBefore = (CXAI.Scraper.pageValue(q) || {}).value || '';
+    // 对比用"可读视图"：小题组 pageValue 是整串 UUID JSON，拿它和 B|||C 比永远不相等，
+    // 于是 fixWrong 每轮都判"不一致 → 重做"，把已经答对的题又改一遍（2026-11-19 第 9 题）。
+    const liveBefore =
+      (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+      (CXAI.Scraper.pageValue(q) || {}).value ||
+      '';
 
     // 页面已经答过、又不想覆盖时：答对了就跳过，答错了才重做（apply.fixWrong 默认开）。
     // 关键：如果此刻还没有判定结果，必须**先判题再用判题结果比对** ——
@@ -362,7 +367,10 @@ CXAI.Engine = (function () {
 
     // 判完再和页面答案比：一致就不要再写一遍（fixWrong 只纠正错误答案）
     if (q.answered && !overwrite && fixWrong) {
-      const liveNow = (CXAI.Scraper.pageValue(q) || {}).value || liveBefore;
+      const liveNow =
+        (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+        (CXAI.Scraper.pageValue(q) || {}).value ||
+        liveBefore;
       if (sameAnswer(q, result, liveNow)) {
         st.skipped++;
         CXAI.Log.info(`#${no} 判定结果与页面答案一致（${liveNow || '-'}），不重写`);

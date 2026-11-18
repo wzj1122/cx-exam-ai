@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.11（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.12（`package.json`）
 
 # MAINTENANCE
 
@@ -338,6 +338,14 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.12（2026-11-19）对比口径与共用选项题干
+
+| 改动 | 文件 |
+|---|---|
+| `fixWrong` 对比改用 `answerView`（小题组不再因 JSON≠字母而重答） | `src/08-main.js` |
+| 文本答案按段落/换行拆分，`<p>` 多答案输出为 `A\|\|\|B` | `src/03-scraper.js` |
+| 共用选项题抓 `.B-tit` 作为每空题干 | `src/03-scraper.js` |
 
 ### v1.11.11（2026-11-19）页面答案口径统一
 

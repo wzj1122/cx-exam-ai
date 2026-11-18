@@ -631,10 +631,19 @@ CXAI.Scraper = (function () {
               .filter(function (o) {
                 return o.key;
               });
+            let bstem = '';
+            try {
+              // 共用选项题每个空上面的题干：<p class="B-tit">(1) 国际非专利药品名是（ ）</p>
+              const prev = el.previousElementSibling;
+              const tit = (prev && prev.querySelector && prev.querySelector('.B-tit')) || (prev && /B-tit/.test(String(prev.className || '')) ? prev : null);
+              const near = tit || el.parentElement.querySelector('.B-tit');
+              if (near) bstem = String(near.textContent || '').replace(/\s+/g, ' ').trim();
+            } catch (e) {}
             return {
               qid: 'bt' + (el.getAttribute('index') || ''),
               index: String(el.getAttribute('index') || ''),
               btype: true,
+              stem: bstem,
               answerEl: null,
               options: opts
             };
@@ -860,7 +869,17 @@ CXAI.Scraper = (function () {
         } else {
           v = String(el.value || '').trim();
         }
-        if (v) vals.push(v);
+        if (!v) return;
+        // 一个答题框里塞了一串答案时（第 5 题：网页/网站/主页/…），
+        // 按段落/换行拆开后用 ||| 连接，面板才和 AI 的分隔口径一致。
+        const segs = String(v)
+          .replace(/<\/p>|<br\s*\/?>|\n/g, '\n')
+          .replace(/<[^>]*>/g, ' ')
+          .split('\n')
+          .map(function (x) { return x.replace(/\s+/g, ' ').trim(); })
+          .filter(Boolean);
+        if (segs.length > 1) segs.forEach(function (x) { vals.push(x); });
+        else vals.push(v);
       });
       if (vals.length) return join(vals);
     }

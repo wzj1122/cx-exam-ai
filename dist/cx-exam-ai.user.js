@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.11
+// @version      1.11.12
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.11";
-CXAI.__builtAt = "2026-11-18T19:42:04.095Z";
+CXAI.__version = "1.11.12";
+CXAI.__builtAt = "2026-11-18T19:47:11.884Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -1975,10 +1975,19 @@ CXAI.Scraper = (function () {
               .filter(function (o) {
                 return o.key;
               });
+            let bstem = '';
+            try {
+              // 共用选项题每个空上面的题干：<p class="B-tit">(1) 国际非专利药品名是（ ）</p>
+              const prev = el.previousElementSibling;
+              const tit = (prev && prev.querySelector && prev.querySelector('.B-tit')) || (prev && /B-tit/.test(String(prev.className || '')) ? prev : null);
+              const near = tit || el.parentElement.querySelector('.B-tit');
+              if (near) bstem = String(near.textContent || '').replace(/\s+/g, ' ').trim();
+            } catch (e) {}
             return {
               qid: 'bt' + (el.getAttribute('index') || ''),
               index: String(el.getAttribute('index') || ''),
               btype: true,
+              stem: bstem,
               answerEl: null,
               options: opts
             };
@@ -2204,7 +2213,17 @@ CXAI.Scraper = (function () {
         } else {
           v = String(el.value || '').trim();
         }
-        if (v) vals.push(v);
+        if (!v) return;
+        // 一个答题框里塞了一串答案时（第 5 题：网页/网站/主页/…），
+        // 按段落/换行拆开后用 ||| 连接，面板才和 AI 的分隔口径一致。
+        const segs = String(v)
+          .replace(/<\/p>|<br\s*\/?>|\n/g, '\n')
+          .replace(/<[^>]*>/g, ' ')
+          .split('\n')
+          .map(function (x) { return x.replace(/\s+/g, ' ').trim(); })
+          .filter(Boolean);
+        if (segs.length > 1) segs.forEach(function (x) { vals.push(x); });
+        else vals.push(v);
       });
       if (vals.length) return join(vals);
     }
@@ -8849,7 +8868,12 @@ CXAI.Engine = (function () {
       if (CXAI.Mark) CXAI.Mark.pending(q);
     } catch (e) {}
     const no = q.no || (Number(q.index) || 0) + 1;
-    const liveBefore = (CXAI.Scraper.pageValue(q) || {}).value || '';
+    // 对比用"可读视图"：小题组 pageValue 是整串 UUID JSON，拿它和 B|||C 比永远不相等，
+    // 于是 fixWrong 每轮都判"不一致 → 重做"，把已经答对的题又改一遍（2026-11-19 第 9 题）。
+    const liveBefore =
+      (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+      (CXAI.Scraper.pageValue(q) || {}).value ||
+      '';
 
     // 页面已经答过、又不想覆盖时：答对了就跳过，答错了才重做（apply.fixWrong 默认开）。
     // 关键：如果此刻还没有判定结果，必须**先判题再用判题结果比对** ——
@@ -8917,7 +8941,10 @@ CXAI.Engine = (function () {
 
     // 判完再和页面答案比：一致就不要再写一遍（fixWrong 只纠正错误答案）
     if (q.answered && !overwrite && fixWrong) {
-      const liveNow = (CXAI.Scraper.pageValue(q) || {}).value || liveBefore;
+      const liveNow =
+        (CXAI.Scraper.answerView ? CXAI.Scraper.answerView(q) : '') ||
+        (CXAI.Scraper.pageValue(q) || {}).value ||
+        liveBefore;
       if (sameAnswer(q, result, liveNow)) {
         st.skipped++;
         CXAI.Log.info(`#${no} 判定结果与页面答案一致（${liveNow || '-'}），不重写`);

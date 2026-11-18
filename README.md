@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.11-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.12-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.12（2026-11-19）对比口径与共用选项题干
+
+- **不再重答已答对的题**：`fixWrong` 的对比值也改用 `answerView`。此前小题组拿整串 UUID JSON 去比 `B|||C|||B`，永远判「不一致 → 重做」，把已经答对的第 9 题又改了一遍。
+- **一个框里的多答案按行拆分**：第 5 题把一个框塞了 10 个答案（`<p>网页</p><p>网站</p>…`），现在视图按段落拆成 `网页|||网站|||主页…`，和 AI 口径一致。
+- **共用选项题带上小题题干**：抓 `.B-tit`（「(1) 国际非专利药品名是（ ）」），模型才能按空作答（此前只回一个字母，第 6 题只落 1/2）。
 
 ### v1.11.11（2026-11-19）页面答案口径统一
 
