@@ -428,7 +428,14 @@ CXAI.AI = (function () {
           '【小题组各小题的选项】\n' +
             blanks
               .map(function (b, i) {
-                return '第' + (i + 1) + '小题：' + (b.options || []).map(function (o) { return o.key + '. ' + o.text; }).join('   ');
+                return (
+                  '第' +
+                  (i + 1) +
+                  '小题' +
+                  (b.stem ? '（' + b.stem + '）' : '') +
+                  '：' +
+                  (b.options || []).map(function (o) { return o.key + '. ' + o.text; }).join('   ')
+                );
               })
               .join('\n')
         );
@@ -499,7 +506,15 @@ CXAI.AI = (function () {
         out.push(
           '【小题组各小题的选项】\n' +
             blanks
-              .map((b, i) => '第' + (i + 1) + '小题：' + (b.options || []).map((o) => o.key + '. ' + o.text).join('   '))
+              .map(
+                (b, i) =>
+                  '第' +
+                  (i + 1) +
+                  '小题' +
+                  (b.stem ? '（' + b.stem + '）' : '') +
+                  '：' +
+                  (b.options || []).map((o) => o.key + '. ' + o.text).join('   ')
+              )
               .join('\n')
         );
         out.push('【作答格式】共 ' + blanks.length + ' 小题，按顺序只输出字母，用 "|||" 分隔（例如 A|||C|||B）。');

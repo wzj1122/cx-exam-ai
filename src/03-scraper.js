@@ -569,6 +569,7 @@ CXAI.Scraper = (function () {
      * 旧实现只认 `.addChoice[qid]`，这些题 group 恒为 0，于是全部"没有可写入的答题框"。
      */
     const byUuid = new Map();
+    const stems = {};
     try {
       Array.from(root.querySelectorAll('.hoverDiv')).forEach((el) => {
         const tag = el.querySelector('span[data][qid], span[data]');
@@ -576,6 +577,27 @@ CXAI.Scraper = (function () {
         const uuid = String(tag.getAttribute('qid') || '');
         const key = String(tag.getAttribute('data') || '').trim().toUpperCase();
         if (!uuid || !key) return;
+        if (!stems[uuid]) {
+          // 小题题干：阅读理解的每个空前面都有 .reader_answer_tit（"(1) What will …"）。
+          // 不抓它，模型只看到正文 + 一堆选项，不知道每个空在问什么（实测只能回段落摘要）。
+          try {
+            const area = el.closest('.reading_answer, .filling_answer, .stem_answer, .questionLi');
+            const block = area && area.closest('.reading_answer') ? area.closest('.reading_answer') : null;
+            const holder = el.closest('.stem_answer') || el.parentElement;
+            const wrap = holder && holder.parentElement ? holder.parentElement : holder;
+            const tit =
+              (wrap && wrap.querySelector && wrap.querySelector('.reader_answer_tit, .stem_tit, .sub_tit')) ||
+              (block && block.querySelector && block.querySelector('.reader_answer_tit')) ||
+              null;
+            if (tit) stems[uuid] = String(tit.textContent || '').replace(/\s+/g, ' ').trim();
+          } catch (e) {}
+          if (!stems[uuid] && block) {
+            try {
+              const tit2 = block.querySelector('.reader_answer_tit');
+              if (tit2) stems[uuid] = String(tit2.textContent || '').replace(/\s+/g, ' ').trim();
+            } catch (e) {}
+          }
+        }
         if (!byUuid.has(uuid)) byUuid.set(uuid, []);
         byUuid.get(uuid).push({
           key: key,
@@ -590,7 +612,7 @@ CXAI.Scraper = (function () {
     } catch (e) {}
     if (byUuid.size) {
       return Array.from(byUuid.entries()).map(function (pair) {
-        return { qid: pair[0], options: pair[1], answerEl: null, json: true };
+        return { qid: pair[0], stem: stems[pair[0]] || '', options: pair[1], answerEl: null, json: true };
       });
     }
 

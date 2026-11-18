@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.6-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.7-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,11 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.7（2026-11-19）阅读小题题干入 prompt
+
+- **阅读/完型的小题题干参与判定**：页面结构是 `.reading_answer > .reader_answer_tit`（如「(1) What will James do tomorrow?」）后面跟一组选项；此前只抓选项不抓题干，模型不知道每个空在问什么，只能回段落摘要（实测第 9 题 0/3）。现在抓 `reader_answer_tit` 并写进 prompt 的「第 N 小题（题干）：选项…」，模型按字母作答。
+- 同时修正：`readGroupBlanks` 对 `.hoverDiv` 形态额外带回 `stem` 字段；复核/仲裁 prompt 同步。
 
 ### v1.11.6（2026-11-19）占位选项识别
 

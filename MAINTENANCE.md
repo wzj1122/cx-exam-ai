@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.6（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.7（`package.json`）
 
 # MAINTENANCE
 
@@ -338,6 +338,13 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.7（2026-11-19）阅读小题题干入 prompt
+
+| 改动 | 文件 |
+|---|---|
+| `readGroupBlanks` 采集小题题干（`.reader_answer_tit`）写入 blank.stem | `src/03-scraper.js` |
+| 判定 prompt / 复核 prompt 的「第 N 小题」带上题干 | `src/04-ai.js` |
 
 ### v1.11.6（2026-11-19）占位选项识别
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.6
+// @version      1.11.7
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.6";
-CXAI.__builtAt = "2026-11-18T19:07:15.310Z";
+CXAI.__version = "1.11.7";
+CXAI.__builtAt = "2026-11-18T19:13:47.318Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -1913,6 +1913,7 @@ CXAI.Scraper = (function () {
      * 旧实现只认 `.addChoice[qid]`，这些题 group 恒为 0，于是全部"没有可写入的答题框"。
      */
     const byUuid = new Map();
+    const stems = {};
     try {
       Array.from(root.querySelectorAll('.hoverDiv')).forEach((el) => {
         const tag = el.querySelector('span[data][qid], span[data]');
@@ -1920,6 +1921,27 @@ CXAI.Scraper = (function () {
         const uuid = String(tag.getAttribute('qid') || '');
         const key = String(tag.getAttribute('data') || '').trim().toUpperCase();
         if (!uuid || !key) return;
+        if (!stems[uuid]) {
+          // 小题题干：阅读理解的每个空前面都有 .reader_answer_tit（"(1) What will …"）。
+          // 不抓它，模型只看到正文 + 一堆选项，不知道每个空在问什么（实测只能回段落摘要）。
+          try {
+            const area = el.closest('.reading_answer, .filling_answer, .stem_answer, .questionLi');
+            const block = area && area.closest('.reading_answer') ? area.closest('.reading_answer') : null;
+            const holder = el.closest('.stem_answer') || el.parentElement;
+            const wrap = holder && holder.parentElement ? holder.parentElement : holder;
+            const tit =
+              (wrap && wrap.querySelector && wrap.querySelector('.reader_answer_tit, .stem_tit, .sub_tit')) ||
+              (block && block.querySelector && block.querySelector('.reader_answer_tit')) ||
+              null;
+            if (tit) stems[uuid] = String(tit.textContent || '').replace(/\s+/g, ' ').trim();
+          } catch (e) {}
+          if (!stems[uuid] && block) {
+            try {
+              const tit2 = block.querySelector('.reader_answer_tit');
+              if (tit2) stems[uuid] = String(tit2.textContent || '').replace(/\s+/g, ' ').trim();
+            } catch (e) {}
+          }
+        }
         if (!byUuid.has(uuid)) byUuid.set(uuid, []);
         byUuid.get(uuid).push({
           key: key,
@@ -1934,7 +1956,7 @@ CXAI.Scraper = (function () {
     } catch (e) {}
     if (byUuid.size) {
       return Array.from(byUuid.entries()).map(function (pair) {
-        return { qid: pair[0], options: pair[1], answerEl: null, json: true };
+        return { qid: pair[0], stem: stems[pair[0]] || '', options: pair[1], answerEl: null, json: true };
       });
     }
 
@@ -4588,7 +4610,14 @@ CXAI.AI = (function () {
           '【小题组各小题的选项】\n' +
             blanks
               .map(function (b, i) {
-                return '第' + (i + 1) + '小题：' + (b.options || []).map(function (o) { return o.key + '. ' + o.text; }).join('   ');
+                return (
+                  '第' +
+                  (i + 1) +
+                  '小题' +
+                  (b.stem ? '（' + b.stem + '）' : '') +
+                  '：' +
+                  (b.options || []).map(function (o) { return o.key + '. ' + o.text; }).join('   ')
+                );
               })
               .join('\n')
         );
@@ -4659,7 +4688,15 @@ CXAI.AI = (function () {
         out.push(
           '【小题组各小题的选项】\n' +
             blanks
-              .map((b, i) => '第' + (i + 1) + '小题：' + (b.options || []).map((o) => o.key + '. ' + o.text).join('   '))
+              .map(
+                (b, i) =>
+                  '第' +
+                  (i + 1) +
+                  '小题' +
+                  (b.stem ? '（' + b.stem + '）' : '') +
+                  '：' +
+                  (b.options || []).map((o) => o.key + '. ' + o.text).join('   ')
+              )
               .join('\n')
         );
         out.push('【作答格式】共 ' + blanks.length + ' 小题，按顺序只输出字母，用 "|||" 分隔（例如 A|||C|||B）。');
