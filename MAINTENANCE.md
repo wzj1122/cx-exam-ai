@@ -1,4 +1,4 @@
-> 最后更新：2026-11-17 ｜ 当前版本：1.10.6（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.0（`package.json`）
 
 # MAINTENANCE
 
@@ -41,6 +41,7 @@ cx-exam-ai/
 │   ├── 03-scraper.js         页面识别、题型判定、题目解析
 │   ├── 03b-vision.js         图片题读图层（抓图/压缩/data URL/转写）
 │   ├── 03c-attach.js         附件题通道（PDF 页图推导 + 探测）
+│   ├── 03d-mark.js           题下标注模块（**已停用**，enabled() 恒 false；作答详情只在面板）
 │   ├── 04-ai.js              模型调用、三风格请求体、Prompt、多重判定流水线
 │   ├── 05-apply.js           拟人化点选、填空写入、保存/交卷按钮定位
 │   ├── 06-guard.js           环境伪装、弹窗确认、节奏控制
@@ -63,15 +64,17 @@ cx-exam-ai/
 | `src/00-header.js` | — | `@match`/`@grant`/`@connect` 元数据（v1.8.0 起含 `cx-exam-ai.pages.dev` / `github.io` / `127.0.0.1`，设置中心要用）；`@run-at document-start` | 无 |
 | `src/01-core.js` | `CXAI.DEFAULT_CONFIG` `CXAI.PRESETS` `CXAI.isLocalURL` `CXAI.normalizeProvider` `CXAI.Store` `CXAI.Cfg` `CXAI.Log` `CXAI.U` | 默认配置（judge 参数 + `ai.vision` 对象 + **0 个预置 provider**）、**9 条接入预设**（deepseek/tokenrhythm/qwen-vl/qwen/glm/openai/ollama/lmstudio/custom，`model` 全部留空、以 `AI.listModels` 拉到的清单为准）、provider 归一化（apiStyle/role/keyOptional/maxTokens/extraBody/extraHeaders）、GM_* 存储回退 localStorage、`U.{sleep,rand,randInt,uid,clamp,mergeDeep,deepGet,safeJson,normText,similarity,escapeHtml,truncate,withTimeout}` | 无 |
 | `src/02-font.js` | `CXAI.Font` | 抽取 head 内 base64 字体 → canvas 360px 渲染 → 积分图盒式降采样 → 与 FRB2 特征表算汉明距离，输出 glyph→char 映射 | `CXAI.U` |
-| `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页） | `CXAI.U` |
+| `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页）；**v1.11.0**：题型表补齐 0~17（12 匹配 / 13 排序 / 16 口语 / 17 听力），新增 `detectShell()` 判定承载形态 `shell ∈ {choice,text,match,group,media,attach,manual}`、`readMedia()` 抓音视频、`labelOf()` 未知码显示「第 N 类题」；`readOptionElements` 过滤掉 textarea/input/select（简答的 `.eidtDiv` 文本域不再被当成选项，否则简答会按单选去点） | `CXAI.U` |
 | `src/03b-vision.js` | `CXAI.Vision.{cfg,isEnabled,prepare,pickProvider,panelHasVision,transcribe,composePromptBlock,load,clear,stats}` | 图片题通道：`fetchBlob`（GM_xmlhttpRequest 带 Referer 优先，降级 fetch credentials:include）→ `blobToDataUrl`（FileReader / arrayBuffer+btoa 兜底）→ `compress`（canvas 长边缩放到 1400、JPEG 0.82，无 Image/canvas 时原样返回）→ 10 分钟内存缓存；`prepare` 丢占位图（<600B）与超总字节图；`transcribe` 用读图模型把图转成 `{text,questionText,options,kind,confidence}` | `CXAI.Cfg` `CXAI.AI` `CXAI.U` |
 | `src/03c-attach.js` | `CXAI.Attach.{collect,previewUrl,pageImageUrls,hashPath,md5,probeImage,directUrl,enrich,pagesOf,clear,cfg}` | 附件题通道：附件枚举 → 页图地址推导（md5 末三字节）→ HEAD 探测页数 → 页图进 `question.images`；兜底为 `.btnDown` 直链 + pdf.js 渲染（页面有 pdfjsLib 时才走） | `CXAI.U` `CXAI.Log` `CXAI.Cfg` |
-| `src/04-ai.js` | `CXAI.AI.{solve,ping,listModels,callProvider,buildRequest,extractText,parseModelResult,resolveAnswerKeys,resolveVision,tally,buildPanel}` + 内部 `httpMethod(method,url,headers,body,timeout)`（`httpJson` 是它的 POST 快捷方式） | 三风格请求体构建（openai/anthropic/gemini，含 system 提升、图片块、extraBody/extraHeaders 深合并）、响应文本抽取、**`listModels` 拉取各家 `/models`**（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models?key=` 并过滤非 generateContent）、三套 Prompt + 读图上下文注入、答案归一化、加权投票、三级收敛 | `CXAI.Cfg` `CXAI.Vision` `CXAI.U` `CXAI.Log` |
-| `src/05-apply.js` | `CXAI.Apply.{humanClick,apply,answerChoice,answerBlank,clickOne,isChecked,saveOne,findSubmitButton,typeInto}` | 指针事件序列 + 随机落点；点后轮询选中态；失败逐级扩大候选元素重试；填空支持 textarea/input/contenteditable iframe | `CXAI.U` `CXAI.Cfg` |
+| `src/03d-mark.js` | `CXAI.Mark.{render,pending,preview,existing,failed,attachAll,clearAll,textOf,letterize,stageWord}` | **v1.11.0 新增、v1.11.0 收尾时停用**：原先在每题下方挂 Shadow DOM 卡片，2026-11-18 用户明确要求「页面上不要这块」→ `enabled()` 恒 `false`，`render/attachAll` 全部空操作，模块只为兼容旧调用保留。作答详情改由面板 `renderQDetail()` 承载（AI 判定/置信度/阶段/依据/投票/降级/页面一致性）。**恢复页内标注必须显式改 `enabled()` 那一行** | `CXAI.U` `CXAI.Cfg` `src/07-ui.js` |
+| `src/04-ai.js` | `CXAI.AI.{solve,councilSolve,rescueSolve,heuristicAnswer,ping,listModels,callProvider,buildRequest,extractText,parseModelResult,resolveAnswerKeys,isTextType,cleanAnswerText,normWidth,tally,buildPanel}` + 内部 `httpMethod(method,url,headers,body,timeout)`（`httpJson` 是它的 POST 快捷方式） | 三风格请求体构建（openai/anthropic/gemini，含 system 提升、图片块、extraBody/extraHeaders 深合并）、响应文本抽取、**`listModels` 拉取各家 `/models`**（OpenAI `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models?key=` 并过滤非 generateContent）、三套 Prompt + 读图上下文注入、答案归一化、加权投票、三级收敛；**v1.11.0**：`solve()` = 主判定失败后自动走兜底链（`rescueSolve` 逐模型极简 prompt 重问 → `heuristicAnswer` 题干答案/首选项），解析放宽到「答案：B / 答案是 B / 全角 Ｂ / 文本题整段代码块」并收紧"从解释文字乱抠 A–H"。唯一不兜底的是附件题缺视觉输入（会写进卷子的瞎猜） | `CXAI.Cfg` `CXAI.Vision` `CXAI.U` `CXAI.Log` |
+| `src/05-apply.js` | `CXAI.Apply.{humanClick,apply,answerChoice,answerBlank,clickOne,isChecked,stateSig,saveOne,findSubmitButton,typeInto,settle,fire}` | 指针事件序列 + 随机落点；点后轮询选中态；失败逐级扩大候选元素重试；填空支持 textarea/input/contenteditable iframe；**v1.11.0**：没有可写目标时不再假装成功 —— 文本题找不到输入框、选择题抓不到选项一律返回 `{ok:false, manual:true, error:…}`，`08-main` 据此不触发"写入失败暂停"，答案靠题下标注交给人工 | `CXAI.U` `CXAI.Cfg` |
 | `src/06-guard.js` | `CXAI.Guard.{install,uninstall,pace,dismissDialogs}` | `document.hidden`/`visibilityState`/`hasFocus` 伪装、吞掉 `visibilitychange`/`blur`、`confirm` 自动 true、弹窗白名单点击、题间节奏（含每 N 题长停顿与 3% 概率犹豫） | `CXAI.Cfg` `CXAI.U` `CXAI.Log` |
-| `src/07-ui.js` | `CXAI.UI.{mount,update,addQuestionCard,appendLog,togglePanel,openConfig,closeConfig}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）。设置面板分两层：常显「判定强度 `#cfg-strength` / 读图模型 `#cfg-vmodel` / 判题模型 `#cfg-providers`」，其余收进 `details.adv`；单个 provider 行只有预设（取自 `CXAI.PRESETS`，9 个）、Base URL、Key、模型名三项 + 「拉取」「▾」（`AI.listModels` → `#mpop` 浮层），`custom` 预设才显示「接口协议」`.stylebox`（openai/anthropic）；行内 `role`/`vision` 由 `#cfg-vmodel`（+ 勾选框 `#cfg-vjudge`）决定：不勾 `role='vision'`，勾了 `role='both'`（读图且投票）；`data-del` 删除行；`settingsURL()` / `openSettingsPage()` 打开独立设置中心，设置面板底部「独立设置页 ↗」 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` |
-| `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导；v1.8.0 起 `ready()` 先问 `CXAI.Settings.isHere()`，命中就整页接管设置中心并 return | 全部模块 |
+| `src/07-ui.js` | `CXAI.UI.{mount,unmount,update,addQuestionCard,pushQuestion,rowsForRender,renderQGrid,renderQDetail,appendLog,togglePanel,getQList,saveQList,settingsURL,openSettingsPage,openSync,closeSync,runSync,syncOk,syncFail,state}` | Shadow DOM 隔离的控制台：统计条、运行/暂停/停止、题目结果卡片（答案/置信度/一致率/阶段/票数）；题号格直接显示每题答案（`<b>题号</b><i>答案</i>`），详情区补依据/模型票/降级原因。**v1.11.0**：脚本内设置面板早已下线，同步入口改为**悬浮球上方气泡** `#syncpop`（`#sync-code` + `[data-act="sync-pull"]` 一个输入框一个按钮，旧 `#syncmask` 弹窗已删）；`syncOk()` 绿圈扩散 + 小球 `synced` 弹动 + 气泡 `done` 打勾，1.6s 收起；`syncFail()` 红圈 + 气泡 `fail` 抖动 + 自动打开面板并在顶部 `#syncfail` 写原因（含时间与排查建议）+ 小球 `sync-err` 红点；`state.sync.fx` 记录最近一次特效（测试用）；`ui.inlineResult` / `ui.syncFailMs` 见 `01-core` | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.Engine` `CXAI.Sync` `CXAI.Mark` |
+| `src/08-main.js` | `CXAI.Engine.{start,togglePause,stop,jumpTo,softNext,primeFromPage,answerNext,prefetch,saveSession,st}` | 主循环：整卷遍历 / 单题翻页；会话缓存去重；暂停-恢复-中断；低置信度标记；可选自动交卷（10s 反悔窗口）；boot 引导；v1.8.0 起 `ready()` 先问 `CXAI.Settings.isHere()`，命中就整页接管设置中心并 return。**v1.11.0**：每题开始/结束/失败都写 `CXAI.Mark` 标注（`pending → render / failed`），预取写 `preview`，页面原有答案写 `existing`；判定失败不再抛到外层，标红后继续下一题；`recordQ` 增加 `reason/votes/errors/shellLabel/confidenceLow` 供详情区展示；boot 里**只要存过同步码就调用 `Sync.syncBoot()` 自动同步**（不再限制"本地无模型才拉"），成功调 `UI.syncOk()`、失败调 `UI.syncFail()`；没有同步码也没有模型时自动 `UI.openSync({auto:true})` 弹出小球旁气泡 | 全部模块 |
 | `src/09-settings.js` | `CXAI.Settings.{isHere,mount,unmount,collectDiag}` | 独立设置中心：`settings.html`（Pages 上是 `/settings`）整页接管。默认「简单版」三栏（模型/判题/读图），`ui.advanced` 打开后才是六栏完整版；首次无模型时走 `wizardStep1/2/3` 三步向导（`S.wzActive` 控制，勿用 providers 是否为空判断）。模型卡 CRUD + 预设联动 + `AI.listModels` 拉取（模型名为空时自动选第一个）+ `AI.ping` 单卡测试；向导第 1 步同样可拉取；`data-f`/`data-path` 两条字段写入通道，280ms 防抖后 `Cfg.save()`；`syncVisionRoles()` 在改读图模型时同步所有 provider 的 `role`；支持 `?tab=` 深链。**顶层零副作用**，不在设置页时只是一堆函数 | `CXAI.Cfg` `CXAI.AI` `CXAI.PRESETS` `CXAI.U` `CXAI.Store` `CXAI.Log` |
+| `src/10-sync.js` | `CXAI.Sync.{enabled,savedCode,setCode,disable,makeCode,newCode,syncNow,push,pull,pullInto,autoPull,syncBoot,state,recordState,apiBase}` | 云同步（AES-GCM + Cloudflare Pages Functions/KV）。**v1.11.0**：`autoPull()` 默认 `force:true`（有码就拉），新增 `syncBoot()` 返回 `{ok,models,error,ms}` 并写 `syncState`（面板展示失败原因靠它）；`apiBase()` 把 `ui.syncAPI` 另存独立键 `syncAPI`，配置被覆盖/清空时同步地址不丢 | `CXAI.Cfg` `CXAI.Store` `CXAI.Log` |
 | `index.html` | — | Cloudflare Pages 落地页：三处一键安装入口（本站 `/dist/cx-exam-ai.user.js`、GitHub raw、Greasy Fork）、四件事、独立设置中心入口、三步上手、收款码。样式全内联，无外部依赖；改版式只动这一个文件 | `dist/cx-exam-ai.user.js`（下载路径）、`images/*.png` |
 | `settings.html` | — | 设置中心骨架：深色兜底页（含未接管时的排查步骤）+ `<html data-cxai-settings>` 标记。body 会被脚本清空后整页渲染，所以这里**只放兜底与标记，别指望它自己渲染表单** | `src/09-settings.js`（渲染方）、`index.html`（入口） |
 | `CLAUDE.md` | — | 仓库规则：哪些文件能改、发布流程（改版本 → 构建 → 自检 → 文档同步 → push）、禁止操作（手改 dist、删除 dist、提交 profile 目录） | 无 |
@@ -79,8 +82,9 @@ cx-exam-ai/
 | `.gitignore` | — | 排除 `logs/`、`.watch.log`、`.chrome.log`、`.shot-*.png`、`.cdp-profile/`、`.chrome-profile/`、`.tmp-ocsjs/`、`node_modules/` 等运行期与本地产物 | 无 |
 | `wrangler.jsonc` | — | Cloudflare **Pages** 部署配置：`name: cx-exam-ai`、`pages_build_output_dir: "./.site"`。**不能指向 "./"**——根目录含 `logs/`、`.cdp-profile/`、`.chrome-profile/`，被当作静态资源上传就是公开泄露登录态 Cookie；`assets.ignore` 在 wrangler 4.162 报 unexpected field 且不生效，只能靠“发布目录本身干净”。本地发布：`npm run site && npx wrangler pages deploy --branch=main`
 | `tools/release.js` | `node tools/release.js [--bump patch\|minor\|major] [--version x.y.z] [--dry] [--skip-test] [--no-deploy] [--no-verify] [-m 说明]` | 一键发布：版本同步 → build → check → test-dom → build-site → 白名单 commit → push → wrangler pages deploy → 线上回读 `@version`。只 add 白名单路径，暂存区出现 profile/logs 立即中止 | `build.js` `tools/check.js` `tools/test-dom.js` `tools/build-site.js` `wrangler.jsonc` |
-| `tools/verify-cdp.mjs` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | 真实浏览器端到端验证：自起两个静态服务（8790/8791 = 两个 origin，复现跨域存储隔离）+ headless Chrome（CDP），跑「设置中心向导 → 配置码 → 云同步(KV) → 考试页落库 → 悬浮球/面板」27 项断言，用 `Input.dispatchMouseEvent` 发真实双击（球的交互是 pointer 链，合成 click 无效） | `dist/` `.site/` `tools/shim.js` `tools/fixtures/exam-mock.html` |
+| `tools/verify-cdp.mjs` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | `node tools/verify-cdp.mjs [--keep] [--cdp=9222]` | 真实浏览器端到端验证：自起两个静态服务（8790/8791 = 两个 origin，复现跨域存储隔离）+ headless Chrome（CDP），跑「设置中心向导 → 配置码 → 云同步(KV) → 考试页落库 → 悬浮球/面板 → E 段：本地同步 API + 多题型兜底 + 题下标注」**35 项断言**，用 `Input.dispatchMouseEvent` 发真实双击（球的交互是 pointer 链，合成 click 无效）。线上 Cloudflare 不可达时自动跳过 A9/C 段（本地 E 段覆盖同步逻辑） | `dist/` `.site/` `tools/shim.js` `tools/fixtures/exam-mock.html` `tools/fixtures/exam-mock-types.html` |
 | `tools/fixtures/exam-mock.html` | — | 模拟学习通考试页（`.questionLi` + `.stem_answer` + `check_answer` 点选行为），给 `verify-cdp.mjs` 当考试页夹具 | `tools/verify-cdp.mjs` |
+| `tools/fixtures/exam-mock-types.html` | — | **v1.11.0 新增**：多题型夹具（单选 0 / 简答 4 / 连线 11 / 听力 17 / 排序 13），覆盖 `shell=choice/text/match/media/choice`；E 段用它验证全题型兜底与题下标注 | `tools/verify-cdp.mjs` |
 | `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` 与 `settings.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
@@ -235,6 +239,51 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 
 参数全集见 `CLAUDE.md`「正式发布流程」。**不要**改回"手动 build + 手动 push + 手动 wrangler"三连，版本号两处漏改是历史高频事故。
 
+### 5e. 全题型兜底（v1.11.0）
+
+```
+Scraper.parseOne
+  ├─ 题型码 0~17 → type；码缺失/未知 → guessType(stem, options, shell)
+  ├─ detectShell(root, options, inputs, attachments) → shell
+  │    attach → group → match → media → choice → text → manual（顺序即优先级）
+  └─ q = {type, typeLabel, shell, shellLabel, inputs, media, options, images, attachments, root}
+
+AI.solve(q)
+  ├─ councilSolve：议会 → 复核 → 仲裁（原逻辑）
+  │    解析：parseModelResult（JSON 缺失时抓「答案：X」/整段文本；全角归一化）
+  └─ 抛错 / 空答案 → rescueSolve
+       ├─ rescuePanel = 判定面板 + 全部可用端点（去重，图片题视觉优先）
+       ├─ 逐模型 buildRescueMessages + SYSTEM_RESCUE（最多 ai.fallback.tries 个）
+       ├─ 成功 → stage='rescue'（标注「兜底重试」）
+       └─ 仍失败 → heuristicAnswer：题干自带答案 → 首选项（stage='heuristic'，置信度 0.15~0.55）
+            文本题没有可确定内容时返回 null → 整题标红继续下一题
+
+Apply.apply(q, result)
+  ├─ 文本题找不到输入框 / 选择题抓不到选项 → {ok:false, manual:true, error}
+  └─ manual 不触发 apply.stopOnFail 的暂停（答案由题下标注交给人工）
+
+03d-mark.render(q, result, applied)
+  └─ 每题末尾 Shadow DOM 卡片：状态 / 答案（字母带选项文字）/ 置信度 / 阶段 / 依据 / 页面比对 / 投票 / 失败原因
+```
+
+### 5f. 进考试页自动同步（v1.11.0）
+
+```
+08-main boot.ready()
+  ├─ UI.mount() → Cfg.load()
+  ├─ 有 syncCode？
+  │    ├─ 是 → Sync.syncBoot()
+  │    │        ├─ pull(code)（AES-GCM 解密）→ Cfg.importJSON(obj) → 写 syncState{ok,models,ms}
+  │    │        └─ 返回 {ok, models} / {ok:false, error}
+  │    │    ├─ ok  → UI.syncOk()：绿圈 + 小球弹动 + 气泡 ✓，1.6s 收起
+  │    │    └─ 失败 → UI.syncFail()：红圈 + 气泡抖动 + togglePanel(true) + 面板顶部 #syncfail 显示原因
+  │    └─ 否 且本地无模型 → UI.openSync({auto:true})：小球上方气泡（1 输入框 + 1 按钮）
+  └─ 之后照常 pollQuestions → primeFromPage → Mark.attachAll → prefetch
+```
+
+- 同步码与同步服务地址都存在独立键（`syncCode` / `syncAPI`），不随配置 JSON 一起被覆盖，配置被云端旧版本顶掉后还能再拉回来。
+- 手动同步入口：面板右上角 ⇅、未配置时的「输入同步码」按钮、油猴菜单；三者都打开同一个 `#syncpop`。
+
 ### 5. 状态与配置
 
 - 配置全部落 `CXAI.Store`（GM_getValue/setValue，回退 localStorage），键 `CXAI.CONFIG_KEY`
@@ -274,6 +323,30 @@ npm run release:dry                           # 只构建+自检+测试+生成 .
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.0（2026-11-18/19）全题型兜底（含小题组）+ 面板详情 + 球单击按同步状态分流
+
+**背景**：期中考试遇到 PDF 附件题之后，用户又提出「其他各种各样的题型都要确保能找得到答案」「每道题下面直接显示作答详情」「同步逻辑说不清，改成每次进考试页都同步」「同步码输入 UI 重做，成功/失败要有能区分的特效」。
+
+- **题型覆盖**：`TYPE_MAP` 补齐 12/13/16/17（匹配/排序/口语/听力），`labelOf()` 让未知码显示「第 N 类题」；新增 `detectShell()`（`attach/group/match/media/choice/text/manual`）与 `readMedia()`；`guessType` 接收 shell，小题组/连线/音视频各自归类。
+- **修 bug（关键）**：`readOptionElements` 之前会把 `<textarea class="eidtDiv">` 当选项 —— 一条简答题被读成"1 个选项的单选题"，答案去点输入框，整卷少写一题。现在 textarea/input/select 一律不算选项（CDP 多题型用例 E5/E6 暴露）。
+- **兜底链**：`AI.solve` = `councilSolve` → `rescueSolve`（逐模型极简 prompt）→ `heuristicAnswer`（题干答案/首选项）；新配置 `ai.fallback.{enabled,heuristic,tries}`。附件题缺视觉输入仍然硬失败（避免把瞎猜写进卷子）。
+- **解析放宽/收紧**：支持「答案：B」「答案是 B」「全角 Ｂ」、文本题整段（去代码围栏/引号）；`B 正确，因为 A 和 C 都错` 不再被解析成 ABC（短句必须只含一个候选字母）。
+- **题下标注（后于同一版本停用）**：曾新增 `src/03d-mark.js` 在每题末尾挂 Shadow DOM 卡片；真机测试后用户明确要求页面上不要这块 → `enabled()` 恒 false，页面零注入，详情只在面板 `renderQDetail()`。
+- **manual 语义**：`05-apply` 无可写目标时返回 `{manual:true}`，`08-main` 不因此暂停；整卷继续答下一题。
+- **自动同步**：`Sync.autoPull` 默认 force，新增 `Sync.syncBoot()` + `syncState` 持久化；boot 里只要有同步码就同步并回显结果；`apiBase` 把同步地址另存 `syncAPI` 键。
+- **同步 UI**：删除 `#syncmask` 弹窗，改为小球上方 `#syncpop`（1 输入框 + 1 按钮）；`syncOk` 绿圈 + 弹动 + 打勾，`syncFail` 红圈 + 抖动 + 面板顶部原因条 + 小球红点；`state.sync.fx` 记录特效类型。
+- **测试**：`test-dom` 132 项全绿（新增 [17] 兜底解析/shell、[18] 标注渲染与清理）；`verify-cdp` 扩到 35 项（新增 E 段：本地同步 API 的成功/失败/自动同步、多题型 5 题自动连答、标注与面板答案），线上 API 不可达时 A9/C 段自动跳过并在汇总里注明。
+- **2026-11-18/19 真机复测后的追加修复（同一版本内）**：
+  - **小题组能落盘**：`03-scraper.readGroupBlanks()` 按 `.addChoice[qid]` 拆小题（完型 6 空 / 阅读 3 问）；`04-ai` 把每空选项列进 prompt 并要求 `A|||C|||B`；`05-apply.answerGroup()` 逐空点 `.addChoice`（onclick 在它身上，点外层 `.hoverDiv` 无效）并用 `#answer{qid}` 验收；**全空才 `ok`**，半落标「需人工」。实测：阅读 3/3、完型 5/6。
+  - **多空填空**：`splitBlanks` 补顿号/逗号/换行分隔，"项多取前 N、项少按序留空"；过滤 `input[type=hidden]` / `display:none`，避免 3 空算成 6 空。
+  - **面板计数**：统计格 4→5（题目/已答/失败/未答/模型），`未答 = 总数 − 已答 − 失败`，`manual` 独立状态并计入「失败」。
+  - **球单击状态机**：无同步码 / 有码未成功 → 单击弹同步码输入框；有码且同步成功 → 单击答题。球上 `⇅` + toast 反馈；有模型但无同步码时进页面自动摆出输入框（30 分钟一次）。
+  - **废话守则**：模型回「题目信息缺失 / 无法确定」判失败，不写进卷子。
+  - **网关 403 提示**：改写为「到网关设置 → Network and sharing → Web pages 加白名单」。
+  - **测试**：`test-dom` 131 项全绿（[18] 改为断言页面零注入）。
+- **涉及文件**：`src/01-core.js` `src/03-scraper.js` `src/03d-mark.js`（新增）`src/04-ai.js` `src/05-apply.js` `src/07-ui.js` `src/08-main.js` `src/10-sync.js` `src/00-header.js` `package.json` `tools/check.js` `tools/test-dom.js` `tools/verify-cdp.mjs` `tools/fixtures/exam-mock-types.html`（新增）`README.md` `MAINTENANCE.md`
+
 
 ### v1.10.6（2026-11-17）附件页图 CORS 凭证修正
 

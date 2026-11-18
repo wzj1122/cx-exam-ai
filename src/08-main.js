@@ -113,6 +113,12 @@ CXAI.Engine = (function () {
         actual: live,
         stage: result && result.stage ? result.stage : '',
         confidence: result && result.confidence != null ? result.confidence : null,
+        // 详情面板要能说清"为什么是这个答案"：依据 / 各模型投票 / 兜底降级原因
+        reason: result && result.reason ? String(result.reason).slice(0, 240) : '',
+        votes: result && result.votes ? result.votes.slice(0, 6) : [],
+        errors: result && result.errors ? result.errors.slice(-3) : [],
+        shellLabel: q.shellLabel || '',
+        confidenceLow: !!(result && result.lowConfidence),
         status: status,
         // 用题号（qid）当主键：同一道题翻回来还是同一行，不会堆成两条
         key: q.qid ? 'qid:' + q.qid : 'stem:' + (CXAI.U.normText(q.stem || '').slice(0, 40) || 'i' + (Number(q.index) || 0))
@@ -184,6 +190,9 @@ CXAI.Engine = (function () {
 
   async function handleQuestion(q, pageKind) {
     const overwrite = CXAI.Cfg.get('apply.overwriteAnswered', false);
+    try {
+      if (CXAI.Mark) CXAI.Mark.pending(q);
+    } catch (e) {}
     const no = q.no || (Number(q.index) || 0) + 1;
     const liveBefore = (CXAI.Scraper.pageValue(q) || {}).value || '';
 
@@ -223,6 +232,9 @@ CXAI.Engine = (function () {
       if (same || !fixWrong) {
         st.skipped++;
         CXAI.Log.info(`#${no} 已答（页面：${liveBefore || '-'}），跳过`);
+        try {
+          if (CXAI.Mark) CXAI.Mark.existing(q, liveBefore);
+        } catch (e) {}
         recordQ(q, result, { ok: true }, 'skip');
         CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
         saveSession(true);
@@ -233,9 +245,24 @@ CXAI.Engine = (function () {
 
     if (!result) {
       CXAI.Log.info(`#${no} 判定中 · ${q.typeLabel} · ${CXAI.U.truncate(q.stem, 40)}`);
-      result = await CXAI.AI.solve(q);
-      st.cache.set(ck, result);
-      saveAnswer(q, result);
+      try {
+        result = await CXAI.AI.solve(q);
+        st.cache.set(ck, result);
+        saveAnswer(q, result);
+      } catch (e) {
+        // 全题型兜底也失败了（例如附件题缺读图模型）：这题标红、继续走下一题，
+        // 不要整卷停在这里（旧行为是抛到外层，整卷只留下一条"处理异常"）。
+        st.failed++;
+        const msg = e && e.message ? e.message : String(e);
+        CXAI.Log.error(`#${no} 判定失败：${msg}`);
+        try {
+          if (CXAI.Mark) CXAI.Mark.failed(q, msg, null);
+        } catch (e2) {}
+        recordQ(q, { answerText: '', reason: msg }, { ok: false, error: msg }, 'fail');
+        CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
+        saveSession(true);
+        return { q, failed: true };
+      }
     }
 
     await waitIfPaused();
@@ -253,9 +280,13 @@ CXAI.Engine = (function () {
     const live = (CXAI.Scraper.pageValue(q) || {}).value || applied.actual || '';
     if (!applied.ok) {
       st.failed++;
-      CXAI.Log.error(`#${no} 写入失败：${applied.error || '未知'}（答案 ${result.answerText}｜页面 ${live || '空'}）`);
+      if (applied.manual) {
+        CXAI.Log.warn(`#${no} 需人工填写：${applied.error || '页面没有可写入的位置'}（AI 答案 ${result.answerText}）`);
+      } else {
+        CXAI.Log.error(`#${no} 写入失败：${applied.error || '未知'}（答案 ${result.answerText}｜页面 ${live || '空'}）`);
+      }
       if (applied.dom) CXAI.Log.warn(`选项结构：${applied.dom}`);
-      if (CXAI.Cfg.get('apply.stopOnFail', true)) {
+      if (!applied.manual && CXAI.Cfg.get('apply.stopOnFail', true)) {
         st.haltReason = '写入失败';
         st.paused = true;
         CXAI.Log.warn('已暂停：这题没写进去，继续翻页会漏题。手动选好后在面板点「继续」');
@@ -290,12 +321,21 @@ CXAI.Engine = (function () {
       }
     }
 
+    try {
+      if (CXAI.Mark) {
+        CXAI.Mark.render(q, result, applied, {
+          status: applied && applied.ok ? 'ok' : applied && applied.manual ? 'manual' : 'fail',
+          actual: live,
+          at: Date.now()
+        });
+      }
+    } catch (e) {}
     CXAI.UI.addQuestionCard(q, result, applied);
     const rec = { index: q.index, no, qid: q.qid, type: q.type, stem: CXAI.U.truncate(q.stem, 80), result, applied };
     st.results.push(rec);
-    // 面板上的"已处理"只算真正落盘的（applied.ok），失败的单独进 failed，
-    // 避免失败题被算进作答数，也避免"作答 0 个"这种看不出到底走了几步的统计。
-    recordQ(q, result, applied, applied && applied.ok ? 'ok' : 'fail');
+    // 面板上的"已答"只算真正落盘的（applied.ok），失败/需人工单独进「失败」列，
+    // 不混进作答数 —— 但两者都要算进"已处理"，否则走了 5 题仍显示"已答 2"。
+    recordQ(q, result, applied, applied && applied.ok ? 'ok' : applied && applied.manual ? 'manual' : 'fail');
     CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
     // 单题模式翻页是整页导航，finally 来不及执行；进度必须在这一题刚落盘时写盘，
     // 否则下一页读回来的 done 永远是 0 —— 用户看到的就是"作答 0 个"。
@@ -581,7 +621,16 @@ CXAI.Engine = (function () {
 
     const applied = await CXAI.Apply.apply(q, result);
     const live = (CXAI.Scraper.pageValue(q) || {}).value || applied.actual || '';
-    recordQ(q, result, applied, applied && applied.ok ? 'ok' : 'fail');
+    try {
+      if (CXAI.Mark) {
+        CXAI.Mark.render(q, result, applied, {
+          status: applied && applied.ok ? 'ok' : applied && applied.manual ? 'manual' : 'fail',
+          actual: live,
+          at: Date.now()
+        });
+      }
+    } catch (e) {}
+    recordQ(q, result, applied, applied && applied.ok ? 'ok' : applied && applied.manual ? 'manual' : 'fail');
     CXAI.UI.update({ doneAll: false });
     if (applied && applied.ok) {
       CXAI.Log.ok(`#${q.no} 已填 ${CXAI.U.escapeHtml(result.answerText)} · 页面 ${live || '?'}`);
@@ -649,6 +698,9 @@ CXAI.Engine = (function () {
           const r = await CXAI.AI.solve(q);
           saveAnswer(q, r);
           st.cache.set(cacheKey(q), r);
+          try {
+            if (CXAI.Mark) CXAI.Mark.preview(q, r);
+          } catch (e) {}
           done++;
           CXAI.Log.ok(`预取 ${done}/${done + queue.length} · #${(Number(q.index) || 0) + 1} ${CXAI.U.truncate(q.stem || '', 24)} → ${r.answerText}`);
           CXAI.UI.update({ prefetched: done });
@@ -693,6 +745,9 @@ CXAI.Engine = (function () {
         const rowKey = q.qid ? 'qid:' + q.qid : 'stem:' + (CXAI.U.normText(q.stem || '').slice(0, 40));
         const prev = existing[rowKey];
         if (prev && prev.answer) return; // 留着 AI 的结论
+        try {
+          if (CXAI.Mark) CXAI.Mark.existing(q, pv);
+        } catch (e) {}
         CXAI.UI.pushQuestion({
           index: no,
           qid: q.qid || '',
@@ -995,8 +1050,7 @@ CXAI.Engine = (function () {
       CXAI.UI.mount();
       // 交卷/跳到回看页之后，界面自己收掉（用户点交卷、或页面自己跳转都能兜住）
       setInterval(function () {
-        try {
-          if (!document.getElementById('cx-ai-host')) return;
+        try {          if (!document.getElementById('cx-ai-host')) return;
           const p2 = CXAI.Scraper.detectPage();
           if (p2.finished) {
             CXAI.Log.info('检测到已交卷，界面已自动隐藏');
@@ -1031,6 +1085,10 @@ CXAI.Engine = (function () {
             CXAI.UI.update({ total: total || n, current: CXAI.Scraper.currentIndex() });
             try {
               CXAI.Engine.primeFromPage();
+            } catch (e) {}
+            // 每题下方先挂"待作答"，后面的判定结果直接替换这一块
+            try {
+              if (CXAI.Mark) CXAI.Mark.attachAll(CXAI.Scraper.collect().questions);
             } catch (e) {}
             // 后台预取：先把答案判好缓存下来，之后点小球就是"读缓存 + 落盘"，几乎不用等
             try {
@@ -1091,20 +1149,53 @@ CXAI.Engine = (function () {
       if (!np) {
         CXAI.Log.warn(
           '本域还没有模型配置（存储后端：' + CXAI.Store.backend + '）。' +
-            '去设置中心配好后点右上角「生成同步码并上传」，再把同步码粘到面板里 ⇅ 拉取一次（之后自动同步）'
+            '去设置中心配好后点右上角「生成同步码并上传」，再把同步码粘到小球旁边的输入框里（之后每次进考试页都会自动同步）'
         );
         try {
           CXAI.UI.update({ needSetup: true });
         } catch (e) {}
-        // 存过同步码就直接从云端静默拉一次（跨子域唯一可靠的通道）
-        try {
-          CXAI.Sync.autoPull().then(function (got) {
-            if (!got) return;
-            CXAI.UI.update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
-            CXAI.Log.ok('云同步完成 · 直接点「答一题」就行');
-          });
-        } catch (e) {}
       }
+      // 每次进入考试页都自动同步一次（2026-11-18 需求）：
+      // 只要存过同步码就静默拉取，不再限制"本地没有模型才拉" ——
+      // 那个条件让设置中心改完的判定强度/读图模型在考试页永远不生效。
+      try {
+        if (CXAI.Sync && CXAI.Sync.savedCode && CXAI.Sync.savedCode()) {
+          CXAI.Log.info('检测到同步码：正在从云端同步配置…');
+          CXAI.Sync.syncBoot().then(function (r) {
+            if (!r) return;
+            if (r.ok) {
+              try {
+                CXAI.UI.update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+                if (CXAI.UI.syncOk) CXAI.UI.syncOk(r);
+              } catch (e) {}
+              CXAI.Log.ok('云同步完成 · 模型 ' + (r.models || 0) + ' 个 · 直接点「答一题」就行');
+            } else if (r.error) {
+              // 失败原因要落到面板上（双击小球打开的那个面板），别只丢在日志里
+              try {
+                if (CXAI.UI.syncFail) CXAI.UI.syncFail(r);
+              } catch (e) {}
+              CXAI.Log.error('云同步失败：' + r.error);
+            }
+          });
+        } else if (!np) {
+          // 新用户：既没有模型也没有同步码 → 直接把小球旁的输入框摆出来（一个输入框 + 一个按钮）
+          try {
+            if (CXAI.UI.openSync) CXAI.UI.openSync({ auto: true });
+          } catch (e) {}
+        } else {
+          // 有模型、但还没存过同步码：同样把输入框自动摆出来一次。
+          // 以前只有"一个模型都没有"才弹，于是想填同步码只能自己发现「双击小球 → 面板 → ⇅」
+          // 这条隐藏路径，用户实测就是"点一下根本没反应"（2026-11-18）。
+          // 半小时内只自动弹一次，避免单题模式每题整页重载都弹一遍。
+          try {
+            const at = Number(CXAI.Store.get('syncPromptAt', 0)) || 0;
+            if (!at || Date.now() - at > 30 * 60 * 1000) {
+              CXAI.Store.set('syncPromptAt', Date.now());
+              if (CXAI.UI.openSync) CXAI.UI.openSync({ auto: true });
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
       if (typeof GM_registerMenuCommand === 'function') {
         GM_registerMenuCommand('打开控制台', () => CXAI.UI.togglePanel(true));
         GM_registerMenuCommand('开始答题', () => CXAI.Engine.start());

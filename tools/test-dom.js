@@ -551,7 +551,7 @@ sandbox.fetch = fetchMock;
 
 const ctx = vm.createContext(sandbox);
 
-const FILES = ['01-core.js', '02-font.js', '03-scraper.js', '03b-vision.js', '04-ai.js', '05-apply.js', '06-guard.js'];
+const FILES = ['01-core.js', '02-font.js', '03-scraper.js', '03b-vision.js', '03c-attach.js', '03d-mark.js', '04-ai.js', '05-apply.js', '06-guard.js'];
 for (const f of FILES) {
   const code = fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8');
   vm.runInContext(code, ctx, { filename: f });
@@ -1132,6 +1132,61 @@ function ok(cond, label, extra) {
 
   sandbox.document = savedDoc;
   windowObj.document = savedWinDoc;
+
+  console.log('\n[17] 全题型兜底：宽松解析 / 本地兜底 / 承载形态');
+  {
+    const qs = CXAI.Scraper.collect().questions;
+    const single = qs[0];
+    const r1 = CXAI.AI.parseModelResult('答案是 B', single);
+    ok(!!r1 && r1.keys.join('') === 'B', '非 JSON 的「答案是 B」也能解析', r1);
+    const r2 = CXAI.AI.parseModelResult('Ｂ', single);
+    ok(!!r2 && r2.keys.join('') === 'B', '全角 Ｂ 归一化成 B', r2);
+    const r3 = CXAI.AI.parseModelResult('B 正确，因为 A 和 C 都错', single);
+    ok(!r3 || r3.keys.join('') === 'B', '解释性文字不会把 A/C 误当答案', r3);
+    const qTxt = { type: 'completion', typeLabel: '简答题', stem: '简述 TCP 三次握手', options: [], keys: [] };
+    const r4 = CXAI.AI.parseModelResult('```\n第一次 SYN，第二次 SYN+ACK，第三次 ACK\n```', qTxt);
+    ok(!!r4 && /SYN\+ACK/.test(r4.answerText) && r4.answerText.indexOf('```') < 0, '文本题整段兜底并去掉代码围栏', r4);
+    ok(CXAI.AI.isTextType(qTxt) && !CXAI.AI.isTextType(single), '文本题型判定（无选项=文本）', '');
+    const h1 = CXAI.AI.heuristicAnswer(single, ['主判定失败']);
+    ok(!!h1 && h1.stage === 'heuristic' && h1.keys.length === 1 && h1.lowConfidence === true, '本地兜底给出首选项（低置信度）', h1);
+    const h2 = CXAI.AI.heuristicAnswer(qTxt, ['主判定失败']);
+    ok(h2 === null, '文本题无可确定内容时不乱写', h2);
+    const fake = (map) => ({ querySelector: (x) => (map[x] ? {} : null), querySelectorAll: (x) => map[x] || [] });
+    ok(CXAI.Scraper.detectShell(fake({}), [{ key: 'A' }], [], []) === 'choice', 'shell=choice（有选项）', '');
+    ok(CXAI.Scraper.detectShell(fake({}), [], [{}], []) === 'text', 'shell=text（有输入框）', '');
+    ok(CXAI.Scraper.detectShell(fake({}), [], [], [{ objectid: '1' }]) === 'attach', 'shell=attach（附件题干）', '');
+    ok(CXAI.Scraper.detectShell(fake({}), [], [], []) === 'manual', 'shell=manual（无选项无输入框）', '');
+    ok(
+      CXAI.Scraper.detectShell(
+        fake({ 'audio, video, .audio, .video, .audioWrap, .videoWrap, .player-wrap, #audioPlayer': 1 }),
+        [],
+        [],
+        []
+      ) === 'media',
+      'shell=media（只有播放器）',
+      ''
+    );
+  }
+
+  console.log('\n[18] 页面内不再注入标注（详情只在双击打开的面板里）');
+  {
+    const q = CXAI.Scraper.collect().questions[0];
+    const host = CXAI.Mark.render(
+      q,
+      { keys: ['B'], answerText: 'B', confidence: 0.82, stage: 'panel', reason: '第二步是 SYN+ACK', votes: [{ who: 'm1', answer: 'B', confidence: 0.8 }] },
+      { ok: true, actual: 'B' },
+      { status: 'ok', actual: 'B' }
+    );
+    // 2026-11-18 用户要求：页面上不要任何卡片，判定详情只在面板里 → render 必须是空操作
+    ok(host === null, '页面内不渲染作答卡片', host);
+    ok(CXAI.Mark.textOf(q) === '', '页面里读不到标注文本', CXAI.Mark.textOf(q));
+    const q2 = CXAI.Scraper.collect().questions[1] || q;
+    CXAI.Mark.failed(q2, '这题在页面上没有可写入的答题框', null);
+    ok(CXAI.Mark.textOf(q2) === '', '失败也不往页面写', CXAI.Mark.textOf(q2));
+    ok(CXAI.Mark.attachAll(CXAI.Scraper.collect().questions) === 0, 'attachAll 不再挂载', '');
+    CXAI.Mark.clearAll();
+    ok(CXAI.Mark.textOf(q) === '', 'clearAll 幂等', '');
+  }
 
   console.log(`\n结果：${pass} 通过 / ${fail} 失败（AI 请求 ${CALLS} 次）`);
   process.exit(fail ? 1 : 0);

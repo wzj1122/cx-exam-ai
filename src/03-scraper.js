@@ -3,7 +3,12 @@
  */
 
 CXAI.Scraper = (function () {
-  /** 学习通题号 -> 题型值映射 */
+  /** 学习通题号 -> 题型值映射
+   *  2/4~10 统一压成 completion（落盘都走"写文本"路径），这是 ocsjs 的既有范式：
+   *  简答 / 论述 / 计算 / 名词解释 / 分录 / 编程 在页面上的承载都是"一个可写的富文本框"，
+   *  按填空写反而最稳。12/13/16/17 官方确有（匹配/排序/口语/听力），但码值与 DOM 未实测，
+   *  这里先给独立 type（界面标签更准），写入仍走各自 shell 判定，不猜码值语义。
+   */
   const TYPE_MAP = {
     0: 'single',
     1: 'multiple',
@@ -17,8 +22,12 @@ CXAI.Scraper = (function () {
     9: 'completion',
     10: 'completion',
     11: 'line',
+    12: 'match',
+    13: 'sort',
     14: 'fill',
-    15: 'reader'
+    15: 'reader',
+    16: 'oral',
+    17: 'listening'
   };
 
   const TYPE_LABEL = {
@@ -27,9 +36,24 @@ CXAI.Scraper = (function () {
     judgement: '判断题',
     completion: '填空题',
     line: '连线题',
+    match: '匹配题',
+    sort: '排序题',
     fill: '完形填空',
     reader: '阅读理解',
+    oral: '口语题',
+    listening: '听力题',
     unknown: '未知题型'
+  };
+
+  /** 题目的"承载形态"：决定答案往哪写、能不能写 */
+  const SHELL_LABEL = {
+    choice: '选项题',
+    text: '文本作答',
+    match: '连线/匹配',
+    group: '小题组',
+    media: '音视频',
+    attach: '附件材料',
+    manual: '需人工'
   };
 
   /**
@@ -57,6 +81,69 @@ CXAI.Scraper = (function () {
   };
 
   const JUDGE_WORDS = ['正确', '错误', '对', '错', '是', '否', '√', '×', 'true', 'false', 't', 'f', 'yes', 'no'];
+
+  /** 题型码 → 界面标签。未知码给"第 N 类题"，别一律写成"未知题型" */
+  function labelOf(type, typeCode) {
+    if (TYPE_LABEL_BY_CODE[typeCode]) return TYPE_LABEL_BY_CODE[typeCode];
+    if (TYPE_LABEL[type]) return TYPE_LABEL[type];
+    if (typeCode != null && isFinite(typeCode)) return '第 ' + typeCode + ' 类题';
+    return '未知题型';
+  }
+
+  /** 题面里出现这些词，说明是"要写一段话"的题，不是选字母 */
+  const TEXT_WORDS = /填空|简答|论述|名词解释|计算|案例|材料|分录|编程|代码|程序设计|作图|画图|翻译|作文|实验|口语|听力|阅读|完形|配对|连线|匹配/;
+
+  /**
+   * 判定题目的承载形态（兜底链的第一环）：
+   *   attach  附件题（题干在 PDF/Office 里）
+   *   group   阅读理解/完形填空：一个外壳里装若干小题
+   *   match   连线/匹配：下拉框或 .line_answer
+   *   media   音视频题：页面上只有播放器
+   *   choice  有选项
+   *   text    有可写输入框（textarea / input / UEditor iframe）
+   *   manual  什么都没有 —— 答案只能展示，由人手动填
+   */
+  function detectShell(root, options, inputs, attachments) {
+    const has = (sel) => {
+      try {
+        return !!(root && root.querySelector && root.querySelector(sel));
+      } catch (e) {
+        return false;
+      }
+    };
+    const count = (sel) => {
+      try {
+        return root && root.querySelectorAll ? root.querySelectorAll(sel).length : 0;
+      } catch (e) {
+        return 0;
+      }
+    };
+    if (attachments && attachments.length) return 'attach';
+    if (count('.questionLi .questionLi, .TiMu .TiMu, .reading_answer .questionLi, .filling_answer .questionLi') > 0) return 'group';
+    if (has('.reading_answer, .filling_answer, .sub_que, .question-item')) return 'group';
+    if (has('.line_answer, .selectBox') || count('select') > 0) return 'match';
+    if (has('audio, video, .audio, .video, .audioWrap, .videoWrap, .player-wrap, #audioPlayer')) return 'media';
+    if (options && options.length) return 'choice';
+    if (inputs && inputs.length) return 'text';
+    return 'manual';
+  }
+
+  /** 页面上的音视频资源（听力/口语题：模型只能按题干给要点） */
+  function readMedia(root) {
+    const out = [];
+    try {
+      Array.from(root.querySelectorAll('audio, video, source')).forEach((el) => {
+        const src = el.getAttribute('src') || el.getAttribute('data-src') || '';
+        if (src) out.push({ tag: el.tagName.toLowerCase(), src: new URL(src, location.href).href });
+      });
+      Array.from(root.querySelectorAll('[onclick*="audio"], [onclick*="video"], .audioName, .videoName')).forEach((el) => {
+        const src = el.getAttribute('onclick') || el.textContent || '';
+        if (src) out.push({ tag: 'ref', src: String(src).slice(0, 180) });
+      });
+    } catch (e) {}
+    return out;
+  }
+
 
   /* ---------- 页面类型 ---------- */
 
@@ -143,6 +230,8 @@ CXAI.Scraper = (function () {
         /^\s*[（(]\s*(单项选择题|多项选择题|不定项选择题|判断题|填空题|简答题|论述题|计算题|名词解释题?|案例分析题?|材料分析题?|其他题)\s*[）)]\s*/,
         ''
       )
+      // 【判断题】【单选题】【材料题】这类方括号前缀
+      .replace(/^\s*【[^】]{1,10}】\s*/, '')
       .replace(/[（(]\s*\d+(?:\.\d+)?\s*分\s*[）)]/g, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
@@ -226,13 +315,19 @@ CXAI.Scraper = (function () {
     return out;
   }
 
-  function guessType(stem, options) {
+  function guessType(stem, options, shell) {
+    if (shell === 'group') return 'reader';
+    if (shell === 'match') return 'match';
+    if (shell === 'media') return /听力|听录音|listen/i.test(stem) ? 'listening' : 'oral';
+    if (shell === 'attach') return 'completion';
     const texts = options.map((o) => CXAI.U.normText(o.text));
     if (options.length === 0) return 'completion';
     if (options.length === 2 && texts.every((t) => JUDGE_WORDS.indexOf(t) >= 0)) return 'judgement';
     if (/多选|多项选择|不定项/.test(stem)) return 'multiple';
     if (/判断/.test(stem) && options.length <= 2) return 'judgement';
-    if (/填空|简答|论述|名词解释|计算|案例/.test(stem) && options.length === 0) return 'completion';
+    if (TEXT_WORDS.test(stem) && options.length === 0) return 'completion';
+    if (/阅读/.test(stem) && options.length === 0) return 'reader';
+    if (/完形/.test(stem) && options.length === 0) return 'fill';
     return 'single';
   }
 
@@ -276,6 +371,10 @@ CXAI.Scraper = (function () {
     if (els.length === 0) els = Array.from(root.querySelectorAll('.answerBg, .textDIV, .eidtDiv, .Cy_ulTop li'));
     els = els.filter((el) => {
       if (!el) return false;
+      // 表单控件本身永远不是"选项"：简答题的 <textarea class="eidtDiv"> 与 .eidtDiv 同名，
+      // 不过滤的话 1 道简答会被读成"1 个选项的单选题"，答案就去点输入框了（2026-11-18 实测）。
+      const tag = String(el.tagName || '').toUpperCase();
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT') return false;
       if (el.closest('.mark_answer')) return false; // 答案解析区
       // 富文本编辑器（填空/简答）的容器也叫 .textDIV，里面是工具栏 + iframe。
       // 不排除的话它会被当成一个"选项"，读数变成 "A:段落格式 字体 字号" 这种垃圾。
@@ -394,6 +493,56 @@ CXAI.Scraper = (function () {
     return urls;
   }
 
+  /**
+   * 小题组（完型填空 / 阅读理解 / 材料题）的各小题选项。
+   * 页面结构：每个小题一组 div.hoverDiv，里面 .addChoice[qid][data]；
+   * 点它 = 页面自己的 addChoice(this) → 把字母写进 #answer{qid}。
+   * 这里按 qid 分组，组顺序即页面小题顺序（2026-11-18 真机实测两类页面同构）。
+   */
+  function readGroupBlanks(root) {
+    let els = [];
+    try {
+      els = Array.from(root.querySelectorAll('.addChoice[qid]'));
+    } catch (e) {
+      return [];
+    }
+    if (!els.length) return [];
+    const qids = [];
+    els.forEach(function (el) {
+      const qid = String(el.getAttribute('qid') || '');
+      if (qid && qids.indexOf(qid) < 0) qids.push(qid);
+    });
+    return qids
+      .map(function (qid) {
+        const opts = els
+          .filter(function (el) {
+            return String(el.getAttribute('qid') || '') === qid;
+          })
+          .map(function (el, k) {
+            const data = String(el.getAttribute('data') || '').trim();
+            const holder = el.closest ? el.closest('.hoverDiv') : null;
+            return {
+              key: (data || String.fromCharCode(65 + k)).toUpperCase(),
+              data: data,
+              text: String(el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(),
+              // 关键：onclick="addChoice(this)" 挂在 .addChoice 自己身上（不是外层 .hoverDiv），
+              // 点外层不会触发页面逻辑 —— 2026-11-18 实测 #answer{qid} 一直是空。
+              el: el,
+              holder: holder,
+              add: el
+            };
+          });
+        let answerEl = null;
+        try {
+          answerEl = root.querySelector('#answer' + qid);
+        } catch (e) {}
+        return { qid: qid, options: opts, answerEl: answerEl };
+      })
+      .filter(function (b) {
+        return b.options.length > 0;
+      });
+  }
+
   function parseOne(root, index, pageKind) {
     const typeFromInput = readTypeInput(root, pageKind);
     const typeCode = readTypeRaw(root);
@@ -401,6 +550,9 @@ CXAI.Scraper = (function () {
     const optionEls = readOptionElements(root);
     const stemRaw = readStem(root);
     const stem = cleanStem(stemRaw);
+    // 输入框先抓：题型码可能缺失/错乱，但"页面上有没有可写的位置"是客观事实，
+    // 它决定这题能不能自动写（全题型兜底的第一手证据）。
+    const rawInputs = readTextInputs(root);
     // 附件题：题干被清理后就空了（只剩题型标签），题目在附件里。
     // 这里必须给个占位题干，否则 collect() 会把整题当空容器丢掉（只保留"有题干或有选项"的题）。
     const stemFinal = stem || (attachments.length ? '【附件材料】' + (attachments[0].filename || '附件') : '');
@@ -416,12 +568,14 @@ CXAI.Scraper = (function () {
       };
     });
 
+    const shell0 = detectShell(root, options, rawInputs, attachments);
     let type = typeFromInput;
-    if (!type || type === 'unknown') type = guessType(stem, options);
-    // 选择题但无法匹配选项 -> 视为填空
+    if (!type || type === 'unknown') type = guessType(stem, options, shell0);
+    // 选择题但无法匹配选项 -> 视为填空/文本题（别把"抓不到选项"当成"这题不该答"）
     if ((type === 'single' || type === 'multiple' || type === 'judgement') && options.length === 0) {
-      type = 'completion';
+      type = shell0 === 'group' ? 'reader' : 'completion';
     }
+    const shell = detectShell(root, options, rawInputs, attachments);
 
     const optEls = options.map((o) => o.el);
     options.forEach((o) => {
@@ -433,12 +587,17 @@ CXAI.Scraper = (function () {
       key: CXAI.U.normText(stemFinal).slice(0, 120) || 'q' + index,
       qid: qidOf(root),
       type,
-      typeLabel: TYPE_LABEL_BY_CODE[typeCode] || TYPE_LABEL[type] || '未知题型',
+      typeLabel: labelOf(type, typeCode),
       typeCode: typeCode,
+      shell: shell,
+      shellLabel: SHELL_LABEL[shell] || shell,
+      // 小题组的各小题选项（完型 6 空 / 阅读 3 小题这种），非小题组一律空数组
+      group: shell === 'group' ? readGroupBlanks(root) : [],
+      media: readMedia(root),
       stem: stemFinal,
       stemRaw: String(stemRaw || '').replace(/\s+/g, ' ').trim(),
       options,
-      inputs: type === 'completion' ? readTextInputs(root) : [],
+      inputs: shell === 'choice' ? [] : rawInputs,
       images: readImages(root),
       attachments: attachments,
       score: extractScore(root),
@@ -823,8 +982,11 @@ CXAI.Scraper = (function () {
         return { key: String.fromCharCode(65 + k), text: cleanOption(raw, k), raw, el, answered: false };
       });
       const typeAttr = root.querySelector('[answertype]');
+      const rawInputs = readTextInputs(root);
+      const shell0 = detectShell(root, options, rawInputs, []);
       let type = typeAttr ? typeFromValue(typeAttr.getAttribute('answertype') || typeAttr.value) : null;
-      if (!type || type === 'unknown') type = guessType(stem, options);
+      if (!type || type === 'unknown') type = guessType(stem, options, shell0);
+      const shell = detectShell(root, options, rawInputs, []);
       const optEls = options.map((o) => o.el);
       options.forEach((o) => {
         o.answered = isOptionAnswered(o.el, type, optEls);
@@ -834,11 +996,14 @@ CXAI.Scraper = (function () {
         key: CXAI.U.normText(stem).slice(0, 120) || 'q' + i,
         qid: qidOf(root),
         type,
-        typeLabel: TYPE_LABEL[type] || '未知题型',
+        typeLabel: labelOf(type, typeCodeFromValue(typeAttr ? typeAttr.getAttribute('answertype') || typeAttr.value : null)),
+        shell: shell,
+        shellLabel: SHELL_LABEL[shell] || shell,
+        media: readMedia(root),
         stem,
         stemRaw: stem,
         options,
-        inputs: type === 'completion' ? readTextInputs(root) : [],
+        inputs: shell === 'choice' ? [] : rawInputs,
         images: readImages(root),
         score: null,
         root,
@@ -976,6 +1141,10 @@ CXAI.Scraper = (function () {
     selectedKeys,
     pickSame,
     TYPE_LABEL,
+    SHELL_LABEL,
+    detectShell,
+    readMedia,
+    labelOf,
     // v1.5.0
     optionScope,
     isOptionAnswered,

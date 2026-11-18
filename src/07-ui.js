@@ -7,7 +7,7 @@ CXAI.UI = (function () {
   // Cloudflare Pages 会把 /settings.html 308 跳到 /settings，这里直接用规范路径，少一跳
   const DEFAULT_SETTINGS_URL = 'https://cx-exam-ai.pages.dev/settings';
   let root = null;
-  let state = { running: false, paused: false, needSetup: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single' };
+  let state = { running: false, paused: false, needSetup: false, total: 0, done: 0, answered: 0, todo: 0, failed: 0, current: 0, pageKind: '-', providers: 0, qlist: [], pending: null, doneAll: false, mode: 'single', sync: { ok: null, busy: false, msg: '', at: 0, models: 0 } };
 
   const CSS = `
 :host { all: initial; }
@@ -67,9 +67,10 @@ CXAI.UI = (function () {
   border-radius:7px; transition:background .15s, color .15s; user-select:none; }
 .hd .x:hover { color:#2563eb; background:#eef4ff; }
 .hd .x.close:hover { color:#dc2626; background:#fdeeee; }
-.stat { display:grid; grid-template-columns:repeat(4,1fr); gap:1px; background:#e8ebf1; }
+.stat { display:grid; grid-template-columns:repeat(5,1fr); gap:1px; background:#e8ebf1; }
 .stat div { background:#fff; padding:7px 6px; text-align:center; }
 .stat b { display:block; font-size:15px; color:#2563eb; font-weight:700; }
+.stat div.bad b { color:#dc2626; }
 .stat span { font-size:11px; color:#8a93a3; }
 .bar { display:flex; gap:5px; padding:8px 10px; border-bottom:1px solid #e8ebf1; }
 button.b { flex:1; padding:6px 0; border-radius:7px; border:1px solid #dde2ea; background:#fff; color:#374151;
@@ -146,6 +147,60 @@ button.b:disabled { opacity:.45; cursor:not-allowed; box-shadow:none; }
 .ft .lg-toggle { margin-left:auto; cursor:pointer; color:#8a93a3; padding:1px 5px; border-radius:4px; }
 .ft .lg-toggle:hover { color:#2563eb; background:#eef4ff; }
 .ft .ftstate { margin-left:0; }
+
+/* 同步码气泡：贴着悬浮球，只有一个输入框 + 一个按钮 */
+.syncpop { position:absolute; right:0; bottom:42px; width:268px; background:#fff; border:1px solid #e5e8ee;
+  border-radius:11px; box-shadow:0 12px 32px rgba(16,24,40,.16); padding:9px 10px; display:none; z-index:4; }
+.syncpop.show { display:block; animation: cxin .16s ease-out; }
+.syncpop .sh { display:flex; align-items:center; gap:6px; font-size:11px; color:#6b7280; margin-bottom:6px; }
+.syncpop .sh b { color:#111827; font-size:12px; font-weight:600; }
+.syncpop .sh .x { margin-left:auto; cursor:pointer; color:#9aa3b2; padding:0 3px; line-height:1; }
+.syncpop .sh .x:hover { color:#2563eb; }
+.syncpop .srow { display:flex; gap:6px; }
+.syncpop input { flex:1; min-width:0; border:1px solid #dfe3ea; border-radius:7px; padding:6px 8px;
+  font:11px/1.4 ui-monospace,Menlo,monospace; outline:none; color:#111827; background:#fff; transition:.15s; }
+.syncpop input:hover { border-color:#c8d2e0; }
+.syncpop input:focus { border-color:#2563eb; box-shadow:0 0 0 3px rgba(37,99,235,.12); }
+.syncpop button { flex:none; border:none; border-radius:7px; padding:6px 12px; font-size:11.5px; font-weight:600;
+  color:#fff; background:linear-gradient(135deg,#3b82f6,#6366f1); cursor:pointer; transition:.15s;
+  box-shadow:0 2px 8px rgba(59,130,246,.22); }
+.syncpop button:hover { filter:brightness(1.06); }
+.syncpop button:disabled { opacity:.65; cursor:default; box-shadow:none; }
+.syncpop .hint { margin-top:6px; font-size:10.5px; color:#9aa3b2; line-height:1.55; word-break:break-word; }
+.syncpop.done { border-color:#bfe6cd; background:#f7fdf9; }
+.syncpop.done .hint { color:#15803d; font-weight:600; }
+.syncpop.fail { border-color:#f3c9c9; background:#fff8f8; animation: cxshake .36s ease-in-out; }
+.syncpop.fail .hint { color:#b91c1c; }
+.syncpop .okmark { display:none; }
+.syncpop.done .okmark { display:inline; color:#16a34a; font-weight:700; }
+
+@keyframes cxin { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+@keyframes cxshake { 0%,100%{transform:translateX(0)} 20%{transform:translateX(-5px)} 40%{transform:translateX(5px)}
+  60%{transform:translateX(-3px)} 80%{transform:translateX(3px)} }
+@keyframes cxring { 0% { opacity:.9; transform:scale(.62); } 100% { opacity:0; transform:scale(2.15); } }
+@keyframes cxpop { 0%{transform:scale(1)} 35%{transform:scale(1.16)} 100%{transform:scale(1)} }
+/* 同步结果的扩散圈：绿=成功，红=失败，肉眼一眼能分 */
+.fx { position:absolute; right:0; bottom:0; width:34px; height:34px; border-radius:50%; pointer-events:none; display:none; }
+.fx.show { display:block; }
+.fx.ok { border:2px solid #16a34a; animation: cxring .8s ease-out 2; }
+.fx.err { border:2px solid #dc2626; animation: cxring .66s ease-out 2; }
+.ball.synced { animation: cxpop .52s ease-out; }
+.ball.sync-err::before { content:''; position:absolute; left:2px; top:2px; width:7px; height:7px; border-radius:50%;
+  background:#dc2626; box-shadow:0 0 0 2px rgba(255,255,255,.92); }
+/* 面板顶部：同步失败原因（双击小球打开的面板里展示） */
+.syncfail { display:none; gap:6px; padding:8px 10px; background:#fff7f7; border-bottom:1px solid #f3c9c9;
+  font-size:11px; color:#b91c1c; line-height:1.6; }
+.syncfail.show { display:flex; }
+.syncfail .t { flex:1; min-width:0; word-break:break-word; }
+.syncfail .x { flex:none; cursor:pointer; color:#c98b8b; }
+.syncfail .x:hover { color:#dc2626; }
+.syncfail b { font-weight:600; }
+
+/* 题号格子里的答案（数字下方一行小字，一眼看到每题答了什么） */
+.qcard { flex-direction:column; gap:0; height:38px; }
+.qcard b { font-size:12px; line-height:1.15; font-weight:700; }
+.qcard i { font-style:normal; font-size:9px; line-height:1.1; max-width:100%; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; opacity:.9; }
 
 /* 设置层 */
 .mask { position:fixed; inset:0; background:rgba(17,24,39,.32); backdrop-filter: blur(1.5px); display:none; z-index:10; }
@@ -258,16 +313,17 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
       <div class="x cfg" data-act="syncmask" title="云同步 · 输入同步码">⇅</div>
       <div class="x close" data-act="hide" title="收起面板">✕</div>
     </div>
+    <div class="syncfail" id="syncfail"><span class="t"></span><span class="x" data-act="syncfail-close" title="关闭">✕</span></div>
     <div class="stat">
       <div><b id="s-total">0</b><span>题目</span></div>
       <div><b id="s-done">0</b><span>已答</span></div>
+      <div><b id="s-fail">0</b><span>失败</span></div>
       <div><b id="s-todo">0</b><span>未答</span></div>
       <div><b id="s-model">0</b><span>模型</span></div>
     </div>
     <div class="setupbar" id="setupbar">
-      <span>本域还没有模型配置：粘同步码拉取，或去设置中心配</span>
-      <input id="sync-code" placeholder="同步码 abc123.xyz…" spellcheck="false" autocomplete="off">
-      <button class="b" data-act="sync-pull">拉取</button>
+      <span>本域还没有模型配置：点「输入同步码」粘贴一次，或去设置中心配</span>
+      <button class="b" data-act="syncmask">输入同步码</button>
       <button class="b" data-act="open-settings">设置中心</button>
     </div>
     <div class="bar">
@@ -280,24 +336,16 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     <div class="qdetail" id="qdetail"></div>
     <div class="logs" id="logs"></div>
     <div class="ft">Ctrl+Shift+X 呼出/隐藏<span class="lg-toggle" data-act="logs" title="展开/收起日志">日志</span><span id="s-state" class="ftstate">待机</span></div>
-    <div class="mask" id="syncmask">
-      <div class="dlg" style="max-width:360px">
-        <div class="dh">云同步<div class="x" data-act="syncmask-close">✕</div></div>
-        <div class="dbody" style="display:block;padding:14px 16px">
-          <p style="margin:0 0 10px;font-size:11.5px;line-height:1.7;color:#6b7280">
-            脚本里不再放设置面板。模型 / 判题 / 读图都在<b>网页版设置中心</b>配，这里只需要粘一次同步码。
-          </p>
-          <input id="sync-code2" placeholder="同步码 abc123.xyz…" spellcheck="false" autocomplete="off"
-            style="width:100%;padding:6px 9px;border:1px solid #dfe3ea;border-radius:8px;font:11px/1.5 ui-monospace,Menlo,monospace;outline:none">
-          <div class="row2" style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            <button class="b" data-act="sync-pull" style="margin-top:0">拉取配置</button>
-            <button class="b" data-act="open-settings" style="margin-top:0">打开设置中心</button>
-          </div>
-          <div class="help" id="syncmask-hint" style="margin-top:8px;font-size:10.5px;line-height:1.6;color:#8a93a3"></div>
-        </div>
-      </div>
-    </div>
   </div>
+  <div class="syncpop" id="syncpop">
+    <div class="sh"><b>云同步</b><span id="syncpop-state"></span><span class="x" data-act="syncmask-close" title="关闭">✕</span></div>
+    <div class="srow">
+      <input id="sync-code" placeholder="同步码 abc123.xyz…" spellcheck="false" autocomplete="off">
+      <button id="sync-confirm" data-act="sync-pull">同步</button>
+    </div>
+    <div class="hint" id="syncpop-hint">在设置中心点「生成同步码并上传」，把这串码粘进来；以后每次进考试页都会自动同步</div>
+  </div>
+  <div class="fx" id="fx"></div>
   <div class="gmode" id="gmode">
     <div class="g" data-dir="left">← 左滑：答一题</div>
     <div class="g" data-dir="up">↑ 上滑：自动连答</div>
@@ -367,29 +415,14 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         case 'syncmask-close':
           closeSync();
           break;
-        case 'sync-pull': {
-          // 两个输入框都可能用：提示条里的 #sync-code（无配置时）和小窗里的 #sync-code2。
-          // 取"非空的那个"，否则用户在小窗里粘了码、提示条还空着就会读不到。
-          const a = $('#sync-code2');
-          const b = $('#sync-code');
-          const code = String((a && a.value) || (b && b.value) || '').trim();
-          if (!code) {
-            toast('先粘同步码');
-            break;
-          }
-          CXAI.Sync.pullInto(code)
-            .then(function (obj) {
-              const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
-              update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
-              toast('已同步 ' + n + ' 个模型');
-              CXAI.Log.ok('云同步完成 · 模型 ' + n + ' 个');
-            })
-            .catch(function (e) {
-              toast('拉取失败');
-              CXAI.Log.error('云同步失败：' + (e && e.message ? e.message : e));
-            });
+        case 'syncfail-close': {
+          const bar = $('#syncfail');
+          if (bar) bar.classList.remove('show');
           break;
         }
+        case 'sync-pull':
+          runSync($('#sync-code') ? $('#sync-code').value : '');
+          break;
         case 'run':
           CXAI.Engine.start();
           break;
@@ -493,6 +526,25 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     return state.mode === 'auto' ? 'auto' : 'single';
   }
 
+  /**
+   * 悬浮球单击到底该干什么（2026-11-18 用户定义的状态机）：
+   *   ① 本地没有同步码            → 'input'：单击打开同步码输入框
+   *   ② 有同步码但没成功过 / 上次失败 → 'input'：同样让人重新填
+   *   ③ 有同步码且同步成功        → 'answer'：单击开始答题
+   * 判定全部读持久化的 Sync.state()，刷新页面后语义不变。
+   */
+  function syncGate() {
+    try {
+      const code = CXAI.Sync && CXAI.Sync.savedCode ? CXAI.Sync.savedCode() : '';
+      if (!code) return 'input';
+      const st = CXAI.Sync && CXAI.Sync.state ? CXAI.Sync.state() : null;
+      if (!st || st.ok !== true) return 'input';
+      return 'answer';
+    } catch (e) {
+      return 'input';
+    }
+  }
+
   /** 切换小球点击模式：single=点一下答一题 / auto=点一下跑完整卷 */
   function setMode(m, silent) {
     state.mode = m === 'auto' ? 'auto' : 'single';
@@ -513,19 +565,41 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     }
     ballClickTimer = setTimeout(function () {
       ballClickTimer = null;
+      // 单击语义按同步状态走：没码 / 没成功过 → 输同步码；已同步成功 → 开始答题
+      if (syncGate() === 'input') {
+        try {
+          const hasCode = !!(CXAI.Sync && CXAI.Sync.savedCode && CXAI.Sync.savedCode());
+          toast(hasCode ? '上次没同步成功，先重新填一次同步码' : '先在下面粘贴同步码');
+          openSync();
+        } catch (e) {}
+        return;
+      }
+      // 单击必须立刻有反馈：以前是静默执行，答题失败或没有可答题目时，
+      // 用户看到的就是"点了根本没有任何反应"（2026-11-18 实测，被误判成同步码入口坏了）。
       try {
+        const running = !!(CXAI.Engine.st && CXAI.Engine.st.running);
         if (modeNow() === 'auto') {
-          if (CXAI.Engine.st.running) CXAI.Engine.togglePause();
-          else CXAI.Engine.start();
+          if (running) {
+            CXAI.Engine.togglePause();
+            toast('已暂停 · 再点一下继续');
+          } else {
+            toast('自动连答启动…（双击小球开面板）');
+            const p = CXAI.Engine.start();
+            if (p && p.catch) p.catch((e) => toast('执行失败：' + ((e && e.message) || e)));
+          }
         } else {
-          if (CXAI.Engine.st.running) {
+          if (running) {
             CXAI.Engine.stop();
             toast('已停止自动连答');
             return;
           }
-          CXAI.Engine.answerNext();
+          toast('答一题…（双击小球开面板 · ⇅ 填同步码）');
+          const p = CXAI.Engine.answerNext();
+          if (p && p.catch) p.catch((e) => toast('执行失败：' + ((e && e.message) || e)));
         }
-      } catch (e) {}
+      } catch (e) {
+        toast('执行失败：' + ((e && e.message) || e));
+      }
     }, 260);
   }
 
@@ -700,14 +774,19 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     };
     const rows = rowsForRender();
     const answered = rows.filter((r) => r.status === 'ok' || r.status === 'skip').length;
-    const failed = rows.filter((r) => r.status === 'fail').length;
+    // 失败 / 需人工也算"处理过"：把它们只藏在底部角标里，用户看到的就是
+    // "明明走了 5 题、面板只说答了 2 题"（2026-11-18 实测反馈）。这里单独给一个「失败」格子。
+    const failed = rows.filter((r) => r.status === 'fail' || r.status === 'manual').length;
     const total = Math.max(state.total || 0, rows.length);
     state.answered = answered;
     state.failed = failed;
-    state.todo = Math.max(0, total - answered);
+    state.todo = Math.max(0, total - answered - failed);
     set('s-total', total);
     set('s-done', answered);
+    set('s-fail', failed);
     set('s-todo', state.todo);
+    const failEl = $('#s-fail');
+    if (failEl && failEl.parentNode) failEl.parentNode.classList.toggle('bad', failed > 0);
     set('s-model', state.providers);
     set('s-page', state.pageKind);
     set('s-state', (state.running ? (state.paused ? '已暂停' : '运行中') : '待机') +
@@ -719,13 +798,32 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     const ball = $('#ball');
     if (ball) ball.classList.toggle('busy', state.running && !state.paused);
     if (ball) ball.classList.toggle('needs-setup', !!state.needSetup && !state.running);
+    // 同步失败：小球左上角红点（和"没配置"的橙点区分开），面板顶部保留原因
+    const synced = state.sync || {};
+    const failMs = Math.max(0, Number(CXAI.Cfg.get('ui.syncFailMs', 180000)) || 0);
+    const failFresh = synced.ok === false && (!failMs || Date.now() - (Number(synced.at) || 0) < failMs);
+    if (ball) ball.classList.toggle('sync-err', !!failFresh && synced.ok !== true);
+    if (synced.ok === true) {
+      const sbar = $('#syncfail');
+      if (sbar) sbar.classList.remove('show');
+    }
     const setupBar = $('#setupbar');
     if (setupBar) setupBar.classList.toggle('show', !!state.needSetup);
     const label = $('#balllabel');
+    const gate = syncGate();
     if (label) {
       if (state.doneAll && !state.running) label.textContent = 'OK';
       else if (state.running) label.textContent = String(state.answered || 0);
+      else if (gate === 'input') label.textContent = '⇅'; // 球上直接提示"点我是填同步码"
       else label.textContent = 'CX';
+    }
+    if (ball) {
+      try {
+        ball.title =
+          gate === 'input'
+            ? '单击：填同步码 · 双击：打开面板'
+            : '单击：' + (state.mode === 'auto' ? '自动连答' : '答一题') + ' · 双击：打开面板';
+      } catch (e) {}
     }
     if (ball) {
       ball.classList.toggle('running', !!state.running && !state.doneAll);
@@ -786,7 +884,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     return rows;
   }
 
-  const STATUS_WORD = { ok: '已答', skip: '已答·原有', fail: '失败', wait: '作答中', todo: '未答' };
+  const STATUS_WORD = { ok: '已答', skip: '已答·原有', fail: '失败', wait: '作答中', manual: '需人工', todo: '未答' };
 
   function statusOf(it) {
     const n = Number(it.index) || 0;
@@ -820,9 +918,15 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         const cls = clsOf(st);
         const isCur = n && n === cur;
         const isSel = n && n === sel;
-        const tip = [`#${n}`, STATUS_WORD[st] || '', it.typeLabel || '', it.stem || ''].filter(Boolean).join(' · ');
+        const tip = [`#${n}`, STATUS_WORD[st] || '', it.typeLabel || '', it.answer || it.actual ? '答：' + (it.answer || it.actual) : '', it.stem || '']
+          .filter(Boolean)
+          .join(' · ');
+        // 数字下面再挂一行答案：整卷十几题时不用逐个点开就能看出哪题答了什么
+        const ansRaw = String(it.answer || it.actual || '').replace(/\s+/g, '');
+        const ansTxt = ansRaw ? (ansRaw.length > 4 ? ansRaw.slice(0, 4) + '…' : ansRaw) : '';
         return '<div class="qcard ' + cls + (isCur ? ' cur' : '') + (isSel ? ' sel' : '') +
-          '" data-act="pick" data-i="' + esc(n) + '" title="' + esc(tip) + '">' + esc(n || '?') + '</div>';
+          '" data-act="pick" data-i="' + esc(n) + '" title="' + esc(tip) + '">' +
+          '<b>' + esc(n || '?') + '</b>' + (ansTxt ? '<i>' + esc(ansTxt) + '</i>' : '') + '</div>';
       })
       .join('');
     // 选中/当前格滚进视野
@@ -894,11 +998,23 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           ? (same ? '<span class="chip ok">与 AI 一致</span>' : '<span class="chip bad">与 AI 不一致</span>')
           : '<span class="chip">你手动作答 · AI 未参与</span>') + '</div>');
     }
+    // 判定的"人话解释"：依据 / 各模型投了什么 / 降级原因（全题型兜底时尤其重要）
+    if (it.reason) meta.push('<div class="kv"><span class="k">依据</span><span class="v muted">' + esc(CXAI.U.truncate(String(it.reason), 160)) + '</span></div>');
+    if (it.votes && it.votes.length) {
+      const vs = it.votes.slice(0, 5).map(function (v) {
+        return esc(CXAI.U.truncate(v.who || '模型', 12) + ' ' + (v.answer || '?') + ' ' + (v.confidence != null ? Math.round(v.confidence * 100) + '%' : ''));
+      });
+      meta.push('<div class="kv"><span class="k">模型票</span><span class="v muted">' + vs.join(' · ') + (it.votes.length > 5 ? ' …' : '') + '</span></div>');
+    }
+    if (it.errors && it.errors.length) {
+      meta.push('<div class="kv"><span class="k">降级</span><span class="v muted">' + esc(CXAI.U.truncate(it.errors.slice(-1)[0], 160)) + '</span></div>');
+    }
     if (!meta.length) meta.push('<div class="kv"><span class="v muted">这题还没作答</span></div>');
     box.innerHTML =
       '<div class="qd-hd">' +
       '<span class="qn">#' + esc(it.index) + '</span>' +
       '<span class="tag">' + esc(it.typeLabel || '') + '</span>' +
+      (it.shellLabel ? '<span class="tag">' + esc(it.shellLabel) + '</span>' : '') +
       '<span class="st ' + clsOf(st) + '">' + (STATUS_WORD[st] || '未答') + '</span>' +
       '<span class="qd-jump" data-act="go" data-i="' + esc(it.index) + '">跳到该题</span>' +
       '</div>' +
@@ -995,29 +1111,218 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   }
 
   /** 新标签打开设置中心：同一份 GM 存储，改完回考试页直接生效 */
-  /** 同步码小窗：脚本里不再放设置面板，配置全在网页版设置中心 */
-  function openSync() {
-    const m = $('#syncmask');
-    if (m) m.classList.add('show');
-    const inp = $('#sync-code2');
-    if (inp) {
-      inp.value = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
+
+  /* ---------------- 云同步：小球旁的气泡 + 成功/失败特效 ----------------
+   * 2026-11-18 重做：
+   *   · 输入位置就在 CX 悬浮球上方（一个输入框 + 一个「同步」按钮，别的一律不要）；
+   *   · 成功：绿圈扩散 + 小球弹一下 + 气泡变绿打勾，1.6s 后自动收起；
+   *   · 失败：气泡红框抖动 + 红圈扩散，并把**具体原因**写到双击小球打开的面板顶部，
+   *     同时自动把面板打开（失败必须让人看见，不能只留一行日志）。
+   */
+
+  function popEl() {
+    return $('#syncpop');
+  }
+
+  function fx(kind) {
+    const el = $('#fx');
+    if (!el) return;
+    el.className = 'fx';
+    // 重新触发动画：先摘类、强制回流、再加类
+    void el.offsetWidth;
+    el.classList.add('show', kind === 'ok' ? 'ok' : 'err');
+    setTimeout(function () {
       try {
-        inp.focus();
+        el.classList.remove('show', 'ok', 'err');
+      } catch (e) {}
+    }, 1800);
+  }
+
+  function syncHint(text, cls) {
+    const hint = $('#syncpop-hint');
+    if (!hint) return;
+    hint.textContent = text;
+    const pop = popEl();
+    if (!pop) return;
+    pop.classList.remove('done', 'fail');
+    if (cls) pop.classList.add(cls);
+  }
+
+  /** 打开同步气泡（默认挂在悬浮球上方；视口上方不够就翻到下方） */
+  function openSync(opt) {
+    opt = opt || {};
+    const pop = popEl();
+    if (!pop) return;
+    const input = $('#sync-code');
+    const code = CXAI.Sync && CXAI.Sync.savedCode ? CXAI.Sync.savedCode() : '';
+    if (input) {
+      input.value = code;
+      try {
+        input.focus();
+        input.select();
       } catch (e) {}
     }
-    const hint = $('#syncmask-hint');
-    if (hint) {
-      const code = (CXAI.Sync && CXAI.Sync.savedCode) ? CXAI.Sync.savedCode() : '';
-      hint.textContent = code
-        ? '当前已存同步码 · 改配置后会自动拉取；点「拉取配置」可手动刷新一次'
-        : '还没有同步码：去设置中心配好模型，点右上角「生成同步码并上传」，把这串码粘进来';
+    const st = state.sync || {};
+    if (st.busy) syncHint('正在同步…', '');
+    else if (code) syncHint('已存同步码 ' + code.slice(0, 8) + '… · 改完配置点「同步」立即拉取；进考试页也会自动同步', '');
+    else syncHint('在设置中心点「生成同步码并上传」，把这串码粘进来；以后每次进考试页都会自动同步', '');
+
+    pop.classList.add('show');
+    // 位置：球在屏幕上半部就往下开，否则往上开
+    try {
+      const wrap = root.querySelector('.wrap');
+      const r = wrap ? wrap.getBoundingClientRect() : null;
+      if (r && r.top < 250) {
+        pop.style.bottom = 'auto';
+        pop.style.top = '42px';
+      } else {
+        pop.style.top = 'auto';
+        pop.style.bottom = '42px';
+      }
+    } catch (e) {}
+    if (opt.auto) {
+      // 新用户自动弹出：给一次轻微提示，不打断输入
+      try {
+        toast('粘一次同步码即可开始');
+      } catch (e) {}
     }
+    render();
   }
 
   function closeSync() {
-    const m = $('#syncmask');
-    if (m) m.classList.remove('show');
+    const pop = popEl();
+    if (!pop) return;
+    pop.classList.remove('show', 'done', 'fail');
+  }
+
+  /** 同步成功：绿圈 + 弹一下 + 气泡打勾，然后自动收起 */
+  function syncOk(r) {
+    const models = Number((r && r.models) || 0);
+    const msg = '✓ 同步成功 · 模型 ' + models + ' 个';
+    state.sync = { ok: true, busy: false, msg: msg, at: Date.now(), models: models, fx: 'ok' };
+    syncHint(msg + '（配置已写入本域）', 'done');
+    const btn = $('#sync-confirm');
+    if (btn) {
+      btn.textContent = '已同步';
+      btn.disabled = true;
+    }
+    const bar = $('#syncfail');
+    if (bar) bar.classList.remove('show');
+    const ball = $('#ball');
+    if (ball) {
+      ball.classList.remove('sync-err');
+      ball.classList.add('synced');
+      setTimeout(function () {
+        try {
+          ball.classList.remove('synced');
+        } catch (e) {}
+      }, 900);
+    }
+    fx('ok');
+    toast(msg);
+    update({ needSetup: false, providers: CXAI.Cfg.activeProviders().length });
+    CXAI.Log.ok('云同步完成 · 模型 ' + models + ' 个');
+    setTimeout(function () {
+      try {
+        closeSync();
+        const b2 = $('#sync-confirm');
+        if (b2) {
+          b2.textContent = '同步';
+          b2.disabled = false;
+        }
+      } catch (e) {}
+    }, 1600);
+    render();
+  }
+
+  /**
+   * 同步失败：红圈 + 气泡抖动，并把原因写进面板顶部（双击小球打开的那个面板）。
+   * @param {{error:string, at?:number, code?:string}} r
+   */
+  function syncFail(r) {
+    const reason = String((r && (r.error || r.message)) || '未知原因');
+    state.sync = { ok: false, busy: false, msg: reason, at: Date.now(), models: 0, fx: 'err' };
+    syncHint('✗ 同步失败：' + reason, 'fail');
+    const btn = $('#sync-confirm');
+    if (btn) {
+      btn.textContent = '重试';
+      btn.disabled = false;
+    }
+    fx('err');
+    toast('同步失败');
+    // 面板顶部保留失败原因（含时间），并自动把面板打开 —— 失败必须让人一眼看到
+    const bar = $('#syncfail');
+    if (bar) {
+      const t = bar.querySelector('.t');
+      if (t) {
+        const d = new Date();
+        const p = (n) => String(n).padStart(2, '0');
+        t.innerHTML =
+          '<b>同步失败</b> · ' +
+          p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()) +
+          '<br>' + CXAI.U.escapeHtml(reason) +
+          '<br><span style="color:#a16207">检查：同步码是否完整、设置中心是否点过「生成同步码并上传」、网络是否可达 cx-exam-ai.pages.dev</span>';
+      }
+      bar.classList.add('show');
+    }
+    try {
+      togglePanel(true);
+    } catch (e) {}
+    CXAI.Log.error('云同步失败：' + reason);
+    setTimeout(function () {
+      try {
+        closeSync();
+      } catch (e) {}
+    }, 2400);
+    render();
+  }
+
+  /** 从气泡里读同步码并同步 */
+  function runSync(raw) {
+    const code = String(raw == null ? '' : raw).trim();
+    const btn = $('#sync-confirm');
+    const input = $('#sync-code');
+    if (!code) {
+      syncHint('先把同步码粘进来（形如 abc12345.xyz…）', 'fail');
+      if (input) {
+        try {
+          input.focus();
+        } catch (e) {}
+      }
+      return Promise.resolve(false);
+    }
+    if (!/^[A-Za-z0-9_-]{6,48}\.[A-Za-z0-9_-]{16,60}$/.test(code)) {
+      syncFail({ error: '同步码格式不对（应该形如 abc12345.xyz…，中间有一个点）' });
+      return Promise.resolve(false);
+    }
+    state.sync = { ok: null, busy: true, msg: '同步中…', at: Date.now() };
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '同步中…';
+    }
+    syncHint('正在从云端拉取并解密配置…', '');
+    return CXAI.Sync.pullInto(code)
+      .then(function (obj) {
+        const n = (obj && obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
+        syncOk({ models: n, at: Date.now() });
+        return true;
+      })
+      .catch(function (e) {
+        const msg = e && e.message ? e.message : String(e);
+        try {
+          CXAI.Sync.recordState({ ok: false, at: Date.now(), error: msg });
+        } catch (e2) {}
+        syncFail({ error: msg });
+        return false;
+      })
+      .then(function (ok) {
+        const b = $('#sync-confirm');
+        if (b && !b.textContent.includes('已')) {
+          b.disabled = false;
+          b.textContent = ok ? '已同步' : '重试';
+        }
+        return ok;
+      });
   }
 
   function openSettingsPage() {
@@ -1030,5 +1335,26 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
     CXAI.Log.info('已打开设置中心：' + url);
   }
 
-  return { mount, unmount, update, addQuestionCard, pushQuestion, rowsForRender, renderQGrid, renderQDetail, appendLog, togglePanel, getQList, saveQList, settingsURL, openSettingsPage, openSync, closeSync, state };
+  return {
+    mount,
+    unmount,
+    update,
+    addQuestionCard,
+    pushQuestion,
+    rowsForRender,
+    renderQGrid,
+    renderQDetail,
+    appendLog,
+    togglePanel,
+    getQList,
+    saveQList,
+    settingsURL,
+    openSettingsPage,
+    openSync,
+    closeSync,
+    runSync,
+    syncOk,
+    syncFail,
+    state
+  };
 })();

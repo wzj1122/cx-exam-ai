@@ -154,6 +154,20 @@ CXAI.DEFAULT_CONFIG = {
       retries: 1,
       /** 同一题最多复议轮数 */
       maxRounds: 2
+    },
+    /**
+     * 全题型兜底（2026-11-18）。
+     * 主判定（议会/复核/仲裁）失败时，按这条链继续要答案：
+     *   ① 逐个模型用极简 prompt 重问（stage=rescue）
+     *   ② 本地确定性兜底：题干自带答案 → 首选项（stage=heuristic，低置信度，界面标黄）
+     * 关掉 enabled 就回到旧行为（失败即红）。
+     */
+    fallback: {
+      enabled: true,
+      /** 本地兜底：题干没写答案时，选择题按首个选项给一个"低置信度"答案 */
+      heuristic: true,
+      /** 兜底最多重问几个模型 */
+      tries: 3
     }
   },
   answer: {
@@ -280,7 +294,15 @@ CXAI.DEFAULT_CONFIG = {
     /** 设置中心：高级模式（显示权重/温度/阈值/超时/运行/备份/诊断），默认关 */
     advanced: false,
     /** 设置中心：是否走完过首次向导（false 且一个模型都没有时才显示向导） */
-    onboarded: false
+    onboarded: false,
+    /** 每道题下方显示作答详情（答案/置信度/依据/页面是否一致）——默认关闭：
+     *  2026-11-18 用户看到题下那块卡片后明确表示"我没说过要在页面上显示这个"，
+     *  页面要保持干净，判定详情统一放在面板里。想开的人自己在设置中心打开。 */
+    inlineResult: false,
+    /** 打开 inlineResult 时是否连"依据/票/页面比对"一起显示（默认只显示一行） */
+    inlineResultDetail: false,
+    /** 同步失败原因在面板顶部保留多久（毫秒），0 = 一直留到下次同步 */
+    syncFailMs: 180000
   }
 };
 

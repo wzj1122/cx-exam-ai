@@ -42,6 +42,7 @@ const EXPECT = {
   '02-font.js': ['CXAI.Font'],
   '03-scraper.js': ['CXAI.Scraper'],
   '03b-vision.js': ['CXAI.Vision'],
+  '03d-mark.js': ['CXAI.Mark'],
   '04-ai.js': ['CXAI.AI'],
   '05-apply.js': ['CXAI.Apply'],
   '06-guard.js': ['CXAI.Guard'],

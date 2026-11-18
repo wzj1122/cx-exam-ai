@@ -14,14 +14,32 @@ CXAI.AI = (function () {
     '严格遵守以下输出契约：',
     '1. 只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释性前后缀。',
     '2. JSON 结构固定为：{"answer":"<答案>","confidence":<0到1的小数>,"reason":"<不超过60字的核心依据>"}',
-    '3. answer 字段的写法：',
+    '3. answer 字段按题型写：',
     '   - 单选题：单个选项字母，如 "B"',
     '   - 多选题：选项字母连写、按字母升序，如 "ACD"',
     '   - 判断题：单个选项字母（即使选项文本是"正确/错误""对/错""√/×""True/False"，也用字母）',
-    '   - 填空题 / 简答题 / 论述题：直接写答案内容；多个空之间用 "|||" 分隔，顺序与题目空位一致',
+    '   - 填空题：直接写要填的内容；多个空之间用 "|||" 分隔，顺序与空位一致',
+    '   - 简答/论述/名词解释/计算/案例/材料题：写出完整答案；需要过程时先给步骤再给结论，用 "|||" 分隔多个设问',
+    '   - 分录题：每笔分录一行，"借：…|||贷：…"',
+    '   - 编程题：给完整可运行代码（保留缩进与换行），不要只写思路',
+    '   - 连线/匹配题：按 "左项-右项" 配对，多个配对用 "|||" 分隔，如 "A-3|||B-1"',
+    '   - 排序题：按正确顺序写选项字母连写，如 "CABD"',
+    '   - 阅读理解/完形填空（含多个小题）：按小题顺序作答，"1. …|||2. …"，与小题数一致',
+    '   - 口语/听力题：写出应说的完整句子或要点',
+    '   - 附件材料题：把材料里出现的每一道题按顺序作答，"1. …|||2. …"',
     '4. confidence 必须真实反映把握程度，不要一律给高分。',
     '5. 题干缺字、选项缺失、图片无法辨识时：仍给出最佳猜测，但 confidence 不得高于 0.4，并在 reason 中注明"信息不全"。',
-    '6. 宁可给出一个有依据的判断，也不要输出无法解析的内容。'
+    '6. 无论题型多罕见，都必须给出一个可写进答题框的答案；不要输出"无法作答""需要更多信息"这类空答案。',
+    '7. 宁可给出一个有依据的判断，也不要输出无法解析的内容。'
+  ].join('\n');
+
+  /** 兜底通道用的极简 prompt：模型已经失败过一轮，这里只要一个能落盘的答案 */
+  const SYSTEM_RESCUE = [
+    '你是考试答题兜底专家。前面几个模型都没能给出可用答案，现在只剩你这一次机会。',
+    '要求：',
+    '1. 只输出一个 JSON 对象：{"answer":"<答案>","confidence":<0到1>,"reason":"<不超过40字>"}',
+    '2. answer 必须是可直接抄进答题框的内容；选择题写选项字母（多选连写），文本题写完整答案。',
+    '3. 即使信息不全也要给出最可能的答案，禁止输出空字符串、"无法确定"、"需要更多信息"。'
   ].join('\n');
 
   const SYSTEM_CRITIQUE = [
@@ -61,14 +79,42 @@ CXAI.AI = (function () {
             } catch (e) {}
             if (res.status >= 200 && res.status < 300) resolve(parsed || {});
             else {
-              const msg =
+              let msg =
                 (parsed && parsed.error && (parsed.error.message || parsed.error.code)) ||
                 (res.responseText || '').slice(0, 300) ||
                 'HTTP ' + res.status;
+              // magpie 这类本地网关默认只放行白名单页面，被拒时的原文是英文长句，
+              // 落到日志里没人看得懂 —— 换成可执行的中文动作（2026-11-18 实测 403）。
+              if (/doesn't answer the web page|permission_error/i.test(String(msg))) {
+                const origin = (function () {
+                  try {
+                    return location.origin;
+                  } catch (e) {
+                    return '当前站点';
+                  }
+                })();
+                msg =
+                  '网关拒绝了这个页面 → 在网关设置（magpie：Settings → Network and sharing → Web pages）里加上 ' +
+                  origin +
+                  '，或改用允许跨域的服务商';
+              }
               reject(new Error('HTTP ' + res.status + ' · ' + msg));
             }
           },
-          onerror: () => reject(new Error('网络连接失败（检查 baseURL / 代理）')),
+          onerror: () =>
+            reject(
+              new Error(
+                '网络连接失败（检查 baseURL / 代理）· 本地网关常见原因：没把页面 ' +
+                  (function () {
+                    try {
+                      return location.origin;
+                    } catch (e) {
+                      return '当前站点';
+                    }
+                  })() +
+                  ' 加进网关白名单'
+              )
+            ),
           ontimeout: () => reject(new Error('请求超时'))
         });
         return;
@@ -371,9 +417,42 @@ CXAI.AI = (function () {
       const block = CXAI.Vision.composePromptBlock(vctx.vision);
       if (block) lines.push(block);
     }
+    if (q.shell === 'group') {
+      const blanks = q.group || [];
+      if (blanks.length) {
+        // 完型/阅读理解是"一组小题各带自己的选项"：不把每空的选项列出来，
+        // 模型看到的只有一段正文，只能回"信息不足"（2026-11-18 实测 Q8/Q9 全空）。
+        lines.push(
+          '【小题组各小题的选项】\n' +
+            blanks
+              .map(function (b, i) {
+                return '第' + (i + 1) + '小题：' + (b.options || []).map(function (o) { return o.key + '. ' + o.text; }).join('   ');
+              })
+              .join('\n')
+        );
+        lines.push(
+          '【作答格式】共 ' + blanks.length + ' 小题，按顺序只输出字母，用 "|||" 分隔（例如 A|||C|||B）；' +
+            '写 "1:A 2:C" 这种带题号的写法也接受。不要复述题目，不要漏答任何一小题。'
+        );
+      } else {
+        lines.push(
+          '【小题组】本题是一组小题（阅读理解 / 完形填空 / 材料题）。请按小题顺序逐条作答，' +
+            '不要只答第一问，也不要复述题目；多条答案之间用 "|||" 分隔。'
+        );
+      }
+    }
+    if (q.shell === 'media') {
+      lines.push(
+        '【音视频】本题配有音视频材料（页面只给了播放器，没有文字稿）。请按题干与选项给出最可能的答案，' +
+          'confidence 不高于 0.45，并在 reason 里注明"未听到音频"。'
+      );
+    }
+    if (q.shell === 'manual') {
+      lines.push('【答题框】本题页面没有可写入的答题框，答案会展示给考生手抄；仍要给出完整、可直接抄写的答案。');
+    }
     const ob = optionBlock(q);
     if (ob) lines.push(`【选项】\n${ob}`);
-    else lines.push('【说明】本题为填答题，没有选项，请直接给出要填写的答案。');
+    else lines.push('【说明】本题为填答题（可能有多空），没有选项，请直接给出要填写的答案；多空用 "|||" 分隔。');
     if (hint) lines.push(`【提示】${hint}`);
     lines.push('【输出】只输出 JSON 对象。');
     const userText = lines.join('\n\n');
@@ -447,31 +526,79 @@ CXAI.AI = (function () {
 
   /* ---------------- 答案解析 ---------------- */
 
-  /** 把模型给的原始答案映射为选项 key 数组（选择题）或纯文本（填空题） */
+  /** 这些题型的答案是"一段文本"，不是选项字母 */
+  const TEXT_TYPES = { completion: 1, line: 1, reader: 1, fill: 1, match: 1, oral: 1, listening: 1 };
+
+  function isTextType(q) {
+    if (!q) return false;
+    if (TEXT_TYPES[q.type]) return true;
+    return !(q.options && q.options.length);
+  }
+
+  /** 全角字母/数字/标点 → 半角（模型偶尔吐全角"Ｂ"） */
+  function normWidth(t) {
+    return String(t == null ? '' : t)
+      .replace(/[\uFF01-\uFF5E]/g, function (c) {
+        return String.fromCharCode(c.charCodeAt(0) - 0xfee0);
+      })
+      .replace(/\u3000/g, ' ');
+  }
+
+  /** 去掉代码块围栏、外层引号、"答案："前缀 —— 模型不守契约时的第一道清洗 */
+  function cleanAnswerText(raw) {
+    let t = String(raw == null ? '' : raw).trim();
+    t = t.replace(/^```[a-zA-Z]*\s*/, '').replace(/```\s*$/, '').trim();
+    t = t.replace(/^(?:最终答案|正确答案|参考答案|答案|answer)\s*[:：]\s*/i, '').trim();
+    t = t.replace(/^["'“”‘’「」]+|["'“”‘’「」]+$/g, '').trim();
+    return t;
+  }
+
+  function letterRuns(text, keys) {
+    const up = normWidth(text).toUpperCase();
+    const letters = (up.match(/[A-H]/g) || []).filter(function (l) {
+      return keys.indexOf(l) >= 0;
+    });
+    return Array.from(new Set(letters)).sort();
+  }
+
+  /**
+   * 把模型给的原始答案映射为选项 key 数组（选择题）或纯文本（填空题/主观题）。
+   * 2026-11-18：收紧"从整段话里抠 A-H"的规则 —— 旧实现会把
+   * "B 正确，因为 A 和 C 都错" 解析成 ABC；现在只认「整串字母」「答案标记后的字母」
+   * 「短句里的孤立字母」，其余交给选项文本匹配 / 语义映射 / 相似度。
+   */
   function resolveAnswerKeys(answer, q) {
     if (answer == null) return null;
     const raw = String(answer).trim();
     if (!raw) return null;
+    if (isTextType(q)) return { keys: [], text: cleanAnswerText(raw) || raw };
 
-    if (q.type === 'completion' || q.type === 'line' || q.options.length === 0) {
-      return { keys: [], text: raw };
+    const keys = (q.options || []).map(function (o) {
+      return o.key;
+    });
+    const up = normWidth(raw).toUpperCase();
+    const trim = up.trim();
+
+    // 1) 整串就是字母组合："B" / "A,C" / "ACD" / "B 和 D"
+    if (/^[A-H](?:\s*[,，、/和]?\s*[A-H])*$/.test(trim)) {
+      const uniq = letterRuns(trim, keys);
+      if (uniq.length) return { keys: uniq, text: uniq.join('') };
     }
 
-    const keys = q.options.map((o) => o.key);
-    // 1) 字母直取
-    const letters = (raw.toUpperCase().match(/[A-H]/g) || []).filter((l) => keys.indexOf(l) >= 0);
-    if (letters.length) {
-      const uniq = Array.from(new Set(letters)).sort();
-      return { keys: uniq, text: uniq.join('') };
+    // 2) 答案标记之后的字母（"答案是 B" / "正确选项：AC"）
+    const m = /(?:答案|正确选项|应选|选择|选)\s*[：:是为]?\s*([A-H](?:\s*[,，、/和]?\s*[A-H]){0,7})/.exec(up);
+    if (m) {
+      const uniq = letterRuns(m[1], keys);
+      if (uniq.length) return { keys: uniq, text: uniq.join('') };
     }
 
-    // 2) 选项文本精确匹配
+    // 3) 选项文本精确匹配
     const norm = CXAI.U.normText(raw);
     for (const o of q.options) {
       if (CXAI.U.normText(o.text) === norm) return { keys: [o.key], text: o.key };
     }
 
-    // 3) 判断题语义映射
+    // 4) 判断题语义映射
     if (q.type === 'judgement') {
       const truthy = /正确|对|是|√|true|yes/i.test(raw);
       const falsy = /错误|错|否|×|false|no/i.test(raw);
@@ -486,7 +613,14 @@ CXAI.AI = (function () {
       }
     }
 
-    // 4) 相似度兜底
+    // 5) 短句里的孤立字母（"我认为是 B"）：必须很短、且只出现一个候选字母，
+    //    否则 "B 正确，因为 A 和 C 都错" 会被误解析成 ABC
+    if (trim.length <= 12) {
+      const uniq = letterRuns(trim, keys);
+      if (uniq.length === 1) return { keys: uniq, text: uniq.join('') };
+    }
+
+    // 6) 相似度兜底
     let best = null;
     let bestScore = 0;
     for (const o of q.options) {
@@ -501,40 +635,50 @@ CXAI.AI = (function () {
     return null;
   }
 
-  /** 解析模型返回的 JSON 为统一结构 */
+  /**
+   * 解析模型返回的 JSON 为统一结构。
+   * 2026-11-18 起"宽松解析"：JSON 缺字段 → 抓"答案：X"；文本题没给 JSON → 整段当答案。
+   * 只有真正取不到任何可写内容时才返回 null，由 solve() 的兜底链接手。
+   */
   function parseModelResult(text, q) {
-    const obj = CXAI.U.safeJson(text);
-    let answer = obj && (obj.answer != null ? obj.answer : obj.Answer != null ? obj.Answer : obj.result);
-    let confidence = obj && Number(obj.confidence != null ? obj.confidence : obj.置信度);
-    let reason = obj && (obj.reason || obj.analysis || obj.explain || '');
+    const ctx = String(text == null ? '' : text);
+    const obj = CXAI.U.safeJson(ctx);
+    let answer =
+      obj && (obj.answer != null ? obj.answer : obj.Answer != null ? obj.Answer : obj.result != null ? obj.result : obj['答案']);
+    let confidence = obj && Number(obj.confidence != null ? obj.confidence : obj['置信度']);
+    let reason = obj && (obj.reason || obj.analysis || obj.explain || obj['依据'] || '');
     let agreeWith = obj && obj.agreeWith;
 
-    if (answer == null) {
-      // 纯文本兜底：抠 "答案：A" / 独立字母
-      const m = /(?:答案|answer)\s*[:：]?\s*([A-H](?:\s*[,、]?\s*[A-H])*)/i.exec(text);
-      if (m) answer = m[1];
-      else {
-        const only = /^\s*([A-H](?:\s*[,、]?\s*[A-H]){0,7})\s*$/.exec(text);
-        if (only) answer = only[1];
-      }
+    if (answer == null || String(answer).trim() === '') {
+      // "答案：B" / "答案是 B" / "答案 B" 都要吃（模型很少严格照契约输出）
+      const m = /(?:最终答案|正确答案|参考答案|答案|answer)\s*[:：是为]?\s*([^\n]+)/i.exec(normWidth(ctx));
+      if (m) answer = m[1].trim();
+    }
+    if (answer == null || String(answer).trim() === '') {
+      const only = /^\s*([A-H](?:\s*[,，、/]?\s*[A-H]){0,7})\s*[。.]?\s*$/.exec(normWidth(ctx).trim());
+      if (only) answer = only[1];
+    }
+    if ((answer == null || String(answer).trim() === '') && isTextType(q)) {
+      const t = cleanAnswerText(ctx);
+      if (t) answer = t;
     }
     if (answer == null) return null;
 
     const resolved = resolveAnswerKeys(answer, q);
     if (!resolved) return null;
+    if (!(resolved.keys || []).length && !String(resolved.text == null ? '' : resolved.text).trim()) return null;
 
     if (!isFinite(confidence) || confidence <= 0 || confidence > 1) {
-      // 模型给了百分比或缺失
       if (isFinite(confidence) && confidence > 1 && confidence <= 100) confidence = confidence / 100;
-      else confidence = 0.6;
+      else confidence = obj ? 0.6 : 0.5;
     }
     return {
-      keys: resolved.keys,
-      answerText: resolved.text,
+      keys: resolved.keys || [],
+      answerText: resolved.text != null ? String(resolved.text) : '',
       confidence: CXAI.U.clamp(confidence, 0.01, 1),
       reason: String(reason || '').slice(0, 200),
       agreeWith: agreeWith != null ? String(agreeWith) : null,
-      raw: text
+      raw: ctx
     };
   }
 
@@ -662,7 +806,10 @@ CXAI.AI = (function () {
     const judgeCfg = CXAI.Cfg.get('ai.judge', {});
     // 长答案题型（附件整卷 / 简答 / 论述 / 计算）默认 700 token 会被截断成半句话，
     // 截断后没法写进答题框，所以这里单独抬高上限。
-    const longForm = !!(q && (q.attachMeta || q.type === 'completion' || q.type === 'reader'));
+    const longForm = !!(
+      q &&
+      (q.attachMeta || isTextType(q) || q.shell === 'group' || q.shell === 'manual' || q.type === 'sort')
+    );
     const tasks = panel.map((p) => async () => {
       const messages = buildSolveMessages(q, undefined, vctx, p);
       const t0 = Date.now();
@@ -727,7 +874,7 @@ CXAI.AI = (function () {
    * 对一道题做多重判定。
    * @returns {Promise<{keys:string[],answerText:string,confidence:number,reason:string,stage:string,votes:any[],errors:string[],lowConfidence:boolean}>}
    */
-  async function solve(question) {
+  async function councilSolve(question) {
     const judgeCfg = CXAI.Cfg.get('ai.judge', {});
     const panel = buildPanel();
     if (panel.length === 0) throw new Error('模型面板为空');
@@ -836,6 +983,201 @@ CXAI.AI = (function () {
     return accept('fallback');
   }
 
+  /* ---------------- 全题型兜底通道 ----------------
+   * 背景（2026-11-18）：期中考碰到 PDF 附件题之后，实际考卷里还会混进连线、
+   * 排序、阅读理解小题组、听力、编程、甚至"页面只有一个播放器"的题型。
+   * 主判定（议会 + 复核 + 仲裁）只在"模型都能回 JSON"时有效；任何一环坏了，
+   * 旧实现就是整题失败、面板一片红。这里补一条兜底链：
+   *   ① 议会失败 → ② 逐个模型用极简 prompt 重问（stage=rescue）
+   *   ③ 仍失败 → ④ 本地确定性兜底（题干自带答案 / 首选项），stage=heuristic
+   * 保证"只要还有一分可用信息，就一定给得出一个可展示、可写盘的答案"。
+   */
+
+  function fallbackCfg() {
+    const c = CXAI.Cfg.get('ai.fallback', {}) || {};
+    return {
+      enabled: c.enabled !== false,
+      heuristic: c.heuristic !== false,
+      tries: Math.max(1, Math.min(4, Number(c.tries) || 3))
+    };
+  }
+
+  /** 兜底用的候选模型：判定面板 + 全部可用端点（去重），图片题优先视觉模型 */
+  function rescuePanel(q) {
+    let list = [];
+    try {
+      list = buildPanel();
+    } catch (e) {
+      list = [];
+    }
+    const all = CXAI.Cfg.allProviders();
+    const seen = {};
+    const out = [];
+    list.concat(all).forEach(function (p) {
+      if (!p || !p.baseURL || !p.model) return;
+      const id = (p.id || '') + '|' + p.baseURL + '|' + p.model;
+      if (seen[id]) return;
+      seen[id] = 1;
+      out.push(p);
+    });
+    if (q && q.images && q.images.length) {
+      out.sort(function (a, b) {
+        return (b.vision ? 1 : 0) - (a.vision ? 1 : 0);
+      });
+    }
+    return out;
+  }
+
+  function buildRescueMessages(q, vctx, provider) {
+    const lines = [`【题型】${q.typeLabel || '未知'}${q.shellLabel ? '（' + q.shellLabel + '）' : ''}`, `【题干】${q.stem || '(题干为空)'}`];
+    if (q.shell === 'group') lines.push('【小题组】请按小题顺序作答，多条答案用 "|||" 分隔。');
+    if (q.shell === 'media') lines.push('【音视频】没有文字稿，按题干给最可能的答案。');
+    if (q.shell === 'manual') lines.push('【答题框】页面没有输入框，答案给考生手抄，写完整。');
+    if (q.attachMeta) lines.push(`【附件材料】${q.attachMeta.filename || '附件'}：按材料里的题目顺序作答。`);
+    const nImg = (q.images || []).length;
+    if (nImg) {
+      if (vctx && vctx.mode === 'inline' && provider && provider.vision) lines.push(`【图片】本题含 ${nImg} 张图片，已附在下方。`);
+      else if (vctx && vctx.mode === 'ocr') lines.push('【图片】原图已转写为文字，见下方【图片转写】。');
+    }
+    if (vctx && vctx.vision) {
+      const block = CXAI.Vision.composePromptBlock(vctx.vision);
+      if (block) lines.push(block);
+    }
+    const ob = optionBlock(q);
+    if (ob) lines.push(`【选项】\n${ob}`);
+    else lines.push('【说明】没有选项，直接给要写入的答案。');
+    lines.push('【输出】只输出 JSON 对象。');
+    const userText = lines.join('\n\n');
+    const attach = !!(provider && provider.vision && vctx && vctx.mode === 'inline' && vctx.imageParts && vctx.imageParts.length);
+    if (attach) {
+      return [
+        { role: 'system', content: SYSTEM_RESCUE },
+        {
+          role: 'user',
+          content: [{ type: 'text', text: userText }].concat(
+            vctx.imageParts.map(function (i) {
+              return { type: 'image_url', image_url: { url: i.dataUrl } };
+            })
+          )
+        }
+      ];
+    }
+    return [
+      { role: 'system', content: SYSTEM_RESCUE },
+      { role: 'user', content: userText }
+    ];
+  }
+
+  /** 本地确定性兜底：题干自带答案 → 首选项；文本题没有可确定内容时返回 null */
+  function heuristicAnswer(q, errors) {
+    let keys = [];
+    try {
+      keys = (CXAI.Scraper && CXAI.Scraper.stemAnswerKeys ? CXAI.Scraper.stemAnswerKeys(q.stem, q.options) : []) || [];
+    } catch (e) {
+      keys = [];
+    }
+    if (keys.length) {
+      return {
+        keys: keys.slice(),
+        answerText: keys.join(''),
+        confidence: 0.55,
+        reason: '模型全部失败，采用题干里写明的答案',
+        stage: 'heuristic',
+        ratio: null,
+        votes: [],
+        errors: errors || [],
+        lowConfidence: true
+      };
+    }
+    if (q.options && q.options.length) {
+      const first = q.options[0].key;
+      return {
+        keys: [first],
+        answerText: first,
+        confidence: 0.15,
+        reason: '模型全部失败，按首个选项兜底（务必人工复核）',
+        stage: 'heuristic',
+        ratio: null,
+        votes: [],
+        errors: errors || [],
+        lowConfidence: true
+      };
+    }
+    return null;
+  }
+
+  async function rescueSolve(question, firstErr) {
+    const fb = fallbackCfg();
+    const errors = ['主判定失败：' + (firstErr && firstErr.message ? firstErr.message : firstErr)];
+    let vctx = { mode: 'none', imageParts: [], vision: null, dropped: 0 };
+    const panel = rescuePanel(question);
+    try {
+      vctx = await resolveVision(question, panel);
+    } catch (e) {
+      errors.push('读图准备失败：' + e.message);
+    }
+    const queue = panel.slice(0, fb.tries);
+    for (const p of queue) {
+      try {
+        const messages = buildRescueMessages(question, vctx, p);
+        const res = await callProvider(p, messages, { temperature: 0.1, maxTokens: 4000 });
+        const parsed = parseModelResult(res.text, question);
+        if (parsed && ((parsed.keys || []).length || String(parsed.answerText || '').trim())) {
+          CXAI.Log.warn(
+            '兜底通道拿到答案（' + (p.providerLabel || p.label) + ' · ' + (p.model || '') + '）：' + CXAI.U.truncate(parsed.answerText, 40)
+          );
+          return Object.assign({}, parsed, {
+            stage: 'rescue',
+            ratio: null,
+            votes: [{ who: p.providerLabel || p.label, answer: parsed.answerText, confidence: parsed.confidence, reason: parsed.reason }],
+            errors: errors,
+            lowConfidence: true
+          });
+        }
+        errors.push((p.label || '模型') + '：兜底输出不可解析');
+      } catch (e) {
+        errors.push((p.label || '模型') + '：' + (e && e.message ? e.message : e));
+      }
+    }
+    if (fb.heuristic) {
+      const h = heuristicAnswer(question, errors);
+      if (h) {
+        CXAI.Log.warn('本地兜底给出答案：' + h.answerText + '（' + h.reason + '）');
+        return h;
+      }
+    }
+    throw new Error('全部模型与本地兜底都没拿到答案：' + errors.slice(-2).join(' | '));
+  }
+
+  /**
+   * 对外入口：先走完整判定，失败自动降级到兜底链。
+   * 唯一不兜底的情况是"附件题缺视觉输入"——那种答案对答题框没有价值，
+   * 继续兜底只会把瞎猜写进卷子，必须让用户先把读图模型配好。
+   */
+  async function solve(question) {
+    let primaryErr = null;
+    try {
+      const r = await councilSolve(question);
+      if (r && ((r.keys || []).length || String(r.answerText || '').trim())) {
+        const txt = String(r.answerText || '');
+        // 题干没采到时（共用选项题实测），模型会回「题目信息缺失，无法确定填空内容」。
+        // 以前这句会原样写进卷子 —— 宁可这题标失败/需人工，也不要把废话落盘。
+        if (/无法确定|题目信息缺失|信息不足|无法作答|需要更多信息|缺少题目|信息缺失/.test(txt)) {
+          primaryErr = new Error('判定结果不可用（模型回了“' + txt.slice(0, 40) + '”）');
+        } else return r;
+      } else primaryErr = new Error('主判定返回空答案');
+    } catch (e) {
+      primaryErr = e;
+    }
+    if (primaryErr && /附件题必须读 PDF 页图/.test(primaryErr.message)) throw primaryErr;
+    if (!fallbackCfg().enabled) throw primaryErr;
+    const no = Number(question && question.index);
+    CXAI.Log.warn(
+      '第 ' + (isFinite(no) ? no + 1 : '?') + ' 题主判定失败，走全题型兜底：' + (primaryErr && primaryErr.message ? primaryErr.message : primaryErr)
+    );
+    return rescueSolve(question, primaryErr);
+  }
+
   function bestConfidence(votes, key) {
     const same = votes.filter((v) => v.answerText === key);
     if (!same.length) return 0.5;
@@ -877,5 +1219,20 @@ CXAI.AI = (function () {
     return { ok: true, ms: Date.now() - t0, text: CXAI.U.truncate(res.text, 80) };
   }
 
-  return { solve, ping, listModels, callProvider, parseModelResult, resolveAnswerKeys, tally, buildPanel };
+  return {
+    solve,
+    councilSolve,
+    rescueSolve,
+    heuristicAnswer,
+    ping,
+    listModels,
+    callProvider,
+    parseModelResult,
+    resolveAnswerKeys,
+    isTextType,
+    cleanAnswerText,
+    normWidth,
+    tally,
+    buildPanel
+  };
 })();

@@ -14,6 +14,8 @@
 CXAI.Sync = (function () {
   const DEFAULT_API = 'https://cx-exam-ai.pages.dev/api/sync';
   const CODE_STORE_KEY = 'syncCode'; // 单独存，不混进配置 JSON
+  const STATE_KEY = 'syncState'; // 最近一次同步的结果（成功/失败原因/时间），面板要用它展示失败原因
+  const API_STORE_KEY = 'syncAPI'; // 同步服务地址单独存一份（配置被覆盖时也能继续同步）
   const TOKEN_MSG = 'cx-exam-ai:write:v1';
 
   /* ---------------- 编码 ---------------- */
@@ -87,9 +89,21 @@ CXAI.Sync = (function () {
   /* ---------------- 同步码 ---------------- */
 
   function apiBase() {
+    // 配置里显式指定优先，同时**另存一份**到独立键：
+    // 配置被云端旧版本覆盖 / 被清空时，同步地址不该跟着丢，否则再也拉不回来。
     try {
       const u = CXAI.Cfg.get('ui.syncAPI', '');
-      if (u) return String(u).replace(/\/+$/, '');
+      if (u) {
+        const v = String(u).replace(/\/+$/, '');
+        try {
+          CXAI.Store.set(API_STORE_KEY, v);
+        } catch (e) {}
+        return v;
+      }
+    } catch (e) {}
+    try {
+      const saved = CXAI.Store.get(API_STORE_KEY, '');
+      if (saved) return String(saved).replace(/\/+$/, '');
     } catch (e) {}
     return DEFAULT_API;
   }
@@ -109,6 +123,24 @@ CXAI.Sync = (function () {
       else CXAI.Store.remove(CODE_STORE_KEY);
     } catch (e) {}
     return v;
+  }
+
+  /** 最近一次同步的状态（{ok, at, models, error, code}） */
+  function state() {
+    try {
+      const v = CXAI.Store.get(STATE_KEY, null);
+      return v && typeof v === 'object' ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function recordState(patch) {
+    const next = Object.assign({ at: Date.now() }, state() || {}, patch || {});
+    try {
+      CXAI.Store.set(STATE_KEY, next);
+    } catch (e) {}
+    return next;
   }
 
   function parseCode(code) {
@@ -235,24 +267,60 @@ CXAI.Sync = (function () {
     const obj = await pull(code);
     CXAI.Cfg.importJSON(obj);
     if (code) setCode(code);
+    recordState({
+      ok: true,
+      at: Date.now(),
+      models: ((obj.ai && obj.ai.providers) || []).length,
+      error: '',
+      code: String(code || '').slice(0, 8) + '…'
+    });
     return obj;
   }
 
   /**
-   * 自动同步：已存同步码且本地没有模型配置时，静默拉一次。
-   * 有本地配置时不覆盖 —— 免得用户在设置中心改了一半被云端旧配置顶回去。
+   * 自动同步（2026-11-18 改语义）：**只要存过同步码就每次都拉**。
+   *
+   * 旧实现只在"本地一个模型都没有"时才拉，于是设置中心改了判定强度 / 读图模型之后，
+   * 考试页永远拿不到新配置 —— 这就是"同步逻辑说不清"的根源。
+   * 现在：考试页每次加载脚本都会调 syncBoot()，云端配置以服务端为准覆盖本地。
+   * 传 {force:false} 可退回旧行为（本地有配置就不覆盖）。
    */
-  async function autoPull() {
+  async function autoPull(opt) {
+    opt = opt || {};
     if (!enabled()) return false;
-    if ((CXAI.Cfg.get('ai.providers', []) || []).length) return false;
+    const force = opt.force !== false;
+    if (!force && (CXAI.Cfg.get('ai.providers', []) || []).length) return false;
     try {
       const obj = await pullInto(savedCode());
       const n = (obj.ai && obj.ai.providers ? obj.ai.providers.length : 0) || 0;
       CXAI.Log.ok('已从云端同步配置 · 模型 ' + n + ' 个');
       return true;
     } catch (e) {
+      recordState({ ok: false, at: Date.now(), error: e && e.message ? e.message : String(e) });
       CXAI.Log.warn('云端同步失败：' + (e && e.message ? e.message : e));
       return false;
+    }
+  }
+
+  /**
+   * 进入考试页时的自动同步：总是拉一次，并把结果（含失败原因）记下来。
+   * @returns {Promise<{ok:boolean, models?:number, at?:number, error?:string, skipped?:boolean}>}
+   */
+  async function syncBoot() {
+    const code = savedCode();
+    if (!code) {
+      return { ok: false, skipped: true, error: '还没有同步码', at: Date.now() };
+    }
+    const t0 = Date.now();
+    try {
+      const obj = await pullInto(code);
+      const models = ((obj.ai && obj.ai.providers) || []).length;
+      recordState({ ok: true, at: Date.now(), models: models, error: '', ms: Date.now() - t0 });
+      return { ok: true, models: models, at: Date.now(), ms: Date.now() - t0 };
+    } catch (e) {
+      const msg = e && e.message ? e.message : String(e);
+      recordState({ ok: false, at: Date.now(), models: 0, error: msg, ms: Date.now() - t0 });
+      return { ok: false, error: msg, at: Date.now(), ms: Date.now() - t0 };
     }
   }
 
@@ -264,5 +332,21 @@ CXAI.Sync = (function () {
     } catch (e) {}
   }
 
-  return { enabled, savedCode, setCode, disable, makeCode, newCode, syncNow, push, pull, pullInto, autoPull, apiBase };
+  return {
+    enabled,
+    savedCode,
+    setCode,
+    disable,
+    makeCode,
+    newCode,
+    syncNow,
+    push,
+    pull,
+    pullInto,
+    autoPull,
+    syncBoot,
+    state,
+    recordState,
+    apiBase
+  };
 })();
