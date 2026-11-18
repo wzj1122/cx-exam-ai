@@ -951,6 +951,16 @@ CXAI.Apply = (function () {
       };
     }
     const text = String((result && result.answerText) || '');
+    // 有些卷子的选项本身是占位文本（实测：完型 A/B/C/D 四个选项内容是「选项1..选项4」，
+    // 页面上根本没有 however/adopted 这些词）。这种情况下按文字匹配毫无意义，
+    // 只会把模型的猜测硬塞进去；这里只接受模型直接给的字母。
+    const placeholder = blanks.every(function (b) {
+      const opts = b.options || [];
+      return opts.length > 0 && opts.every(function (o) {
+        const t = String(o.text || '').replace(/^[A-Ha-h][\s.、:：)]*/, '').trim();
+        return /^选项\s*\d+$/i.test(t);
+      });
+    });
     const picks = [];
     const norm = (t) => String(t == null ? '' : t).replace(/[\s\u00a0]/g, '').toLowerCase();
     const stripKey = (t) => String(t || '').replace(/^[A-H][\s.、:：)]*/, '');
@@ -964,6 +974,7 @@ CXAI.Apply = (function () {
         picks[i] = seg.toUpperCase();
         continue;
       }
+      if (placeholder) continue; // 占位选项：文字对不上，别硬塞
       const ns = norm(seg);
       const opts = blanks[i].options || [];
       let hit = opts.filter((o) => norm(stripKey(o.text)) === ns)[0];
@@ -994,7 +1005,7 @@ CXAI.Apply = (function () {
         segs2.forEach((s, i) => {
           if (!picks[i]) picks[i] = s.toUpperCase();
         });
-      } else {
+      } else if (!placeholder) {
         const letters = (text.toUpperCase().match(/[A-H]/g) || []).join('');
         if (letters.length >= blanks.length) {
           letters.split('').slice(0, blanks.length).forEach((c, i) => {
@@ -1059,7 +1070,9 @@ CXAI.Apply = (function () {
       error:
         filled === blanks.length
           ? undefined
-          : '小题组只落了 ' + filled + '/' + blanks.length + ' 个空（判定答案：' + (text.slice(0, 50) || '空') + '），剩下的请人工核对'
+          : placeholder
+            ? '这题的选项是占位文本（选项1/选项2…），页面里没有真实选项内容，脚本无法匹配答案（共 ' + blanks.length + ' 个空，已落 ' + filled + '），请人工作答'
+            : '小题组只落了 ' + filled + '/' + blanks.length + ' 个空（判定答案：' + (text.slice(0, 50) || '空') + '），剩下的请人工核对'
     };
   }
 

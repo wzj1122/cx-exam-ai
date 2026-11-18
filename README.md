@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.5-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.6-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,10 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.6（2026-11-19）占位选项识别
+
+- **占位选项不再硬猜**：实测某张卷子的完型 A/B/C/D 选项内容是「选项1/选项2/选项3/选项4」，页面里没有真实单词，旧逻辑把模型猜的词硬塞进去（只落 2/6 且来回点）。现在检测到占位选项时只接受模型直接给的字母，否则明确报「选项是占位文本，请人工作答」，不再乱点。
 
 ### v1.11.5（2026-11-19）小题组落盘修正
 
