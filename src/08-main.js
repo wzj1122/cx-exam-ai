@@ -241,6 +241,20 @@ CXAI.Engine = (function () {
     } catch (e) {}
   }
 
+  /**
+   * 小题组的缓存答案是否"不可用"：当时抓取坏了（group=0），prompt 里没选项没题干，
+   * 模型只能回一段散文。这种结果必须作废重判，否则每次都会"命中上次判定"复读同一段话
+   * （2026-11-19 实测第 9 题：连续几轮报错内容一字不差）。
+   */
+  function groupAnswerUnusable(q, r) {
+    if (!q || !q.group || !q.group.length || !r) return false;
+    const txt = String(r.answerText || '');
+    if (!txt) return false;
+    const segs = txt.split(/\s*\|\|\|\s*/).map((x) => x.trim()).filter(Boolean);
+    const letters = segs.filter((x) => /^[A-Ha-h]{1,4}$/.test(x)).length;
+    return letters === 0;
+  }
+
   function cachedAnswer(q) {
     try {
       const all = readAnswers();
@@ -294,7 +308,9 @@ CXAI.Engine = (function () {
       CXAI.Log.info(`#${no} 命中本次会话缓存`);
     } else {
       const stored = overwrite ? null : cachedAnswer(q);
-      if (stored) {
+      if (stored && groupAnswerUnusable(q, stored)) {
+        CXAI.Log.warn(`#${no} 上次缓存的答案对不上小题组格式（可能是旧版抓取坏了），作废重判`);
+      } else if (stored) {
         result = stored;
         CXAI.Log.info(`#${no} 命中上次的判定结果 ${stored.answerText}`);
       }
@@ -487,6 +503,8 @@ CXAI.Engine = (function () {
       // 所以题号必须按数组位置写：否则面板的蓝色高亮会一直停在第 5 题。
       q.no = i + 1;
       if (!q) continue;
+      // 面板的「当前题」：旧实现从不更新，永远停在进页面时的 URL start（第 5 题）。
+      CXAI.UI.update({ current: i + 1, pending: { index: i + 1, stem: q.stem, typeLabel: q.typeLabel } });
       try {
         await handleQuestion(q, page.kind);
       } catch (e) {

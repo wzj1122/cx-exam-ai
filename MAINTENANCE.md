@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.8（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.9（`package.json`）
 
 # MAINTENANCE
 
@@ -338,6 +338,14 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.9（2026-11-19）完型分组修复
+
+| 改动 | 文件 |
+|---|---|
+| 修 `readGroupBlanks` 的 `block` 作用域 bug（完型题抛 ReferenceError → group=0） | `src/03-scraper.js` |
+| `groupAnswerUnusable`：小题组缓存里没有字母的散文答案作废重判 | `src/08-main.js` |
+| 整卷模式逐题更新 `UI.current`，面板高亮随题移动 | `src/08-main.js` |
 
 ### v1.11.8（2026-11-19）面板与小题组刷新
 

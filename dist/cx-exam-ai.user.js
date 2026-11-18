@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.8
+// @version      1.11.9
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.8";
-CXAI.__builtAt = "2026-11-18T19:22:14.528Z";
+CXAI.__version = "1.11.9";
+CXAI.__builtAt = "2026-11-18T19:29:02.030Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -1924,23 +1924,20 @@ CXAI.Scraper = (function () {
         if (!stems[uuid]) {
           // 小题题干：阅读理解的每个空前面都有 .reader_answer_tit（"(1) What will …"）。
           // 不抓它，模型只看到正文 + 一堆选项，不知道每个空在问什么（实测只能回段落摘要）。
+          // 注意：这里的变量必须在 try 外层声明 —— 上一版把 block 写在 try 里，
+          // 完后型题（没有 .reader_answer_tit）引用它就抛 ReferenceError，
+          // 整个分组循环中断，group 直接变 0（2026-11-19 实测第 8 题）。
+          let tit = null;
           try {
-            const area = el.closest('.reading_answer, .filling_answer, .stem_answer, .questionLi');
-            const block = area && area.closest('.reading_answer') ? area.closest('.reading_answer') : null;
             const holder = el.closest('.stem_answer') || el.parentElement;
             const wrap = holder && holder.parentElement ? holder.parentElement : holder;
-            const tit =
+            const area = el.closest('.reading_answer');
+            tit =
               (wrap && wrap.querySelector && wrap.querySelector('.reader_answer_tit, .stem_tit, .sub_tit')) ||
-              (block && block.querySelector && block.querySelector('.reader_answer_tit')) ||
+              (area && area.querySelector && area.querySelector('.reader_answer_tit')) ||
               null;
-            if (tit) stems[uuid] = String(tit.textContent || '').replace(/\s+/g, ' ').trim();
           } catch (e) {}
-          if (!stems[uuid] && block) {
-            try {
-              const tit2 = block.querySelector('.reader_answer_tit');
-              if (tit2) stems[uuid] = String(tit2.textContent || '').replace(/\s+/g, ' ').trim();
-            } catch (e) {}
-          }
+          if (tit) stems[uuid] = String(tit.textContent || '').replace(/\s+/g, ' ').trim();
         }
         if (!byUuid.has(uuid)) byUuid.set(uuid, []);
         byUuid.get(uuid).push({
@@ -8694,6 +8691,20 @@ CXAI.Engine = (function () {
     } catch (e) {}
   }
 
+  /**
+   * 小题组的缓存答案是否"不可用"：当时抓取坏了（group=0），prompt 里没选项没题干，
+   * 模型只能回一段散文。这种结果必须作废重判，否则每次都会"命中上次判定"复读同一段话
+   * （2026-11-19 实测第 9 题：连续几轮报错内容一字不差）。
+   */
+  function groupAnswerUnusable(q, r) {
+    if (!q || !q.group || !q.group.length || !r) return false;
+    const txt = String(r.answerText || '');
+    if (!txt) return false;
+    const segs = txt.split(/\s*\|\|\|\s*/).map((x) => x.trim()).filter(Boolean);
+    const letters = segs.filter((x) => /^[A-Ha-h]{1,4}$/.test(x)).length;
+    return letters === 0;
+  }
+
   function cachedAnswer(q) {
     try {
       const all = readAnswers();
@@ -8747,7 +8758,9 @@ CXAI.Engine = (function () {
       CXAI.Log.info(`#${no} 命中本次会话缓存`);
     } else {
       const stored = overwrite ? null : cachedAnswer(q);
-      if (stored) {
+      if (stored && groupAnswerUnusable(q, stored)) {
+        CXAI.Log.warn(`#${no} 上次缓存的答案对不上小题组格式（可能是旧版抓取坏了），作废重判`);
+      } else if (stored) {
         result = stored;
         CXAI.Log.info(`#${no} 命中上次的判定结果 ${stored.answerText}`);
       }
@@ -8940,6 +8953,8 @@ CXAI.Engine = (function () {
       // 所以题号必须按数组位置写：否则面板的蓝色高亮会一直停在第 5 题。
       q.no = i + 1;
       if (!q) continue;
+      // 面板的「当前题」：旧实现从不更新，永远停在进页面时的 URL start（第 5 题）。
+      CXAI.UI.update({ current: i + 1, pending: { index: i + 1, stem: q.stem, typeLabel: q.typeLabel } });
       try {
         await handleQuestion(q, page.kind);
       } catch (e) {

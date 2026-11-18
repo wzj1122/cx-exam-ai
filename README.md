@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.8-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.9-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.9（2026-11-19）完型分组修复
+
+- **修 1.11.7 引入的作用域 bug**：`readGroupBlanks` 里 `block` 声明在内层 `try`，跳出后仍被引用；完型题没有 `.reader_answer_tit` 就抛 `ReferenceError`，整个分组循环中断 → 第 8 题 `group=0`。改为在 try 外声明，实测 6/6 个空恢复。
+- **散文缓存作废**：小题组缓存答案若不含任何字母（旧版抓取坏了时模型只能回段落），命中时直接作废重判，不再每轮复读同一段话。
+- **面板当前题跟着走**：整卷模式逐题 `UI.update({ current: i+1 })`，蓝色高亮不再固定停在第 5 题。
 
 ### v1.11.8（2026-11-19）面板与小题组刷新
 
