@@ -11,14 +11,30 @@ CXAI.Guard = (function () {
   let alertTimer = null;
   const patched = [];
 
+  /**
+   * 伪装成原生函数：页面一行 `Function.prototype.toString` 就能识破重写过的
+   * document.hasFocus / confirm / 属性 getter，这里统一把 toString 换成原生样式。
+   */
+  function maskNative(fn, nativeText) {
+    try {
+      const text = nativeText || 'function native() { [native code] }';
+      Object.defineProperty(fn, 'toString', { value: () => text, configurable: true, writable: true });
+    } catch (e) {}
+    return fn;
+  }
+
   function on(obj, prop, value) {
     try {
       const desc = Object.getOwnPropertyDescriptor(obj, prop);
-      Object.defineProperty(obj, prop, {
-        configurable: true,
-        get() {
+      const getter = maskNative(
+        function () {
           return typeof value === 'function' ? value() : value;
         },
+        'function get ' + prop + '() { [native code] }'
+      );
+      Object.defineProperty(obj, prop, {
+        configurable: true,
+        get: getter,
         set() {}
       });
       patched.push(() => {
@@ -36,9 +52,9 @@ CXAI.Guard = (function () {
     on(document, 'hidden', false);
     on(document, 'visibilityState', 'visible');
     try {
-      document.hasFocus = function () {
+      document.hasFocus = maskNative(function () {
         return true;
-      };
+      }, 'function hasFocus() { [native code] }');
     } catch (e) {}
     // 吞掉可见性/失焦事件，避免上报"切屏次数"
     const killer = (e) => {
@@ -60,10 +76,10 @@ CXAI.Guard = (function () {
     if (!CXAI.Cfg.get('guard.blockDevtools', true)) return;
     // 屏蔽极高频率的 debugger 陷阱（只处理 setInterval/setTimeout 里的函数体）
     const rawSetInterval = window.setInterval;
-    window.setInterval = function (fn, ms) {
+    window.setInterval = maskNative(function (fn, ms) {
       if (typeof fn === 'function' && /debugger/.test(fn.toString())) return 0;
       return rawSetInterval.apply(window, arguments);
-    };
+    }, 'function setInterval() { [native code] }');
     // 关掉右键/复制限制这类常见的小动作（会挡住自己的 UI）
     document.addEventListener(
       'contextmenu',
@@ -96,8 +112,14 @@ CXAI.Guard = (function () {
       // 0 = 只手动关，连计时都不做
       return 0;
     }
-    const killers = [/继续作答/, /继续考试/, /离开/, /确定/, /知道了/, /继续/];
-    const nodes = Array.from(document.querySelectorAll('.layui-layer-btn a, .dialog-btn, .btn, button, a, .popup-btn, [class*="confirm"]'));
+    // 只认"弹窗容器里的按钮 + 文本精确匹配"：旧实现把页面上任何 button/a 上写着
+    // 「确定/继续」的可见元素都算弹窗，10 秒后会误点保存确认、继续跳页这类真实操作。
+    const killers = [/^继续作答$/, /^继续考试$/, /^离开$/, /^确定$/, /^知道了$/, /^继续$/];
+    const nodes = Array.from(
+      document.querySelectorAll(
+        '.layui-layer-btn a, .dialog-btn, .popup-btn, [class*="confirm"] a, [class*="confirm"] button, [role="dialog"] button, [role="dialog"] a'
+      )
+    );
     const now = Date.now();
     const visible = (el) => {
       // 不能用 offsetParent 判可见：fixed 定位的弹窗（超星大量使用）offsetParent 恒为 null，
@@ -149,7 +171,7 @@ CXAI.Guard = (function () {
     if (!CXAI.Cfg.get('guard.autoConfirm', true)) return;
     try {
       const rawConfirm = window.confirm.bind(window);
-      window.confirm = function (msg) {
+      window.confirm = maskNative(function (msg) {
         const text = String(msg == null ? '' : msg);
         // 交卷 / 提交试卷这类确认，脚本自己没在跑自动交卷时**不要替用户点掉**：
         // 该看到的提示要能看到（用户明确提过"有些弹窗可能是我们需要的"）。
@@ -165,10 +187,10 @@ CXAI.Guard = (function () {
         }
         CXAI.Log.warn('已自动确认 confirm：' + text.slice(0, 80));
         return true;
-      };
-      window.alert = function (msg) {
+      }, 'function confirm() { [native code] }');
+      window.alert = maskNative(function (msg) {
         CXAI.Log.info('已吞掉 alert：' + String(msg).slice(0, 80));
-      };
+      }, 'function alert() { [native code] }');
     } catch (e) {}
   }
 

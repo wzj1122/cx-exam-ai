@@ -80,6 +80,26 @@ CXAI.Scraper = (function () {
     15: '阅读理解'
   };
 
+  /** 页面隐藏域里存的是"一段文本"而不是选项字母的题型（与 04-ai.isTextType 保持一致） */
+  const TEXT_VALUE_TYPES = {
+    completion: 1,
+    line: 1,
+    reader: 1,
+    fill: 1,
+    match: 1,
+    oral: 1,
+    listening: 1
+  };
+
+  /** 全页只有一个题块时，页面的全局 #questionId / 题型回退才是可靠的 */
+  function singleQuestionPage() {
+    try {
+      return document.querySelectorAll('.questionLi, .TiMu').length <= 1;
+    } catch (e) {
+      return true;
+    }
+  }
+
   const JUDGE_WORDS = ['正确', '错误', '对', '错', '是', '否', '√', '×', 'true', 'false', 't', 'f', 'yes', 'no'];
 
   /** 题型码 → 界面标签。未知码给"第 N 类题"，别一律写成"未知题型" */
@@ -247,8 +267,8 @@ CXAI.Scraper = (function () {
     const m = /^[A-Ha-h]\s*[、.．)）:：]\s*/.exec(t);
     if (m && t.length > m[0].length) return t.slice(m[0].length).trim();
     const m2 = /^[A-Ha-h]\s+/.exec(t);
-    if (m2 && t.length > m2[0].length && /[A-Za-z\u4e00-\u9fa5]/.test(t.charAt(m2[0].length))) {
-      // 只有后接非字母时才剥，避免把英文单词首字母吃掉
+    if (m2 && t.length > m2[0].length && !/[A-Za-z]/.test(t.charAt(m2[0].length))) {
+      // 只有后接非字母时才剥（"A 组" → "组"，"A test" 保持原样，避免把英文单词首字母吃掉）
       return t.slice(m2[0].length).trim();
     }
     return t;
@@ -287,6 +307,9 @@ CXAI.Scraper = (function () {
         return typeCodeFromValue(el.value || el.getAttribute('answertype'));
       }
     }
+    // 回退：全页只有一道题时才允许在页面级找 —— 整卷/章节页里每个题的 type 隐藏域
+    // 名字都带自己的题号，跨题回退会把第 1 题的题型套到所有题上（题型、落盘路径全错）
+    if (!singleQuestionPage()) return null;
     const any = document.querySelector('input[name^="type"], input[answertype]');
     return any ? typeCodeFromValue(any.value || any.getAttribute('answertype')) : null;
   }
@@ -343,7 +366,8 @@ CXAI.Scraper = (function () {
       if (/^type\d+$/.test(name)) return typeFromValue(el.value);
       if (/^answertype/.test(id) || el.hasAttribute('answertype')) return typeFromValue(el.value || el.getAttribute('answertype'));
     }
-    // 回退：整个页面找一次
+    // 回退：全页只有一道题时才允许页面级回退（原因同 readTypeRaw）
+    if (!singleQuestionPage()) return null;
     const any = document.querySelector('input[name^="type"], input[answertype]');
     if (any) return typeFromValue(any.value || any.getAttribute('answertype'));
     return null;
@@ -477,20 +501,57 @@ CXAI.Scraper = (function () {
     });
     root.querySelectorAll('iframe').forEach((el) => {
       if (el.closest('.mark_answer')) return;
+      // 附件预览 / 音视频容器不是答题框：混进 q.inputs 后，填空题的答案会被写进
+      // 附件 iframe 的 body（同源预览时甚至会改掉附件页），而真正的答题框反而空着。
+      if (el.closest && (el.closest('.attach-iframe') || el.closest('[module="insertAttach"]'))) return;
+      const src = String((el.getAttribute && el.getAttribute('src')) || '');
+      if (/ueditorupload|\/read\?objectid|\.(?:mp4|mp3|pdf)(?:[?#]|$)/i.test(src)) return;
       list.push(el);
     });
     return list;
   }
 
+  /**
+   * 题干图片：滤掉图标/头像/二维码/装饰图，并优先收题干容器里的图。
+   * 旧实现只滤 `/static/|icon|logo|blank.gif`，头像、二维码、装饰图都会进视觉模型；
+   * 再加上 maxImages 截断，真正的题图反而可能被挤掉。
+   */
   function readImages(root) {
-    const urls = [];
-    root.querySelectorAll('img').forEach((img) => {
+    const out = [];
+    const seen = {};
+    const push = (img, forced) => {
       const src = img.getAttribute('src') || img.getAttribute('data-src') || '';
       if (!src) return;
-      if (/\/static\/|icon|logo|blank\.gif/i.test(src)) return;
-      urls.push(new URL(src, location.href).href);
-    });
-    return urls;
+      if (/\/static\/|icon|logo|blank\.gif|avatar|headimg|qrcode|qr_code|emoji|loading|spacer|\.svg(?:[?#]|$)/i.test(src)) return;
+      const cls = String(img.className || '') + ' ' + String((img.parentElement && img.parentElement.className) || '');
+      if (!forced && /avatar|head|user|qrcode|qr|icon|logo|emoji|badge|decorate/i.test(cls)) return;
+      const w = Number(img.getAttribute('width') || img.naturalWidth || 0);
+      const h = Number(img.getAttribute('height') || img.naturalHeight || 0);
+      if (!forced && w && h && w < 80 && h < 80) return; // 小图标
+      let href = '';
+      try {
+        href = new URL(src, location.href).href;
+      } catch (e) {
+        href = src;
+      }
+      if (seen[href]) return;
+      seen[href] = 1;
+      out.push(href);
+    };
+    // 题干容器里的图最可信：先收，避免 maxImages 截断时把真题图挤出去
+    let stemBox = null;
+    try {
+      stemBox = root.querySelector('.mark_name, .Zy_TItle, .Cy_TItle, .stem_answer');
+    } catch (e) {}
+    if (stemBox) {
+      try {
+        Array.from(stemBox.querySelectorAll('img')).forEach((img) => push(img, true));
+      } catch (e) {}
+    }
+    try {
+      Array.from(root.querySelectorAll('img')).forEach((img) => push(img, false));
+    } catch (e) {}
+    return out;
   }
 
   /**
@@ -623,13 +684,35 @@ CXAI.Scraper = (function () {
 
   /* ---------------- 页面真实答案 / 题库无关的确定性线索 ---------------- */
 
-  /** 超星的题号：.questionLi[data] 或表单里的 #questionId */
+  /** 超星的题号：.questionLi[data]，其次题型隐藏域名字里的题号（type123 / answertype123） */
   function qidOf(root) {
+    if (!root) return '';
     try {
-      const li = root && root.closest ? root.closest('.questionLi') : null;
-      const d = (li || root) && (li || root).getAttribute && (li || root).getAttribute('data');
+      const box = root.closest ? root.closest('.questionLi') || root.closest('.TiMu') || root : root;
+      const d = box.getAttribute && box.getAttribute('data');
       if (d && /^\d+$/.test(String(d).trim())) return String(d).trim();
     } catch (e) {}
+
+    /**
+     * 章节测验 / 作业页的 .TiMu 往往没有 data 属性，但题型隐藏域名字里就带着题号：
+     *   <input name="type1234567">  /  <input id="answertype1234567">
+     * 旧实现这里直接回退到全页唯一的 #questionId —— 一页十几道题就全被当成同一个 qid，
+     * 于是会话缓存、作答记录（qid 主键）、#answer{qid} 回读全部串题：答了第一题，
+     * 后面所有题都显示"已答"、并复用第一题的答案。必须先按题块取自己的题号。
+     */
+    try {
+      const t = root.querySelector('input[name^="type"], input[id^="answertype"]');
+      if (t) {
+        const name = String(t.getAttribute('name') || '');
+        const id = String(t.getAttribute('id') || '');
+        // 真 qid 是长数字（如 type1234567）；type0/type1 这类短序号是页面干扰项，不能当题号
+        const m = /^type(\d{4,})$/.exec(name) || /^answertype(\d{4,})$/.exec(id);
+        if (m) return m[1];
+      }
+    } catch (e) {}
+
+    // 全局 #questionId 只代表"当前这一题"，单题页才可信
+    if (!singleQuestionPage()) return '';
     const inp = document.querySelector('#questionId') || document.querySelector('input[name="questionId"]');
     return inp ? String(inp.value || '').trim() : '';
   }
@@ -687,7 +770,8 @@ CXAI.Scraper = (function () {
       const readOne = (el, src) => {
         const raw = String((el && el.value) || '').trim();
         if (!raw) return null;
-        const isText = q && (q.type === 'completion' || q.type === 'line');
+        // 简答/论述/阅读/完形/听力/口语/连线：隐藏域里存的是文本（可能带 <p>），要洗成纯文本
+        const isText = q && (TEXT_VALUE_TYPES[q.type] || q.type === 'completion' || q.type === 'line');
         return { value: isText ? toPlain(raw) : normPageAnswer(q, raw), raw: raw, src: src };
       };
       const hit = readOne(a, 'answer') || readOne(as, 'answers');
@@ -703,7 +787,9 @@ CXAI.Scraper = (function () {
       if (el && el.tagName === 'IFRAME') {
         try {
           const b = el.contentDocument && el.contentDocument.body;
-          if (b && (b.innerText || '').trim()) return { value: String(b.innerText).trim(), src: 'iframe' };
+          // 只认富文本编辑器（contenteditable）：附件预览/视频 iframe 的正文不是考生答案
+          const editable = b && (b.isContentEditable || b.getAttribute('contenteditable') === 'true');
+          if (editable && (b.innerText || '').trim()) return { value: String(b.innerText).trim(), src: 'iframe' };
         } catch (e) {}
       }
     }
@@ -743,25 +829,30 @@ CXAI.Scraper = (function () {
     }
   }
 
-  /** 找出这道题对应的 UEditor 实例（简答=answer{qid}，填空=answerEditor{qid}N） */
+  /** 找出这道题对应的 UEditor 实例（只认页面上真实存在的 textarea / 已建好的实例） */
   function ueditorOf(q) {
     const api = ueditorApi();
     if (!api || !q) return null;
+    const inst = (api.instances && typeof api.instances === 'object' ? api.instances : {}) || {};
     const ids = [];
-    const qid = q.qid || qidOf(q.root);
-    if (qid) ids.push('answer' + qid);
     const root = q.root || document;
     try {
       Array.from(root.querySelectorAll('textarea[id]')).forEach((el) => {
-        if (ids.indexOf(el.id) < 0) ids.push(el.id);
+        if (el.id && ids.indexOf(el.id) < 0) ids.push(el.id);
       });
     } catch (e) {}
+    // input/iframe 的 id 只有"实例已经存在"时才算数：对 input 调 getEditor 会造出空壳实例
     (q.inputs || []).forEach((el) => {
-      if (el && el.id && ids.indexOf(el.id) < 0) ids.push(el.id);
+      if (el && el.id && inst[el.id] && ids.indexOf(el.id) < 0) ids.push(el.id);
     });
     for (const id of ids) {
       try {
-        const ed = api.getEditor(id);
+        let ed = inst[id];
+        if (!ed) {
+          const ta = document.getElementById(id);
+          if (!ta || String(ta.tagName || '').toUpperCase() !== 'TEXTAREA') continue;
+          ed = api.getEditor(id);
+        }
         if (ed && typeof ed.getContent === 'function' && ed.body) return ed;
       } catch (e) {}
     }
@@ -958,6 +1049,16 @@ CXAI.Scraper = (function () {
       const oldForm = document.querySelector('#submitTest');
       if (newForm && oldForm) oldForm.outerHTML = newForm.outerHTML;
     }
+    // 个别皮肤把 #submitTest 放在题块外：题块换掉后表单跟着旧节点一起消失，
+    // 页面自己的 submitForm / 答案隐藏域就全读不到了。这里补一次。
+    if (!document.querySelector('#submitTest')) {
+      const nf = doc.querySelector('#submitTest');
+      if (nf) {
+        try {
+          (document.querySelector('.questionLi') || document.body).appendChild(nf);
+        } catch (e) {}
+      }
+    }
     try {
       const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : window;
       if (w && typeof w.answerCardLocateCurrent === 'function') w.answerCardLocateCurrent();
@@ -976,7 +1077,12 @@ CXAI.Scraper = (function () {
     return nodes.map((root, i) => {
       const stemEl = root.querySelector('.Zy_TItle .clearfix, .Zy_TItle, .clearfix');
       const stem = cleanStem(stemEl ? stemEl.textContent : root.textContent);
-      const optionEls = Array.from(root.querySelectorAll('.Zy_ulTop li, .answerBg')).filter((el) => !el.closest('.Py_answer'));
+      let optionEls = Array.from(root.querySelectorAll('.Zy_ulTop li, .answerBg')).filter((el) => !el.closest('.Py_answer'));
+      // 与 parseOne 相同的嵌套去重：`.Zy_ulTop li` 里可能还套着 `.answerBg`，
+      // 不去重的话 4 个选项会读成 8 个，答案字母整体错位（章节测验真机结构）。
+      optionEls = optionEls.filter(
+        (el) => !optionEls.some((other) => other !== el && other.contains && other.contains(el))
+      );
       const options = optionEls.map((el, k) => {
         const raw = (el.innerText || el.textContent || '').trim();
         return { key: String.fromCharCode(65 + k), text: cleanOption(raw, k), raw, el, answered: false };
@@ -1017,6 +1123,11 @@ CXAI.Scraper = (function () {
   /* ---------- 对外 ---------- */
 
   function collect() {
+    // 加密字体（font-cxsecret）：映射表就绪后，每次抓题前先把页面上的密文原地还原。
+    // 之前 02-font 从未被调用，密文（私用区字符）原样送进模型，题干/选项等于乱码。
+    try {
+      if (CXAI.Font && CXAI.Font.ensureSync) CXAI.Font.ensureSync(document);
+    } catch (e) {}
     const page = detectPage();
     let questions = [];
     if (page.kind === 'chapter') {
@@ -1025,8 +1136,17 @@ CXAI.Scraper = (function () {
       const roots = Array.from(document.querySelectorAll('.questionLi')).filter((el) => !el.parentElement.closest('.questionLi'));
       questions = roots.map((root, i) => parseOne(root, i, page.kind));
     }
-    // 过滤掉题干完全为空的容器
-    questions = questions.filter((q) => q.stem || q.options.length > 0);
+    // 过滤掉"什么也没抓到"的空容器：题干删完为空、但题目全在图片里（纯图片题）、
+    // 或者只有附件/音视频/可写输入框，这些都是真实题目，不能因为文字为空就丢掉。
+    questions = questions.filter(
+      (q) =>
+        q.stem ||
+        (q.options && q.options.length) ||
+        (q.inputs && q.inputs.length) ||
+        (q.images && q.images.length) ||
+        (q.attachments && q.attachments.length) ||
+        (q.media && q.media.length)
+    );
     questions.forEach((q, i) => (q.index = i));
     return { page, questions };
   }

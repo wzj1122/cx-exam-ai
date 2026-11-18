@@ -171,16 +171,6 @@ CXAI.DEFAULT_CONFIG = {
     }
   },
   answer: {
-    /** 打开页面后自动开始 */
-    autoStart: false,
-    /** 每道题之间的间隔(ms) */
-    intervalMs: 900,
-    /** 拟人化点选（完整指针事件序列 + 随机坐标/延迟） */
-    humanize: true,
-    /** 自动填写填空/简答 */
-    fillText: true,
-    /** 跳过页面上已经作答的题目 */
-    skipAnswered: true,
     /** auto=自动识别 | single=逐题翻页模式 | whole=整卷模式 */
     pageMode: 'auto',
     /** 全部答完后自动点击"下一题"翻页（单题模式） */
@@ -226,20 +216,37 @@ CXAI.DEFAULT_CONFIG = {
   apply: {
     /** 重做页面上已经作答的题 */
     overwriteAnswered: false,
+    /**
+     * 页面已有答案时是否纠正错误答案：
+     *   true  = 先判定，再把页面答案与 AI 结论比对，不一致才重做（答对就跳过）
+     *   false = 一律跳过，不碰页面上已有的作答
+     * 关掉 overwriteAnswered 才生效。以前这个键只被 `Cfg.get` 读取、默认配置里没有，
+     * 且判定后从不回比，导致"答对也重写"。
+     */
+    fixWrong: true,
     /** 每题操作后立即点该题的"保存" */
     saveEach: false,
     /** 全部答完后自动交卷（危险，默认关闭） */
     autoSubmit: false,
+    /** 自动交卷的正式键（面板写 submit，旧版写 autoSubmit，两个都认） */
+    submit: false,
     /** 清掉与目标答案不一致的已选选项 */
     clearExtra: true,
     /** 输入框走键盘序列而非直接赋值（兼容富文本） */
     instantType: false,
     /** 点击后等待选中态生效的毫秒数 */
     verifyMs: 1100,
+    /** 点完选项/保存后的静默等待（毫秒）：给页面自己的 AJAX 落库留窗口 */
+    settleMs: 900,
     /** 落盘失败时的重试次数（页面重绘后元素引用会失效） */
     retries: 2,
     /** 重试仍失败就停下来等人工处理，不要带着空题往下翻 */
-    stopOnFail: true
+    stopOnFail: true,
+    /**
+     * 低置信度/本地兜底猜出来的答案是否也写进页面。
+     * 默认关：这类题只标黄、不落盘，等人确认（猜错会直接算错，比空着更糟）。
+     */
+    allowGuess: false
   },
   /** 主循环 */
   engine: {
@@ -269,22 +276,6 @@ CXAI.DEFAULT_CONFIG = {
     /** 预取开始前的等待，等题块稳定 */
     prefetchDelayMs: 2000
   },
-  antiDetect: {
-    /** 屏蔽切屏/失焦监控（visibilitychange、blur、mouseleave 等） */
-    blockVisibility: true,
-    blockBlur: true,
-    blockFocusLoss: true,
-    /** 解除复制/粘贴/右键/选择限制 */
-    unblockCopy: true,
-    /** 页面持续保持"已聚焦"状态 */
-    keepFocus: true,
-    /** 空闲时模拟真人鼠标微动 */
-    mouseJitter: true,
-    /** 摄像头抓拍时输出静态占位画面（避免被拍到） */
-    fakeCamera: false,
-    /** 屏蔽键盘监听（防按键行为分析） */
-    blockKeyboardSpy: false
-  },
   ui: {
     x: 24,
     y: 96,
@@ -302,7 +293,16 @@ CXAI.DEFAULT_CONFIG = {
     /** 打开 inlineResult 时是否连"依据/票/页面比对"一起显示（默认只显示一行） */
     inlineResultDetail: false,
     /** 同步失败原因在面板顶部保留多久（毫秒），0 = 一直留到下次同步 */
-    syncFailMs: 180000
+    syncFailMs: 180000,
+    /** 控制台最多保留多少行日志（超出丢最旧的） */
+    logMax: 300,
+    /** 云同步服务地址；留空 = 用默认 Pages Function */
+    syncAPI: '',
+    /**
+     * 进考试页时云端配置是否强制覆盖本地。
+     * 默认 false：本地已有模型时不再 pull，避免在考试页面板里改的设置下次加载被云端旧配置冲掉。
+     */
+    forcePull: false
   }
 };
 
@@ -338,6 +338,38 @@ CXAI.U = {
       }
     }
     return out;
+  },
+  /**
+   * 按默认配置的类型归一（以默认值为准）：
+   *   - 数字字段里出现字符串/注入片段 → 折回数字或默认值；
+   *   - 布尔字段的 "false"/"true" 字符串 → 布尔；
+   *   - 未知键原样保留（syncAPI / syncEnabled 这类运行期新增项）。
+   * 为什么要做：设置中心把数值直接拼进 `value="${...}"`，而配置可以来自导入的 JSON /
+   * 同步码 / URL hash。不做类型归一，一份形如 `"panelSize":"1\\" onfocus=..."` 的配置
+   * 就能在设置页（油猴权限域）里执行脚本。
+   */
+  coerceLike(def, cur) {
+    if (cur === undefined) return def;
+    if (def == null) return cur;
+    if (typeof def === 'number') {
+      const n = Number(cur);
+      return isFinite(n) ? n : def;
+    }
+    if (typeof def === 'boolean') {
+      if (cur === 'true' || cur === '1' || cur === 1) return true;
+      if (cur === 'false' || cur === '0' || cur === 0) return false;
+      return !!cur;
+    }
+    if (typeof def === 'string') return cur == null ? def : String(cur);
+    if (Array.isArray(def)) return Array.isArray(cur) ? cur : def;
+    if (typeof def === 'object') {
+      const out = Object.assign({}, cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : {});
+      Object.keys(def).forEach((k) => {
+        out[k] = CXAI.U.coerceLike(def[k], out[k]);
+      });
+      return out;
+    }
+    return cur;
   },
   deepGet(obj, path, fallback) {
     const parts = String(path).split('.');
@@ -614,7 +646,7 @@ CXAI.Cfg = {
   data: null,
   load() {
     const saved = CXAI.Store.get(CXAI.CONFIG_KEY, null);
-    const data = CXAI.U.mergeDeep(
+    let data = CXAI.U.mergeDeep(
       JSON.parse(JSON.stringify(CXAI.DEFAULT_CONFIG)),
       saved && typeof saved === 'object' ? saved : {}
     );
@@ -622,6 +654,8 @@ CXAI.Cfg = {
     if (typeof data.ai.vision === 'boolean') {
       data.ai.vision = Object.assign({}, CXAI.DEFAULT_CONFIG.ai.vision, { enabled: data.ai.vision });
     }
+    // 类型归一必须在迁移之后：默认 ai.vision 是对象，直接 coerce 会吞掉老配置的布尔值
+    data = CXAI.U.coerceLike(CXAI.DEFAULT_CONFIG, data);
     if (!data.ai.vision || typeof data.ai.vision !== 'object') {
       data.ai.vision = JSON.parse(JSON.stringify(CXAI.DEFAULT_CONFIG.ai.vision));
     }

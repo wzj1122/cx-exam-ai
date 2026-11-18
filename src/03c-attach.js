@@ -380,7 +380,14 @@
   }
 
   function pdfLib() {
-    const lib = window.pdfjsLib;
+    // 油猴沙箱里页面全局要经 unsafeWindow 取，直接读 window.pdfjsLib 永远是 undefined
+    let lib = null;
+    try {
+      const w = typeof unsafeWindow !== 'undefined' && unsafeWindow ? unsafeWindow : null;
+      lib = (w && w.pdfjsLib) || window.pdfjsLib;
+    } catch (e) {
+      lib = window.pdfjsLib;
+    }
     if (!lib || typeof lib.getDocument !== 'function') return null;
     try {
       if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {

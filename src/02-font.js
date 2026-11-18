@@ -27,7 +27,10 @@ CXAI.Font = (function () {
   /** 密文字 -> 真实字，进程内终身复用 */
   const map = Object.create(null);
   let crackJob = null;
-  let crackFailed = false;
+  // 失败不永久放弃：首次进考试页网络抖动很常见，60 秒后允许再试一次，
+  // 否则整场考试的加密字体题都会以乱码送给模型。0 = 未失败。
+  let crackFailedAt = 0;
+  const CRACK_RETRY_MS = 60 * 1000;
 
   function getCanvas() {
     if (!renderCv) {
@@ -58,6 +61,7 @@ CXAI.Font = (function () {
   }
 
   function parseRefTable(buf) {
+    if (!buf || buf.byteLength < 20) throw new Error('特征表数据为空或过短');
     const dv = new DataView(buf);
     const magic = String.fromCharCode(dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3));
     if (magic !== 'FRB2') throw new Error('特征表格式无效: ' + magic);
@@ -65,6 +69,13 @@ CXAI.Font = (function () {
     const threshold = dv.getUint32(8, true);
     const gc = dv.getUint32(12, true);
     const gf = dv.getUint32(16, true);
+    // 头字段来自缓存/网络，必须校验：被截断的缓存不校验长度时会解析出全零特征，
+    // 然后稳定地把所有字匹配错（比"解密失败"更隐蔽）。
+    if (!count || count > 50000 || !gc || !gf || gc > 128 || gf > 128 || gc % 8 !== 0 || gf % 8 !== 0) {
+      throw new Error('特征表头异常：count=' + count + ' gc=' + gc + ' gf=' + gf);
+    }
+    const need = 20 + count * 4 + (count * (gc * gc + gf * gf)) / 8;
+    if (buf.byteLength < need) throw new Error('特征表数据不完整（' + buf.byteLength + '/' + Math.ceil(need) + ' 字节）');
     const cps = new Uint32Array(count);
     let off = 20;
     for (let i = 0; i < count; i++, off += 4) cps[i] = dv.getUint32(off, true);
@@ -391,8 +402,17 @@ CXAI.Font = (function () {
 
   /** 原地改写文本节点（不动 HTML 结构，避免破坏事件绑定） */
   function decryptElements(els) {
+    const NF =
+      (typeof document !== 'undefined' && document.defaultView && document.defaultView.NodeFilter) ||
+      (typeof NodeFilter !== 'undefined' ? NodeFilter : null);
+    if (!NF) return;
     for (const root of els) {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      let walker;
+      try {
+        walker = document.createTreeWalker(root, NF.SHOW_TEXT, null);
+      } catch (e) {
+        continue;
+      }
       const nodes = [];
       while (walker.nextNode()) nodes.push(walker.currentNode);
       for (const node of nodes) {
@@ -409,22 +429,26 @@ CXAI.Font = (function () {
    */
   async function ensure(doc) {
     doc = doc || document;
-    if (crackFailed) return;
+    if (crackFailedAt && Date.now() - crackFailedAt < CRACK_RETRY_MS) return;
     const els = Array.from(doc.querySelectorAll(CX_SELECTOR));
     if (els.length === 0) return;
 
     if (Object.keys(map).length === 0) {
-      if (!crackJob) crackJob = crackOnce(doc).catch((e) => {
-        crackFailed = true;
-        CXAI.Log.error('字形解密失败：' + e.message);
-        return null;
-      });
+      if (!crackJob) {
+        crackJob = crackOnce(doc).catch((e) => {
+          crackFailedAt = Date.now();
+          crackJob = null;
+          CXAI.Log.error('字形解密失败（60 秒后可重试）：' + e.message);
+          return null;
+        });
+      }
       const res = await crackJob;
       if (!res) {
         crackJob = null;
         return;
       }
       Object.assign(map, res);
+      crackFailedAt = 0;
     }
     decryptElements(els);
     // 移除标记，保证 getSecret 不再命中（天然幂等）

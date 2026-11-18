@@ -75,12 +75,30 @@ CXAI.Engine = (function () {
    * 所以把图片地址也拼进去；有 qid 的再加一道 qid 兜底。
    */
   function cacheKey(q) {
-    const imgs = (q.images || []).join(',');
+    // 图片地址可能是附件题内联的 data URL（几百 KB/张），整串拼进 Map 键会白白吃内存，
+    // 这里只取"长度 + 首尾片段"当指纹。qid 是硬身份，必须带上：共用选项 / 纯图片题
+    // 的题干与选项文字可能完全一样，不带 qid 会互相命中缓存（一道题的答案套到另一道）。
+    const imgs = (q.images || [])
+      .map((u) => {
+        const s = String(u || '');
+        return s.length > 200 ? s.length + ':' + s.slice(0, 40) + ':' + s.slice(-40) : s;
+      })
+      .join(',');
     return [
+      q.qid ? 'qid:' + q.qid : '',
       CXAI.U.normText(q.stem || ''),
       (q.options || []).map((o) => CXAI.U.normText(o.text || '')).join('|'),
       imgs
     ].join('||');
+  }
+
+  /** 面板清单的行主键：qid 优先，否则用题干+选项+图片指纹（同题干不同题不再合并成一行） */
+  function rowKeyOf(q) {
+    if (q.qid) return 'qid:' + q.qid;
+    const opts = (q.options || []).map((o) => CXAI.U.normText(o.text || '')).join('|');
+    const imgs = (q.images || []).map((u) => String(u).slice(0, 24)).join(',');
+    const raw = [CXAI.U.normText(q.stem || '').slice(0, 60), opts, imgs].filter(Boolean).join('|');
+    return 'stem:' + (raw || 'i' + (Number(q.index) || 0));
   }
 
   /* ---------------- 单题处理 ---------------- */
@@ -96,6 +114,53 @@ CXAI.Engine = (function () {
     } catch (e) {
       return q;
     }
+  }
+
+  /**
+   * 页面已有答案是否与判定结果一致。
+   * 选择题比字母集合（判断题的 true/false 已由 pageValue 折成字母）；
+   * 文本题比归一化后的包含关系（页面可能只截取/多写了前后缀）。
+   */
+  function sameAnswer(q, result, live) {
+    if (!result) return false;
+    const norm = (v) => CXAI.U.normText(String(v == null ? '' : v).replace(/<[^>]+>/g, ' '));
+    const textType = q.type === 'completion' || (CXAI.AI.isTextType && CXAI.AI.isTextType(q));
+    if (textType) {
+      const a = norm(result.answerText);
+      const b = norm(live);
+      return !!a && !!b && (b.indexOf(a) >= 0 || a.indexOf(b) >= 0);
+    }
+    const keys =
+      result.keys && result.keys.length
+        ? result.keys
+        : ((CXAI.AI.resolveAnswerKeys(result.answerText, q) || {}).keys || []);
+    const ai = keys.join('');
+    return !!ai && ai.split('').sort().join('') === String(live).split('').sort().join('');
+  }
+
+  /**
+   * 加密字体（font-cxsecret）：先把密文还原，再重新抓一次题。
+   * 之前 02-font 只在模块里导出、主链路从未调用，于是密文（私用区字符）原样送模型。
+   */
+  async function decryptIfNeeded(q) {
+    try {
+      if (!CXAI.Font || !CXAI.Font.hasSecret || !CXAI.Font.hasSecret(document)) return q;
+      await CXAI.Font.ensure(document);
+      const list = (CXAI.Scraper.collect() || {}).questions || [];
+      let hit = CXAI.Scraper.pickSame(list, q);
+      // 解密后题干/选项文字全变了，pickSame 可能认不回来：按位置兜底（collect 的 index 是顺序号）
+      if (!hit && isFinite(Number(q.index)) && list[Number(q.index)] && list[Number(q.index)].index === Number(q.index)) {
+        hit = list[Number(q.index)];
+      }
+      if (hit) {
+        hit.index = q.index;
+        hit.no = q.no;
+        return hit;
+      }
+    } catch (e) {
+      CXAI.Log.warn('字形解密失败，按原文判题：' + (e && e.message ? e.message : e));
+    }
+    return q;
   }
 
   /** 把一道题的结论写进面板清单（跨页持久化），同时读回页面真实选中态做对比 */
@@ -120,8 +185,8 @@ CXAI.Engine = (function () {
         shellLabel: q.shellLabel || '',
         confidenceLow: !!(result && result.lowConfidence),
         status: status,
-        // 用题号（qid）当主键：同一道题翻回来还是同一行，不会堆成两条
-        key: q.qid ? 'qid:' + q.qid : 'stem:' + (CXAI.U.normText(q.stem || '').slice(0, 40) || 'i' + (Number(q.index) || 0))
+        // 用题号（qid）或"题干+选项"指纹当主键：同一道题翻回来还是同一行，不会堆成两条
+        key: rowKeyOf(q)
       });
     } catch (e) {}
   }
@@ -145,7 +210,9 @@ CXAI.Engine = (function () {
     if (!q || !result) return;
     try {
       const all = readAnswers();
-      const id = q.qid || CXAI.U.normText(q.stem || '').slice(0, 40);
+      // 与 cacheKey 完全一致：qid/题干/选项/图片指纹一起参与。
+      // 旧实现只取题干前 40 字，两道同题干不同选项的题会互相覆盖答案。
+      const id = cacheKey(q);
       if (!id) return;
       all[id] = {
         keys: (result.keys || []).slice(),
@@ -157,6 +224,14 @@ CXAI.Engine = (function () {
         no: q.no || 0,
         at: Date.now()
       };
+      // 长期使用会无限增长（localStorage 只有 5MB）；只保留最近 400 题
+      const ids = Object.keys(all);
+      if (ids.length > 400) {
+        ids
+          .sort((a, b) => (Number(all[a] && all[a].at) || 0) - (Number(all[b] && all[b].at) || 0))
+          .slice(0, ids.length - 400)
+          .forEach((k) => delete all[k]);
+      }
       CXAI.Store.set(ANSWERS_KEY, all);
     } catch (e) {}
   }
@@ -164,7 +239,7 @@ CXAI.Engine = (function () {
   function cachedAnswer(q) {
     try {
       const all = readAnswers();
-      const id = q.qid || CXAI.U.normText(q.stem || '').slice(0, 40);
+      const id = cacheKey(q);
       const hit = id && all[id];
       if (!hit || !hit.answerText) return null;
       return Object.assign({ votes: [], ratio: null }, hit, { stage: 'stored' });
@@ -190,14 +265,17 @@ CXAI.Engine = (function () {
 
   async function handleQuestion(q, pageKind) {
     const overwrite = CXAI.Cfg.get('apply.overwriteAnswered', false);
+    // 加密字体：等解密完成再读题，否则题干/选项是私用区乱码
+    q = await decryptIfNeeded(q);
     try {
       if (CXAI.Mark) CXAI.Mark.pending(q);
     } catch (e) {}
     const no = q.no || (Number(q.index) || 0) + 1;
     const liveBefore = (CXAI.Scraper.pageValue(q) || {}).value || '';
 
-    // 页面已经答过、又不想覆盖时，先看是否"答错了"：答错才重做（apply.fixWrong 默认开），
-    // 答对就跳过。之前是一律跳过，于是上一轮写错的 ACD 永远修不回来。
+    // 页面已经答过、又不想覆盖时：答对了就跳过，答错了才重做（apply.fixWrong 默认开）。
+    // 关键：如果此刻还没有判定结果，必须**先判题再用判题结果比对** ——
+    // 旧实现在 result 为空时直接往下走并重写，等于把页面上已经答对的题也覆盖掉。
     const fixWrong = CXAI.Cfg.get('apply.fixWrong', true);
 
     const ck = cacheKey(q);
@@ -217,21 +295,10 @@ CXAI.Engine = (function () {
       }
     }
 
-    // 判断题页面存 true/false，AI 给 A/B：比较前统一折算成字母串
-    const aiKeys = result
-      ? ((result.keys && result.keys.length)
-          ? result.keys.join('')
-          : (CXAI.AI.resolveAnswerKeys(result.answerText, q).keys || []).join(''))
-      : '';
     if (q.answered && !overwrite) {
-      const norm = (v) => CXAI.U.normText(String(v == null ? '' : v).replace(/<[^>]+>/g, ' '));
-      // 选择题比字母串；填空/简答比文本（两边都洗成纯文本再比）
-      const same = q.type === 'completion'
-        ? !!result && !!norm(result.answerText) && (norm(liveBefore).indexOf(norm(result.answerText)) >= 0 || norm(result.answerText).indexOf(norm(liveBefore)) >= 0)
-        : (!!aiKeys && aiKeys.split('').sort().join('') === String(liveBefore).split('').sort().join(''));
-      if (same || !fixWrong) {
+      const skipIt = (why) => {
         st.skipped++;
-        CXAI.Log.info(`#${no} 已答（页面：${liveBefore || '-'}），跳过`);
+        CXAI.Log.info(`#${no} ${why}（页面：${liveBefore || '-'}），跳过`);
         try {
           if (CXAI.Mark) CXAI.Mark.existing(q, liveBefore);
         } catch (e) {}
@@ -239,8 +306,11 @@ CXAI.Engine = (function () {
         CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
         saveSession(true);
         return { q, skipped: true };
-      }
-      CXAI.Log.warn(`#${no} 页面答案是 ${liveBefore}，与判定 ${result ? result.answerText : '(待判)'} 不一致，重做这题`);
+      };
+      if (result && sameAnswer(q, result, liveBefore)) return skipIt('已答且与判定一致');
+      if (!fixWrong) return skipIt('已答');
+      if (result) CXAI.Log.warn(`#${no} 页面答案是 ${liveBefore}，与判定 ${result.answerText} 不一致，重做这题`);
+      // result 为空：先判题，判完在下面对比（不在这里重写）
     }
 
     if (!result) {
@@ -265,8 +335,38 @@ CXAI.Engine = (function () {
       }
     }
 
+    // 判完再和页面答案比：一致就不要再写一遍（fixWrong 只纠正错误答案）
+    if (q.answered && !overwrite && fixWrong) {
+      const liveNow = (CXAI.Scraper.pageValue(q) || {}).value || liveBefore;
+      if (sameAnswer(q, result, liveNow)) {
+        st.skipped++;
+        CXAI.Log.info(`#${no} 判定结果与页面答案一致（${liveNow || '-'}），不重写`);
+        try {
+          if (CXAI.Mark) CXAI.Mark.existing(q, liveNow);
+        } catch (e) {}
+        recordQ(q, result, { ok: true }, 'skip');
+        CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
+        saveSession(true);
+        return { q, skipped: true };
+      }
+    }
+
+    // 低置信度 / 本地兜底（stage=heuristic，按首选项猜）不自动落盘：
+    // 猜出来的答案写上去比空着更危险，README 承诺的是"标黄复核"。
+    // 需要"宁可写错也别空着"的人可以在设置里打开 apply.allowGuess。
+    if (result && result.lowConfidence && !CXAI.Cfg.get('apply.allowGuess', false)) {
+      st.failed++;
+      CXAI.Log.warn(`#${no} 置信度不足（${Math.round((result.confidence || 0) * 100)}%），不自动写入；答案在面板里，请人工确认`);
+      try {
+        if (CXAI.Mark) CXAI.Mark.failed(q, '置信度不足，需人工确认', result);
+      } catch (e) {}
+      recordQ(q, result, { ok: false, manual: true, error: '低置信度' }, 'manual');
+      CXAI.UI.update({ done: appliedCount() + st.skipped, total: st.total });
+      saveSession(true);
+      return { q, manual: true };
+    }
+
     await waitIfPaused();
-    // 重试：每次重试都重新取元素引用（页面重绘是最常见的失败原因）
     const retries = Math.max(0, Number(CXAI.Cfg.get('apply.retries', 2)) || 0);
     let applied = { ok: false, error: '未执行' };
     for (let attempt = 0; attempt <= retries; attempt++) {
@@ -286,15 +386,22 @@ CXAI.Engine = (function () {
         CXAI.Log.error(`#${no} 写入失败：${applied.error || '未知'}（答案 ${result.answerText}｜页面 ${live || '空'}）`);
       }
       if (applied.dom) CXAI.Log.warn(`选项结构：${applied.dom}`);
-      if (!applied.manual && CXAI.Cfg.get('apply.stopOnFail', true)) {
-        st.haltReason = '写入失败';
+      if ((!applied.manual || applied.partial) && CXAI.Cfg.get('apply.stopOnFail', true)) {
+        st.haltReason = applied.partial ? '只写了一部分' : '写入失败';
         st.paused = true;
-        CXAI.Log.warn('已暂停：这题没写进去，继续翻页会漏题。手动选好后在面板点「继续」');
+        CXAI.Log.warn(
+          applied.partial
+            ? '已暂停：这题只写进去一部分（' + applied.filled + '/' + applied.total + '），剩下请手动画好再点「继续」'
+            : '已暂停：这题没写进去，继续翻页会漏题。手动选好后在面板点「继续」'
+        );
       }
     } else {
       CXAI.Log.ok(
         `#${no} 已填 ${CXAI.U.escapeHtml(result.answerText)} · 页面 ${live || '?'} · ${Math.round((result.confidence || 0) * 100)}% · ${result.stage}`
       );
+      if (applied.partial) {
+        CXAI.Log.warn(`#${no} 只写进了 ${applied.filled}/${applied.total} 个空，剩余请人工核对`);
+      }
     }
 
     // 落盘策略：整卷预览 / 章节测验里每道填空·简答都有自己的「保存」按钮，
@@ -359,7 +466,12 @@ CXAI.Engine = (function () {
       await waitIfPaused();
       // DOM 可能被页面重绘，逐题重新取一次引用
       const fresh = CXAI.Scraper.collect().questions;
-      const q = fresh[i] || questions[i];
+      // 重排后下标会指向别的题：先按 qid/题干找回原来那道，找回失败才退回下标
+      let q = null;
+      try {
+        q = CXAI.Scraper.pickSame(fresh, questions[i]) || null;
+      } catch (e) {}
+      if (!q) q = fresh[i] || questions[i];
       if (!q) continue;
       try {
         await handleQuestion(q, page.kind);
@@ -494,7 +606,10 @@ CXAI.Engine = (function () {
       q.no = CXAI.Scraper.currentIndex() || (st.baseDone + iter + 1);
       st.cursor = q.no;
       // 同一道题反复出现 = 翻页在来回弹（典型原因：抓到了"上一题"按钮）
-      const vkey = q.qid || CXAI.U.normText(q.stem).slice(0, 60) || '#' + iter;
+      // 纯图片题的题干为空：必须把图片指纹拼进 key，否则每轮 key 都不同，判重永远不触发
+      const imgSig = (q.images || []).map((u) => String(u).slice(-24)).join(',');
+      const vkey =
+        q.qid || [CXAI.U.normText(q.stem).slice(0, 60), imgSig].filter(Boolean).join('|') || '#' + iter;
       st.visited = st.visited || {};
       st.visited[vkey] = (Number(st.visited[vkey]) || 0) + 1;
       if (st.visited[vkey] > 3) {
@@ -511,6 +626,9 @@ CXAI.Engine = (function () {
         if (e.message === '__STOPPED__') throw e;
         CXAI.Log.error(`第 ${q.no} 题异常：${e.message}`);
       }
+      // 写入失败会自动暂停（stopOnFail）：暂停期间绝不能翻页，否则这题就漏了。
+      // 旧实现只在下一次循环开头等，结果先翻了一页才发现已暂停。
+      await waitIfPaused();
       await sleep(CXAI.Guard.pace(iter));
       // 翻页前留落库窗口：超星在换题时会重建题目区，抢在它保存之前换题就丢答案。
       await CXAI.Apply.settle(q);
@@ -599,14 +717,27 @@ CXAI.Engine = (function () {
     const whole = questions.length > 1;
     const overwrite = CXAI.Cfg.get('apply.overwriteAnswered', false);
     const isEmpty = (q) => !((CXAI.Scraper.pageValue(q) || {}).value || '');
-    const next = overwrite ? questions[0] : questions.filter(isEmpty)[0];
+    // overwrite 模式也要往下走：按 st.nextIdx 轮转找"这次还没答过的题"，
+    // 旧实现 overwrite ? questions[0] 会永远卡在第一题。
+    const doneIds = {};
+    (st.results || []).forEach((r) => {
+      if (r && r.qid) doneIds[r.qid] = 1;
+    });
+    const total = questions.length;
+    const startAt = Math.max(0, Math.min(Number(st.nextIdx) || 0, total - 1));
+    const ordered = questions.slice(startAt).concat(questions.slice(0, startAt));
+    const next = overwrite
+      ? ordered.filter((q) => !q.qid || !doneIds[q.qid])[0] || ordered[0]
+      : questions.filter(isEmpty)[0];
     if (!next) {
       CXAI.Log.ok('这一页的题都已经有答案了');
       CXAI.UI.update({ doneAll: true });
       return { ok: true, reason: 'all-answered', left: 0 };
     }
-    const q = next;
-    q.no = whole ? questions.indexOf(q) + 1 : (CXAI.Scraper.currentIndex() || 1);
+    const pos = questions.indexOf(next);
+    let q = next;
+    q = await decryptIfNeeded(q);
+    q.no = whole ? (pos >= 0 ? pos + 1 : (Number(q.index) || 0) + 1) : (CXAI.Scraper.currentIndex() || 1);
     CXAI.UI.update({ current: q.no });
 
     let result = stemResult(q) || cachedAnswer(q) || (st.cache.has(cacheKey(q)) ? st.cache.get(cacheKey(q)) : null);
@@ -614,9 +745,16 @@ CXAI.Engine = (function () {
       CXAI.Log.info(`#${q.no} 用已缓存的判定 ${result.answerText}`);
     } else {
       CXAI.Log.info(`#${q.no} 现场判定 · ${q.typeLabel} · ${CXAI.U.truncate(q.stem || '', 30)}`);
-      result = await CXAI.AI.solve(q);
-      saveAnswer(q, result);
-      st.cache.set(cacheKey(q), result);
+      try {
+        result = await CXAI.AI.solve(q);
+        saveAnswer(q, result);
+        st.cache.set(cacheKey(q), result);
+      } catch (e) {
+        const msg = e && e.message ? e.message : String(e);
+        CXAI.Log.error(`#${q.no} 判定失败：${msg}`);
+        recordQ(q, { answerText: '', reason: msg }, { ok: false, error: msg }, 'fail');
+        return { ok: false, q: q.no, error: msg };
+      }
     }
 
     const applied = await CXAI.Apply.apply(q, result);
@@ -634,8 +772,19 @@ CXAI.Engine = (function () {
     CXAI.UI.update({ doneAll: false });
     if (applied && applied.ok) {
       CXAI.Log.ok(`#${q.no} 已填 ${CXAI.U.escapeHtml(result.answerText)} · 页面 ${live || '?'}`);
+      if (applied.partial) CXAI.Log.warn(`#${q.no} 只填了 ${applied.filled}/${applied.total} 个空，其余请人工核对`);
     } else {
       CXAI.Log.error(`#${q.no} 写入失败：${applied && applied.error}`);
+    }
+    // 整卷/预览里的填空·简答：每题都有自己的「保存」按钮，不点会在页面重绘时丢内容
+    if (whole && applied && applied.ok) {
+      const hasInput = !!(q.inputs && q.inputs.some((el) => el && el.isConnected));
+      const blankLike =
+        hasInput || q.type === 'completion' || /填空|简答|论述|名词解释|计算题/.test(String(q.typeLabel || ''));
+      if (blankLike) {
+        const saved = await CXAI.Apply.saveOne(q);
+        if (!saved) CXAI.Log.warn(`#${q.no} 没找到该题的「保存」按钮，内容可能会丢`);
+      }
     }
     // 整卷/预览：把这题滚到视野里，方便你看着它落盘
     if (whole && q.root && q.root.scrollIntoView) {
@@ -643,8 +792,13 @@ CXAI.Engine = (function () {
         q.root.scrollIntoView({ block: 'center', behavior: 'smooth' });
       } catch (e) {}
     }
-    // 单题页：答完翻到下一题，下一次点击继续
+    // 单题页：答完翻到下一题，下一次点击继续。
+    // 没写进去就**不要翻页** —— 翻走等于这题丢答案（旧行为是照样翻）。
     if (!whole && opt.advance !== false && page.mode === 'single') {
+      if (!(applied && applied.ok)) {
+        CXAI.Log.warn(`#${q.no} 没有落盘，先不翻页；手动补好后再点一次小球`);
+        return { ok: false, q: q.no, left: CXAI.Scraper.collect().questions.filter(isEmpty).length };
+      }
       await CXAI.Apply.settle(q);
       const sn = await softNext();
       if (sn.ok) {
@@ -657,6 +811,8 @@ CXAI.Engine = (function () {
         CXAI.Scraper.clickNext();
       }
     }
+    // 记住下一题的位置，overwrite 模式下"答一题"才会依次往下走
+    if (applied && applied.ok) st.nextIdx = total ? (pos + 1) % total : 0;
     const left = CXAI.Scraper.collect().questions.filter(isEmpty).length;
     if (!left) CXAI.UI.update({ doneAll: true, running: false });
     return { ok: !!(applied && applied.ok), q: q.no, left };
@@ -693,8 +849,9 @@ CXAI.Engine = (function () {
     let stopped = false;
     const worker = async () => {
       while (queue.length && !stopped && !st.stopped) {
-        const q = queue.shift();
+        let q = queue.shift();
         try {
+          q = await decryptIfNeeded(q);
           const r = await CXAI.AI.solve(q);
           saveAnswer(q, r);
           st.cache.set(cacheKey(q), r);
@@ -742,7 +899,7 @@ CXAI.Engine = (function () {
         const pv = (CXAI.Scraper.pageValue(q) || {}).value || '';
         if (!pv) return;
         const no = whole ? i + 1 : base + 1;
-        const rowKey = q.qid ? 'qid:' + q.qid : 'stem:' + (CXAI.U.normText(q.stem || '').slice(0, 40));
+        const rowKey = rowKeyOf(q);
         const prev = existing[rowKey];
         if (prev && prev.answer) return; // 留着 AI 的结论
         try {
@@ -818,6 +975,29 @@ CXAI.Engine = (function () {
     if (st.stopped) return;
     await CXAI.Apply.humanClick(btn, { nativeFallback: true });
     CXAI.Log.ok('已点击交卷');
+    // 点完交卷还会弹一次"确认提交"：等最多 8 秒，只在明确的确认按钮上点，
+    // 不再把时序完全交给 Guard 的 10 秒延时。
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline) {
+      await sleep(600);
+      if (st.stopped) return;
+      let okBtn = null;
+      try {
+        okBtn = Array.from(
+          document.querySelectorAll('.layui-layer-btn a, .dialog-btn, [class*="confirm"] a, [class*="confirm"] button')
+        ).filter((el) => {
+          const t = (el.textContent || '').trim();
+          return /^(确定|确认|是|提交|交卷)$/.test(t);
+        })[0];
+      } catch (e) {}
+      if (okBtn) {
+        try {
+          okBtn.click();
+          CXAI.Log.ok('已确认交卷弹窗');
+        } catch (e) {}
+        return;
+      }
+    }
   }
 
   /* ---------------- 对外 ---------------- */
@@ -835,6 +1015,7 @@ CXAI.Engine = (function () {
     st.stopped = false;
     st.paused = false;
     st.cursor = 0;
+    st.nextIdx = 0;
     // 整页导航会把内存清零，续跑时把上一页的累计进度接回来
     st.baseDone = 0;
     try {
@@ -1012,6 +1193,9 @@ CXAI.Engine = (function () {
     return true;
   }
 
+  /** 题块可能晚于 DOMContentLoaded 才由 ajax 渲染：给入口留一个短暂的重试窗口 */
+  let bootRetry = null;
+
   function ready() {
     try {
       // 设置中心「同步到学习通」带过来的配置码：先落库，再走正常流程
@@ -1037,6 +1221,29 @@ CXAI.Engine = (function () {
         }
       })();
       if (!gate || !gate.answerable) {
+        // 超星的题块经常在 DOMContentLoaded 之后才回填。旧实现在这里直接 return，
+        // 于是"脚本有时出现、有时完全不见"（尤其整卷预览/章节页）。
+        // 只对考试/作业类 URL 重试，课程首页等页面不空转。
+        const href = String(location.href || '');
+        const examish = /\/exam|\/work\/|dowork|doHomeWork|homework|mooc2\/exam|exam-ans/i.test(href);
+        if (!bootRetry) {
+          bootRetry = {
+            deadline: Date.now() + (Number(CXAI.Cfg.get('engine.bootstrapPollMs', 15000)) || 15000),
+            first: true
+          };
+        }
+        if (!gate || !gate.finished) {
+          if (examish && Date.now() < bootRetry.deadline) {
+            if (bootRetry.first) {
+              bootRetry.first = false;
+              try {
+                CXAI.Log.info('考试页题目还没渲染出来，等待题块出现…');
+              } catch (e) {}
+            }
+            setTimeout(ready, 400);
+            return;
+          }
+        }
         try {
           console.log(
             '[CX-AI] 当前页面不是考试作答页，脚本不出现：' +
@@ -1045,6 +1252,7 @@ CXAI.Engine = (function () {
         } catch (e) {}
         return;
       }
+      bootRetry = null;
       CXAI.Cfg.load();
       if (CXAI.Cfg.get('guard.enabled', true)) CXAI.Guard.install();
       CXAI.UI.mount();
@@ -1089,6 +1297,16 @@ CXAI.Engine = (function () {
             // 每题下方先挂"待作答"，后面的判定结果直接替换这一块
             try {
               if (CXAI.Mark) CXAI.Mark.attachAll(CXAI.Scraper.collect().questions);
+            } catch (e) {}
+            // 加密字体（font-cxsecret）：后台先解出字形映射，抓题/预取都会走它
+            try {
+              if (CXAI.Font && CXAI.Font.hasSecret(document)) {
+                CXAI.Font.ensure(document).then(function () {
+                  try {
+                    CXAI.Engine.primeFromPage();
+                  } catch (e) {}
+                });
+              }
             } catch (e) {}
             // 后台预取：先把答案判好缓存下来，之后点小球就是"读缓存 + 落盘"，几乎不用等
             try {

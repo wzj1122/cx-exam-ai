@@ -756,7 +756,7 @@ CXAI.Settings = (function () {
 
   function num(path, value, min, max, step, label, hint) {
     return `<div class="cs-fld"><label>${esc(label)}</label>
-      <input class="cs-in" type="number"${min != null ? ' min="' + min + '"' : ''}${max != null ? ' max="' + max + '"' : ''}${step ? ' step="' + step + '"' : ''} data-path="${path}" value="${value}">
+      <input class="cs-in" type="number"${min != null ? ' min="' + min + '"' : ''}${max != null ? ' max="' + max + '"' : ''}${step ? ' step="' + step + '"' : ''} data-path="${path}" value="${esc(value)}">
       ${hint ? '<div class="hint">' + esc(hint) + '</div>' : ''}</div>`;
   }
 
@@ -793,13 +793,11 @@ CXAI.Settings = (function () {
 
   <div class="cs-line"></div>
   <div class="cs-grid g3">
-    ${chk('answer.humanize', a.humanize, '拟人化点选', '完整指针事件 + 随机坐标/延迟')}
-    ${chk('answer.fillText', a.fillText !== false, '自动填写填空/简答')}
-    ${chk('answer.skipAnswered', a.skipAnswered !== false, '跳过已作答的题')}
-    ${chk('answer.autoNext', a.autoNext !== false, '答完自动下一题')}
+    ${chk('apply.fixWrong', ap.fixWrong !== false, '已答题答错才重写', '默认开：先判题，与页面答案不一致才重做；关掉 = 已答一律不碰')}
+    ${chk('apply.allowGuess', ap.allowGuess === true, '低置信度也写入（不推荐）', '默认关：置信度不足的题只标黄，留给你确认')}
     ${chk('guard.enabled', g.enabled, '环境伪装总开关', '前台保持 + 自动确认弹窗 + 节奏控制')}
     ${chk('guard.autoConfirm', g.autoConfirm !== false, '自动点掉确认弹窗')}
-    ${chk('apply.overwriteAnswered', ap.overwriteAnswered, '重做已答题目')}
+    ${chk('apply.overwriteAnswered', ap.overwriteAnswered, '重做已答题目', '无视页面已有答案，全部重判重写（默认关）')}
     ${chk('apply.saveEach', ap.saveEach, '每题点保存')}
     ${chk('apply.clearExtra', ap.clearExtra !== false, '清掉与答案不符的已选项')}
     ${chk('apply.stopOnFail', ap.stopOnFail !== false, '落盘失败就停下等人处理')}
@@ -814,11 +812,13 @@ CXAI.Settings = (function () {
   </div>
   <div class="cs-grid" style="margin-top:10px">
     ${chk('apply.submit', ap.submit === true || ap.autoSubmit === true, '全部答完后自动交卷（慎用）')}
+    ${chk('ui.forcePull', cfg().ui.forcePull === true, '进考试页用云端配置覆盖本地', '默认关：本地改过的设置不会被云端旧配置冲掉')}
   </div>
 
   <div class="cs-line"></div>
   <div class="cs-grid g3">
     ${num('apply.verifyMs', ap.verifyMs == null ? 1100 : ap.verifyMs, 200, 5000, 100, '点后等选中态 (ms)')}
+    ${num('apply.settleMs', ap.settleMs == null ? 900 : ap.settleMs, 0, 5000, 100, '保存后等待 (ms)')}
     ${num('apply.retries', ap.retries == null ? 2 : ap.retries, 0, 5, 1, '落盘失败重试次数')}
     ${num('engine.resumeWindowMin', en.resumeWindowMin || 20, 1, 180, 1, '断点续跑有效期 (分钟)')}
   </div>
@@ -1431,8 +1431,12 @@ ${wizardSteps(3)}
     const p = ps[i];
     if (!p) return;
     if (field === 'enabled' || field === 'keyOptional') p[field] = !!raw;
-    else if (NUM_FIELDS[field]) p[field] = Number(raw) || (field === 'weight' ? 1 : 0);
-    else p[field] = raw;
+    else if (NUM_FIELDS[field]) {
+      // 空/非数字不写 0：maxTokens:0 会被原样发给端点，weight:0 会让这票失效
+      if (raw === '' || raw == null) return;
+      const n = Number(raw);
+      p[field] = isFinite(n) ? n : field === 'weight' ? 1 : 0;
+    } else p[field] = raw;
     // 预设一旦手改地址/模型名就不再是那个「预设」了，但保留 preset 字段用于显示
     if (field === 'baseURL' || field === 'model') {
       const best = detectPresetByURL(p.baseURL);
@@ -1462,7 +1466,14 @@ ${wizardSteps(3)}
   function readField(el) {
     const type = el.getAttribute('type') || '';
     if (type === 'checkbox') return el.checked;
-    if (type === 'number') return el.value === '' ? 0 : Number(el.value);
+    if (type === 'number') {
+      // 清空输入框不等于 0：返回 undefined，让调用方跳过写入、保留旧值。
+      // 以前返回 0，把超时/并发/图片尺寸等字段持久化成 0（请求会带 max_tokens:0）。
+      const raw = String(el.value == null ? '' : el.value).trim();
+      if (!raw) return undefined;
+      const n = Number(raw);
+      return isFinite(n) ? n : undefined;
+    }
     return el.value;
   }
 
@@ -1618,6 +1629,7 @@ ${wizardSteps(3)}
   async function fetchModels(i) {
     const p = (cfg().ai.providers || [])[i];
     if (!p) return;
+    const pid = p.id;
     S.busy['fetch' + i] = true;
     const btn = q('[data-act="fetch"][data-i="' + i + '"]');
     if (btn) {
@@ -1626,14 +1638,21 @@ ${wizardSteps(3)}
     }
     try {
       const list = await CXAI.AI.listModels(p);
-      S.models[p.id] = list || [];
+      S.models[pid] = list || [];
+      // await 期间用户可能上移 / 删除 / 新增模型：不能再用旧下标回写，按 id 重新定位
+      const idx = (cfg().ai.providers || []).findIndex((x) => x.id === pid);
+      if (idx < 0) {
+        toast('这个模型已被删除，拉取结果已丢弃', 'warn');
+        renderMain();
+        return;
+      }
       if (!list || !list.length) {
         toast('端点没返回模型清单，手填模型名即可', 'warn');
       } else {
         // 以拉取结果为准：模型名为空就自动填第一个，用户随时能从下拉里换
-        const blank = !String(((cfg().ai.providers || [])[i] || {}).model || '').trim();
+        const blank = !String(((cfg().ai.providers || [])[idx] || {}).model || '').trim();
         if (blank) {
-          updProvider(i, 'model', list[0].id);
+          updProvider(idx, 'model', list[0].id);
           toast('拉到 ' + list.length + ' 个，已选 ' + list[0].id, 'ok');
         } else {
           toast('拉到 ' + list.length + ' 个模型', 'ok');
@@ -1642,7 +1661,7 @@ ${wizardSteps(3)}
       renderMain();
     } catch (e) {
       toast('拉取失败：' + (e && e.message ? e.message : e), 'bad');
-      if (btn) {
+      if (btn && btn.isConnected !== false) {
         btn.disabled = false;
         btn.textContent = '拉取';
       }
@@ -1661,7 +1680,8 @@ ${wizardSteps(3)}
   async function testOne(i) {
     const p = (cfg().ai.providers || [])[i];
     if (!p) return;
-    const line = q('[data-testout="' + i + '"]');
+    const pid = p.id;
+    let line = q('[data-testout="' + i + '"]');
     const btn = q('[data-act="test-one"][data-i="' + i + '"]');
     if (btn) {
       btn.disabled = true;
@@ -1673,27 +1693,39 @@ ${wizardSteps(3)}
       const r = await CXAI.AI.ping(p);
       const ms = (r && r.ms) || Date.now() - t0;
       const txt = CXAI.U.truncate(String((r && r.text) || '').replace(/\s+/g, ' '), 40);
+      // await 期间可能重绘 / 调整顺序：按 id 重新定位输出行，别往脱离文档的旧节点里写
+      const idx = (cfg().ai.providers || []).findIndex((x) => x.id === pid);
+      if (idx >= 0) line = q('[data-testout="' + idx + '"]');
       if (line) line.innerHTML = '<span style="color:#15803d">✓ ' + ms + 'ms · ' + esc(txt) + '</span>';
       toast('连通 · ' + ms + 'ms', 'ok');
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
+      const idx = (cfg().ai.providers || []).findIndex((x) => x.id === pid);
+      if (idx >= 0) line = q('[data-testout="' + idx + '"]');
       if (line) line.innerHTML = '<span style="color:#b91c1c">✗ ' + esc(msg) + '</span>';
       toast('失败：' + msg, 'bad');
     }
-    if (btn) {
+    if (btn && btn.isConnected !== false) {
       btn.disabled = false;
       btn.textContent = '测试这个';
     }
   }
 
   async function testAll() {
-    const box = outBox();
+    let box = outBox();
     const list = (cfg().ai.providers || []).filter((p) => p.enabled !== false);
     if (!list.length) {
       toast('没有启用的模型', 'warn');
       return;
     }
-    if (box) box.innerHTML = '<div class="mid">正在测试 ' + list.length + ' 个模型…</div>';
+    const paint = (html) => {
+      // 测试期间可能切页签/重绘：每次写之前重新定位输出框，别往脱离文档的节点里写
+      box = q('#cs-testout') || box;
+      if (!box) return;
+      box.style.display = 'block';
+      box.innerHTML = html;
+    };
+    paint('<div class="mid">正在测试 ' + list.length + ' 个模型…</div>');
     const lines = [];
     let ok = 0;
     for (let k = 0; k < list.length; k++) {
@@ -1701,7 +1733,7 @@ ${wizardSteps(3)}
       const head = (p.role === 'vision' ? '[读图] ' : p.role === 'both' ? '[读图+判题] ' : '[判题] ') +
         (p.label || p.id) + ' · ' + (p.model || '(未填模型)');
       lines.push('<div class="mid">… ' + esc(head) + '</div>');
-      if (box) box.innerHTML = lines.join('');
+      paint(lines.join(''));
       try {
         const t0 = Date.now();
         const r = await CXAI.AI.ping(p);
@@ -1712,10 +1744,10 @@ ${wizardSteps(3)}
       } catch (e) {
         lines[lines.length - 1] = '<div class="bad">✗ ' + esc(head) + ' · ' + esc(e && e.message ? e.message : e) + '</div>';
       }
-      if (box) box.innerHTML = lines.join('');
+      paint(lines.join(''));
     }
     lines.push('<div class="' + (ok === list.length ? 'ok' : 'bad') + '">完成：' + ok + '/' + list.length + ' 连通</div>');
-    if (box) box.innerHTML = lines.join('');
+    paint(lines.join(''));
     toast('连通 ' + ok + '/' + list.length, ok === list.length ? 'ok' : 'warn');
   }
 
@@ -2135,7 +2167,9 @@ ${wizardSteps(3)}
     const f = t.getAttribute('data-f');
     if (f != null && t.hasAttribute('data-i')) {
       const i = Number(t.getAttribute('data-i'));
-      updProvider(i, f, readField(t));
+      const fv = readField(t);
+      if (fv === undefined) return; // 数字框被清空：不写 0，保留旧值
+      updProvider(i, f, fv);
       // 预设改变要重渲染整张卡（会换掉 baseURL / 模型名）
       if (f === 'preset') {
         applyPresetTo(i, t.value);
@@ -2153,9 +2187,20 @@ ${wizardSteps(3)}
     const path = t.getAttribute('data-path');
     if (path) {
       const val = readField(t);
+      if (val === undefined) return; // 数字框清空：不落 0
       setPath(path, val);
       // 交卷开关：引擎与 guard 读旧字段，两个都写
       if (path === 'apply.submit') setPath('apply.autoSubmit', val);
+      // 读图开关与策略必须联动：向导里选过"不处理图片"会把 strategy 写成 'off'，
+      // 之后在简单版只勾回 enabled，03b-vision 仍判为关闭 —— 图片永远不处理。
+      if (path === 'ai.vision.enabled' && val === true && cfg().ai.vision.strategy === 'off') {
+        setPath('ai.vision.strategy', 'ocr');
+        renderMain();
+      }
+      if (path === 'ai.vision.strategy' && val !== 'off' && cfg().ai.vision.enabled !== true) {
+        setPath('ai.vision.enabled', true);
+        renderMain();
+      }
       // 读图模型 / 兼任判题：要同步所有 provider 的 role，否则挑模型的逻辑还按旧角色走
       if (path === 'ai.vision.ocrProviderId' || path === 'ai.vision.judgeToo') {
         syncVisionRoles();
@@ -2185,11 +2230,17 @@ ${wizardSteps(3)}
     if (type === 'checkbox') return;
     const path = t.getAttribute('data-path');
     if (path) {
-      setPath(path, readField(t));
+      const val = readField(t);
+      if (val === undefined) return; // 边打边存时清空输入框：保留旧值，不写 0
+      setPath(path, val);
       return;
     }
     const f = t.getAttribute('data-f');
-    if (f != null && t.hasAttribute('data-i')) updProvider(Number(t.getAttribute('data-i')), f, readField(t));
+    if (f != null && t.hasAttribute('data-i')) {
+      const fv = readField(t);
+      if (fv === undefined) return;
+      updProvider(Number(t.getAttribute('data-i')), f, fv);
+    }
   }
 
   function onUpload(e) {

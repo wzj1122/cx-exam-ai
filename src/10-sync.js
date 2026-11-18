@@ -288,7 +288,9 @@ CXAI.Sync = (function () {
   async function autoPull(opt) {
     opt = opt || {};
     if (!enabled()) return false;
-    const force = opt.force !== false;
+    // 默认不覆盖本地：本地已有模型时不再 pull（旧实现每次进页都强制覆盖，
+    // 考试页面板里改的设置会被云端旧配置冲掉）。需要覆盖时开 ui.forcePull 或传 {force:true}。
+    const force = opt.force === true || CXAI.Cfg.get('ui.forcePull', false) === true;
     if (!force && (CXAI.Cfg.get('ai.providers', []) || []).length) return false;
     try {
       const obj = await pullInto(savedCode());

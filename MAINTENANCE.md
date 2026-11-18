@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.1（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.3（`package.json`）
 
 # MAINTENANCE
 
@@ -63,8 +63,8 @@ cx-exam-ai/
 |---|---|---|---|
 | `src/00-header.js` | — | `@match`/`@grant`/`@connect` 元数据（v1.8.0 起含 `cx-exam-ai.pages.dev` / `github.io` / `127.0.0.1`，设置中心要用）；`@run-at document-start` | 无 |
 | `src/01-core.js` | `CXAI.DEFAULT_CONFIG` `CXAI.PRESETS` `CXAI.isLocalURL` `CXAI.normalizeProvider` `CXAI.Store` `CXAI.Cfg` `CXAI.Log` `CXAI.U` | 默认配置（judge 参数 + `ai.vision` 对象 + **0 个预置 provider**）、**9 条接入预设**（deepseek/tokenrhythm/qwen-vl/qwen/glm/openai/ollama/lmstudio/custom，`model` 全部留空、以 `AI.listModels` 拉到的清单为准）、provider 归一化（apiStyle/role/keyOptional/maxTokens/extraBody/extraHeaders）、GM_* 存储回退 localStorage、`U.{sleep,rand,randInt,uid,clamp,mergeDeep,deepGet,safeJson,normText,similarity,escapeHtml,truncate,withTimeout}` | 无 |
-| `src/02-font.js` | `CXAI.Font` | 抽取 head 内 base64 字体 → canvas 360px 渲染 → 积分图盒式降采样 → 与 FRB2 特征表算汉明距离，输出 glyph→char 映射 | `CXAI.U` |
-| `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页）；**v1.11.0**：题型表补齐 0~17（12 匹配 / 13 排序 / 16 口语 / 17 听力），新增 `detectShell()` 判定承载形态 `shell ∈ {choice,text,match,group,media,attach,manual}`、`readMedia()` 抓音视频、`labelOf()` 未知码显示「第 N 类题」；`readOptionElements` 过滤掉 textarea/input/select（简答的 `.eidtDiv` 文本域不再被当成选项，否则简答会按单选去点） | `CXAI.U` |
+| `src/02-font.js` | `CXAI.Font` | 抽取 head 内 base64 字体 → canvas 360px 渲染 → 积分图盒式降采样 → 与 FRB2 特征表算汉明距离，输出 glyph→char 映射。**v1.11.2**：`03-scraper.collect` 与 `08-main.decryptIfNeeded` 已接入（此前模块从未被调用，密文原样送模型）；特征表校验长度/字段，失败 60 秒后可重试 | `CXAI.U` |
+| `src/03-scraper.js` | `CXAI.Scraper.{detectPage,collect,parseOne,currentAnswered,clickNext,optionScope,pageValue,stemAnswerKeys,totalCount,currentIndex,applyNextPage,ueditorOf,ensureEditors}` | 识别页面种类与整卷/单题模式；解析 `.questionLi` / `.TiMu` 为题目对象 `{index,type,typeLabel,stem,options[{key,text,el,answered}],inputs,images,score,root,answered}`；**v1.5.0**：`optionScope` 把选中态限定在单选项容器内（`.stem_answer` 包着全部选项，往上找会把整题选项都判成已选）；`pageValue` 以 `#answer{qid}`/`answers{qid}`/UEditor 为准读页面真实答案；`stemAnswerKeys` 认题干自带答案；`totalCount` 读「题量: N」；`applyNextPage` 原地换题块（无刷新翻页）；**v1.11.0**：题型表补齐 0~17（12 匹配 / 13 排序 / 16 口语 / 17 听力），新增 `detectShell()` 判定承载形态 `shell ∈ {choice,text,match,group,media,attach,manual}`、`readMedia()` 抓音视频、`labelOf()` 未知码显示「第 N 类题」；`readOptionElements` 过滤掉 textarea/input/select（简答的 `.eidtDiv` 文本域不再被当成选项，否则简答会按单选去点）。**v1.11.2**：`qidOf` 按题块取 data / `type{长数字}`，不再让章节页所有题共用一个 qid；`pageValue` 对 fill/reader/line 等文本类隐藏域走 `toPlain`；纯图片/附件/音频题不再因题干为空被丢弃；`parseChapter` 选项嵌套去重；`collect` 先 `Font.ensureSync`；`applyNextPage` 兜底补 `#submitTest` | `CXAI.U` |
 | `src/03b-vision.js` | `CXAI.Vision.{cfg,isEnabled,prepare,pickProvider,panelHasVision,transcribe,composePromptBlock,load,clear,stats}` | 图片题通道：`fetchBlob`（GM_xmlhttpRequest 带 Referer 优先，降级 fetch credentials:include）→ `blobToDataUrl`（FileReader / arrayBuffer+btoa 兜底）→ `compress`（canvas 长边缩放到 1400、JPEG 0.82，无 Image/canvas 时原样返回）→ 10 分钟内存缓存；`prepare` 丢占位图（<600B）与超总字节图；`transcribe` 用读图模型把图转成 `{text,questionText,options,kind,confidence}` | `CXAI.Cfg` `CXAI.AI` `CXAI.U` |
 | `src/03c-attach.js` | `CXAI.Attach.{collect,previewUrl,pageImageUrls,hashPath,md5,probeImage,directUrl,enrich,pagesOf,clear,cfg}` | 附件题通道：附件枚举 → 页图地址推导（md5 末三字节）→ HEAD 探测页数 → 页图进 `question.images`；兜底为 `.btnDown` 直链 + pdf.js 渲染（页面有 pdfjsLib 时才走） | `CXAI.U` `CXAI.Log` `CXAI.Cfg` |
 | `src/03d-mark.js` | `CXAI.Mark.{render,pending,preview,existing,failed,attachAll,clearAll,textOf,letterize,stageWord}` | **v1.11.0 新增、v1.11.0 收尾时停用**：原先在每题下方挂 Shadow DOM 卡片，2026-11-18 用户明确要求「页面上不要这块」→ `enabled()` 恒 `false`，`render/attachAll` 全部空操作，模块只为兼容旧调用保留。作答详情改由面板 `renderQDetail()` 承载（AI 判定/置信度/阶段/依据/投票/降级/页面一致性）。**恢复页内标注必须显式改 `enabled()` 那一行** | `CXAI.U` `CXAI.Cfg` `src/07-ui.js` |
@@ -88,6 +88,21 @@ cx-exam-ai/
 | `tools/build-site.js` | `node tools/build-site.js` | 清空并重建 `.site/`：拷贝 `index.html` 与 `settings.html` → `/`、`dist/` → `/dist/`、`images/` → `/images/`，输出文件数与体积。Cloudflare Pages/Workers 的构建命令就是它，`.site/` 已进 `.gitignore` | `dist/cx-exam-ai.user.js` `images/*` |
 | `images/alipay.png` `images/wechat_pay.png` | — | 收款码，README 与 index.html 共用；勿替换成别的图 | 无 |
 | `dist/cx-exam-ai.user.js` | — | 构建产物，三处安装链接的唯一目标；**只由 `node build.js` 生成** | `src/*.js` + `package.json` |
+
+**v1.11.2 对上述文件的补充（2026-11-19）**
+
+| 文件 | 新增/变化 |
+|---|---|
+| `01-core.js` | `CXAI.U.coerceLike(def, cur)`：`Cfg.load` 后按默认类型归一导入配置（数字段字符串折回数字，防设置页 `value=` 注入）；`DEFAULT_CONFIG.apply.fixWrong = true` |
+| `02-font.js` | 已被主链路调用；`parseRefTable` 校验 `count/gc/gf` 与字节长度；破解失败改为 60 秒后可重试 |
+| `03-scraper.js` | `qidOf` 按题块取题号；`collect` 先 `Font.ensureSync`；`pageValue` 文本题型扩到 fill/reader/match/oral/listening；纯图片/附件题不再被过滤；`parseChapter` 去重；`applyNextPage` 补表单 |
+| `03c-attach.js` | `pdfLib()` 优先从 `unsafeWindow.pdfjsLib` 取（油猴沙箱里 `window.pdfjsLib` 恒空） |
+| `04-ai.js` | `auto` 读图仅在**全视觉**面板直传，混合面板走 OCR；`fast` 温度封顶 1；复核/仲裁提示词补小题组选项 |
+| `05-apply.js` | `splitBlanks` 单空折 `|||`、不再按逗号拆空；`partial` 回报；iframe 只写编辑器；`editorList/ueditorOf` 不对 input 造空壳实例；`SEL_TOKEN` 认 `check_answer*`；`clickOne` 候选步数 3→5 |
+| `07-ui.js` | `unmount` 摘掉 keydown / `Log.on` / resize；球拖动阈值 4→10px；`manual` 状态标红 |
+| `08-main.js` | `sameAnswer` / `decryptIfNeeded` / `rowKeyOf`；fixWrong 判后比对；暂停不翻页；`answerNext` 失败不翻页 + 整卷填空补保存；缓存键带 qid 与图片指纹；入口对晚渲染题块轮询；`answers` 上限 400 |
+| `09-settings.js` | 数字空值不写 0；读图 `enabled` 与 `strategy` 联动；`fetchModels/testOne` 按 provider id 回写；`num()` 转义 |
+| `tools/test-dom.js` | 新增 [19] 12 项、[20] 4 项回归断言（vitest 无关，仍是零依赖 node 脚本） |
 
 ## 关键流程与数据流
 
@@ -323,6 +338,38 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.3（2026-11-19）验收口径与配置收口
+
+| 改动 | 文件 |
+|---|---|
+| 填空/简答「全部空落盘才算成功」，partial 报 manual 并暂停 | `src/05-apply.js`、`src/08-main.js` |
+| 多选最终验收按集合相等（AC ≠ AB）；`retryByText` 的成功改由隐藏域回读 | `src/05-apply.js` |
+| `clickOne` 只认选中证据（真类名/checked/非 hover 新增类），不再靠整串指纹变化 | `src/05-apply.js` |
+| 保存按钮去掉全页兜底，限定本题题块 / `saveQuestion(qid)` | `src/05-apply.js` |
+| 新增 `answerSelectGrid`：连线/匹配/排序按下拉框写入并回读，拖拽形态明确转人工 | `src/05-apply.js` |
+| 低置信度（`lowConfidence`/heuristic）默认不落盘，`apply.allowGuess` 才写 | `src/08-main.js`、`src/01-core.js` |
+| `tally` 先归一化再按包含/Dice 相似度聚类 | `src/04-ai.js` |
+| 图片筛选：滤头像/二维码/图标，题干容器图优先 | `src/03-scraper.js` |
+| 「A 组」剥离条件修正（后接非字母才剥） | `src/03-scraper.js` |
+| 单题判重 key 带图片指纹；`answerNext` overwrite 模式轮转；整卷按 `pickSame` 找回题目 | `src/08-main.js` |
+| 配置对齐：删死开关 `answer.humanize/fillText/skipAnswered/autoNext/intervalMs`、`antiDetect.*`；补 `apply.settleMs/submit/allowGuess`、`ui.logMax/syncAPI/forcePull`；设置页同步 | `src/01-core.js`、`src/09-settings.js` |
+| 云同步 `autoPull` 默认不覆盖本地（`ui.forcePull` 才覆盖） | `src/10-sync.js` |
+| Guard：getter/`hasFocus/confirm/alert/setInterval` 加 toString 伪装，弹窗白名单收紧 | `src/06-guard.js` |
+| 交卷后自动确认弹窗（8 秒轮询） | `src/08-main.js` |
+| 回归用例变更：部分填空不再算成功 + 新增 [21] 四组（apply 层 partial / 连线 / 多选集合 / 投票聚类），152 项 | `tools/test-dom.js` |
+
+### v1.11.2（2026-11-19）答题链路小 bug 集中修复
+
+- **字形解密接入主链路**：`03-scraper.collect()` 先 `Font.ensureSync`；`08-main.handleQuestion/prefetch/answerNext` 在判题前 `Font.ensure()` 并重新抓题（`decryptIfNeeded`）。`02-font` 特征表加长度/字段校验，失败 60 秒后可重试。
+- **fixWrong 语义修正**：页面已答且暂无判定结果时先判题，再用 `sameAnswer()` 比对；一致则 `skip`，不再无条件重写。`01-core` 新增 `apply.fixWrong` 默认项。
+- **qid/缓存串题**：`qidOf` 改为"题块 data → 题型隐藏域长数字 → 仅单题页用 #questionId"；`08-main.cacheKey/saveAnswer/cachedAnswer/rowKeyOf` 统一带 qid + 题干 + 选项 + 图片指纹；`answers` 存储上限 400 条。
+- **主循环**：单题模式暂停期间不翻页；`answerNext` 写入失败不翻页、整卷填空补点保存；`handleQuestion` 部分填空回报 `partial`。
+- **落盘**：`answerBlank` 单空把 `|||` 折成换行；`、` 之外不再用逗号拆空；iframe 只写 contenteditable/UEditor；`editorList/ueditorOf` 只对 textarea 调 `getEditor`；`SEL_TOKEN` 认 `check_answer*` 变体。
+- **抓题/判定**：纯图片题不再被空题干过滤；`parseChapter` 选项嵌套去重；`auto` 读图在混合面板下改走 OCR；`fast` 温度封顶 1；复核/仲裁提示词补小题组选项。
+- **入口/UI/设置**：题块晚渲染时入口轮询 15s；`applyNextPage` 兜底补回 `#submitTest`；`07-ui` 卸载摘监听、球拖动阈值 10px、manual 标红；设置中心数字框空值不写 0、读图开关与 strategy 联动、异步结果按 id 回写、导入配置类型归一（`CXAI.U.coerceLike`）。
+- 测试 `tools/test-dom.js` 新增 [19] 回归 12 项与 [20] 主循环 fixWrong 4 项（共 147 断言）。
+- **涉及文件**：`src/01-core.js` `src/02-font.js` `src/03-scraper.js` `src/03c-attach.js` `src/04-ai.js` `src/05-apply.js` `src/07-ui.js` `src/08-main.js` `src/09-settings.js` `tools/test-dom.js` `README.md` `MAINTENANCE.md` `package.json` `src/00-header.js` `dist/cx-exam-ai.user.js`
 
 ### v1.11.1（2026-11-19）更正本地网关 403 的归因
 

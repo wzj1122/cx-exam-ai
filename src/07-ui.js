@@ -2,6 +2,11 @@
 
 CXAI.UI = (function () {
   let host = null;
+  // 卸载时要摘掉的全局监听：不摘的话 unmount→mount 后 Ctrl+Shift+X 会切换两次
+  // （看起来像"按了没反应"），日志每行也会重复打印。
+  let docKeydown = null;
+  let logOff = null;
+  let resizeHandler = null;
 
   /** 独立设置中心的默认地址（换部署位时改这里，或用配置项 ui.settingsURL 覆盖） */
   // Cloudflare Pages 会把 /settings.html 308 跳到 /settings，这里直接用规范路径，少一跳
@@ -383,6 +388,18 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   /** 卸掉整个界面（交卷/离开作答页时用）：节点移除，引用清空，之后可再 mount */
   function unmount() {
     try {
+      if (docKeydown) document.removeEventListener('keydown', docKeydown);
+    } catch (e) {}
+    try {
+      if (logOff) logOff();
+    } catch (e) {}
+    try {
+      if (resizeHandler) window.removeEventListener('resize', resizeHandler);
+    } catch (e) {}
+    docKeydown = null;
+    logOff = null;
+    resizeHandler = null;
+    try {
       if (host && host.parentNode) host.parentNode.removeChild(host);
     } catch (e) {}
     host = null;
@@ -459,13 +476,14 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         }
       }
     });
-    document.addEventListener('keydown', (e) => {
+    docKeydown = function (e) {
       if (e.ctrlKey && e.shiftKey && (e.key === 'X' || e.key === 'x')) {
         e.preventDefault();
         togglePanel();
       }
-    });
-    CXAI.Log.on((entry) => appendLog(entry));
+    };
+    document.addEventListener('keydown', docKeydown);
+    logOff = CXAI.Log.on((entry) => appendLog(entry));
   }
 
   /* ---------------- 渲染 ---------------- */
@@ -638,7 +656,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
 
     // 窗口尺寸变化（含换显示器、缩放、全屏切换）后把球和面板拉回视口内
     try {
-      window.addEventListener('resize', () => {
+      resizeHandler = () => {
         try {
           const r = wrap.getBoundingClientRect();
           const c = clampBallPos(r.left, r.top);
@@ -653,7 +671,8 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
           }
           placePanel(c.left);
         } catch (e) {}
-      });
+      };
+      window.addEventListener('resize', resizeHandler);
     } catch (e) {}
 
     let drag = null;
@@ -703,7 +722,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         e.preventDefault();
         return;
       }
-      if (Math.abs(dx) + Math.abs(dy) > 4) {
+      if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
         drag.moved = true;
         clearTimeout(lpTimer);
       }
@@ -896,7 +915,7 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   }
 
   function clsOf(st) {
-    return st === 'ok' ? 'ok' : st === 'skip' ? 'no' : st === 'wait' ? 'wait' : st === 'fail' ? 'err' : 'todo';
+    return st === 'ok' ? 'ok' : st === 'skip' ? 'no' : st === 'wait' ? 'wait' : st === 'fail' || st === 'manual' ? 'err' : 'todo';
   }
 
   /** 题号格子：颜色=状态，点击=在下方面板看这题的选项与 AI 作答 */

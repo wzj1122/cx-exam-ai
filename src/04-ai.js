@@ -486,10 +486,37 @@ CXAI.AI = (function () {
     return lines;
   }
 
+  /**
+   * 复核/仲裁也要看到"小题组"的选项与音视频/无答题框的说明，
+   * 否则它们只能对着候选字母空想，一有分歧就把正确结论改掉。
+   */
+  function shellHintLines(q) {
+    const out = [];
+    if (!q) return out;
+    if (q.shell === 'group') {
+      const blanks = q.group || [];
+      if (blanks.length) {
+        out.push(
+          '【小题组各小题的选项】\n' +
+            blanks
+              .map((b, i) => '第' + (i + 1) + '小题：' + (b.options || []).map((o) => o.key + '. ' + o.text).join('   '))
+              .join('\n')
+        );
+        out.push('【作答格式】共 ' + blanks.length + ' 小题，按顺序只输出字母，用 "|||" 分隔（例如 A|||C|||B）。');
+      } else {
+        out.push('【小题组】按小题顺序作答，多条答案用 "|||" 分隔。');
+      }
+    }
+    if (q.shell === 'media') out.push('【音视频】没有文字稿，按题干与选项给最可能的答案。');
+    if (q.shell === 'manual') out.push('【答题框】页面没有输入框，答案会展示给考生手抄，写完整。');
+    return out;
+  }
+
   function buildCritiqueMessages(q, drafts, vctx) {
     const lines = [`【题型】${q.typeLabel}`, `【题干】${q.stem || '(题干为空)'}`];
     const ob = optionBlock(q);
     if (ob) lines.push(`【选项】\n${ob}`);
+    shellHintLines(q).forEach((l) => lines.push(l));
     visionTail(q, vctx).forEach((l) => lines.push(l));
     const cand = drafts
       .map((d, i) => `${i + 1}. ${d.answerText}（置信度 ${d.confidence.toFixed(2)}）理由：${d.reason || '无'}`)
@@ -506,6 +533,7 @@ CXAI.AI = (function () {
     const lines = [`【题型】${q.typeLabel}`, `【题干】${q.stem || '(题干为空)'}`];
     const ob = optionBlock(q);
     if (ob) lines.push(`【选项】\n${ob}`);
+    shellHintLines(q).forEach((l) => lines.push(l));
     visionTail(q, vctx).forEach((l) => lines.push(l));
     const cand = drafts
       .map((d, i) => `初答${i + 1}：${d.answerText}（置信度 ${d.confidence.toFixed(2)}）理由：${d.reason || '无'}`)
@@ -686,24 +714,64 @@ CXAI.AI = (function () {
 
   /* ---------------- 投票 ---------------- */
 
+  /** 文本题投票用的归一化：全角转半角、去空白/标点，只比"说了什么" */
+  function voteNorm(t) {
+    return String(t == null ? '' : t)
+      .replace(/[\uff01-\uff5e]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+      .replace(/[\s\u3000]/g, '')
+      .replace(/[.,;:!?'"`~()[\]{}<>、。，；：！？“”‘’（）【】《》…—\-]/g, '')
+      .toLowerCase();
+  }
+
+  /** 两段文本是否"语义上足够接近"（包含关系或二元组 Dice 相似） */
+  function voteSimilar(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const s = a.length <= b.length ? a : b;
+    const l = a.length <= b.length ? b : a;
+    if (s.length >= 6 && l.indexOf(s) >= 0 && s.length / l.length >= 0.62) return true;
+    const grams = (x) => {
+      const out = new Set();
+      if (x.length < 2) {
+        out.add(x);
+        return out;
+      }
+      for (let i = 0; i < x.length - 1; i++) out.add(x.slice(i, i + 2));
+      return out;
+    };
+    const A = grams(s);
+    const B = grams(l);
+    let inter = 0;
+    A.forEach((g) => {
+      if (B.has(g)) inter++;
+    });
+    return (2 * inter) / (A.size + B.size) >= 0.72;
+  }
+
   function tally(drafts) {
-    const bucket = new Map();
+    // 文本题三个模型的表述必然不同，按原串精确分桶会让一致率恒低（每题都烧复核+仲裁，
+    // 最后取出的"最高票"也没有语义意义）。这里先归一化，再按相似度合并。
+    const list = [];
     let total = 0;
     for (const d of drafts) {
-      const k = d.answerText || '∅';
+      const raw = d.answerText == null ? '' : String(d.answerText);
+      const k = voteNorm(raw);
       const w = (d.weight || 1) * (d.confidence || 0.5);
       total += w;
-      const cur = bucket.get(k) || { key: k, score: 0, count: 0, supporters: [] };
-      cur.score += w;
-      cur.count += 1;
-      cur.supporters.push(d.providerLabel || d.providerId || '模型');
-      bucket.set(k, cur);
+      let hit = list.filter((b) => b.norm === k || voteSimilar(b.norm, k))[0];
+      if (!hit) {
+        hit = { key: raw || '∅', norm: k, score: 0, count: 0, supporters: [] };
+        list.push(hit);
+      }
+      hit.score += w;
+      hit.count += 1;
+      hit.supporters.push(d.providerLabel || d.providerId || '模型');
     }
-    const list = Array.from(bucket.values()).sort((a, b) => b.score - a.score || b.count - a.count);
+    list.sort((a, b) => b.score - a.score || b.count - a.count);
     const top = list[0];
     return {
-      list,
-      winner: top,
+      list: list.map((b) => ({ key: b.key, score: b.score, count: b.count, supporters: b.supporters })),
+      winner: top ? { key: top.key, score: top.score, count: top.count, supporters: top.supporters } : null,
       ratio: total > 0 && top ? top.score / total : 0
     };
   }
@@ -721,7 +789,7 @@ CXAI.AI = (function () {
       return Array.from({ length: n }, (_, i) => ({
         ...base,
         providerLabel: base.label + '#' + (i + 1),
-        temperature: 0.15 + i * 0.35,
+        temperature: Math.min(1, 0.15 + i * 0.35),
         __sample: i
       }));
     }
@@ -796,10 +864,15 @@ CXAI.AI = (function () {
       const vis = await doOcr();
       return { mode: vis ? 'ocr' : 'none', imageParts: [], vision: vis, dropped: prep.dropped };
     }
-    // auto：面板里有视觉模型就直传，否则先转写
-    if (panelVision) return { mode: 'inline', imageParts: prep.items, vision: null, dropped: prep.dropped };
+    // auto：面板里**所有**模型都能看图才直传；混着纯文本模型时先转写。
+    // 旧判据是"有任意一个视觉模型就 inline"，结果是纯文本模型收不到图片、
+    // 却仍然参与投票 —— 它的答案纯属瞎猜，还会拉低正确结论。
+    const allVision = (panel || []).length > 0 && (panel || []).every((p) => p && p.vision);
+    if (allVision) return { mode: 'inline', imageParts: prep.items, vision: null, dropped: prep.dropped };
     const vis = await doOcr();
     if (vis) return { mode: 'ocr', imageParts: [], vision: vis, dropped: prep.dropped };
+    // 转写失败但面板里仍有能看图的模型：至少让它们看图
+    if (panelVision) return { mode: 'inline', imageParts: prep.items, vision: null, dropped: prep.dropped };
     CXAI.Log.warn(`第 ${(question.index || 0) + 1} 题含图片但无可用读图模型，按纯文本判题`);
     return Object.assign({}, none, { dropped: prep.dropped });
   }

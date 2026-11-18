@@ -1188,6 +1188,249 @@ function ok(cond, label, extra) {
     ok(CXAI.Mark.textOf(q) === '', 'clearAll 幂等', '');
   }
 
+  console.log('\n[19] 答题小 bug 回归（拆空 / qid / 选中态 / 回读 / 配置归一 / 读图策略）');
+  {
+    // ① 单空简答：||| 是分隔符，不能原样写进答题框
+    const ta1 = h('textarea', {}, []);
+    const qOne = { root: h('div', {}, [ta1]), inputs: [ta1], type: 'completion', typeLabel: '简答题', options: [] };
+    const rOne = await CXAI.Apply.answerBlank(qOne, '1. 第一问答案|||2. 第二问答案', { instant: true });
+    ok(
+      rOne.ok && ta1.value.indexOf('|||') < 0 && /第一问答案/.test(ta1.value) && /\n/.test(ta1.value),
+      '单空简答把 ||| 折成换行，不会原样落进答题框',
+      ta1.value
+    );
+
+    // ② 带逗号的长答案不能被按逗号拆成多个空
+    const b1 = h('input', { type: 'text' }, []);
+    const b2 = h('input', { type: 'text' }, []);
+    const b3 = h('input', { type: 'text' }, []);
+    const qThree = { root: h('div', {}, [b1, b2, b3]), inputs: [b1, b2, b3], type: 'completion', typeLabel: '填空题', options: [] };
+    const sentence = '首先，需要建立连接，然后，进行数据传输，最后，释放连接';
+    const rThree = await CXAI.Apply.answerBlank(qThree, sentence, { instant: true });
+    ok(
+      b1.value === sentence && !b2.value && !b3.value && rThree.filled === 1 && rThree.partial === true,
+      '中文长句不会被按逗号拆进三个空',
+      [b1.value, b2.value, b3.value]
+    );
+    // 顿号仍然是合法的多空分隔（"赋、比、兴"）
+    const d1 = h('input', { type: 'text' }, []);
+    const d2 = h('input', { type: 'text' }, []);
+    const d3 = h('input', { type: 'text' }, []);
+    const qDun = { root: h('div', {}, [d1, d2, d3]), inputs: [d1, d2, d3], type: 'completion', typeLabel: '填空题', options: [] };
+    await CXAI.Apply.answerBlank(qDun, '赋、比、兴', { instant: true });
+    ok(d1.value === '赋' && d2.value === '比' && d3.value === '兴', '顿号分隔的三空仍能正确拆开', [d1.value, d2.value, d3.value]);
+
+    // ③ 只填了一部分空时回报 partial（不再默默当成功）
+    const p1 = h('input', { type: 'text' }, []);
+    const p2 = h('input', { type: 'text' }, []);
+    const qPart = { root: h('div', {}, [p1, p2]), inputs: [p1, p2], type: 'completion', typeLabel: '填空题', options: [] };
+    const rPart = await CXAI.Apply.answerBlank(qPart, '只有一个答案', { instant: true });
+    // 语义已收紧：只写进去一部分不算成功，必须报 manual 让主循环停下来等人补
+    ok(rPart.ok === false && rPart.filled === 1 && rPart.total === 2 && rPart.partial === true, '部分填空不再算成功', rPart);
+
+    // ④ 章节页各题按题型隐藏域取得自己的 qid（旧实现全页共用一个）
+    const mkRoot = (typeName) => {
+      const root = h('div', { class: 'questionLi' }, []);
+      root.appendChild(h('input', { name: typeName, value: '0' }, []));
+      return root;
+    };
+    ok(
+      CXAI.Scraper.qidOf(mkRoot('type1234567')) === '1234567' &&
+        CXAI.Scraper.qidOf(mkRoot('type7654321')) === '7654321',
+      '每道题从 type{qid} 隐藏域拿到独立 qid',
+      [CXAI.Scraper.qidOf(mkRoot('type1234567')), CXAI.Scraper.qidOf(mkRoot('type7654321'))]
+    );
+    ok(CXAI.Scraper.qidOf(mkRoot('type0')) !== '0', 'type0 这类短序号不被当成题号', CXAI.Scraper.qidOf(mkRoot('type0')));
+
+    // ⑤ 选中态类名的后缀变体（check_answer_dx）也要认得
+    const dx = h('a', { class: 'answer_p check_answer_dx' }, []);
+    ok(CXAI.Apply.isChecked(dx, [dx]) === true, 'check_answer_dx 这类后缀变体认作已选', '');
+
+    // ⑥ fill/reader 型隐藏域里的 HTML 按纯文本回读
+    const hid = h('input', { id: 'answerv19', value: '<p>hello&nbsp;world</p>' }, []);
+    document.body.appendChild(hid);
+    const qV = { qid: 'v19', type: 'fill', options: [], inputs: [], root: h('div', {}, []) };
+    ok(CXAI.Scraper.pageValue(qV).value === 'hello world', 'fill/reader 隐藏域按纯文本回读', CXAI.Scraper.pageValue(qV));
+    document.body.removeChild(hid);
+
+    // ⑦ 导入配置里的字符串数值会被折回数字（设置页 value= 拼接的注入面）
+    CXAI.Cfg.importJSON(
+      JSON.stringify({ ai: { judge: { panelSize: '1" onfocus=alert(1) x="' }, vision: { maxEdge: 'abc' } }, guard: {}, apply: {} })
+    );
+    ok(typeof CXAI.Cfg.get('ai.judge.panelSize') === 'number', '导入的字符串数值被折回数字', CXAI.Cfg.get('ai.judge.panelSize'));
+    ok(CXAI.Cfg.get('ai.vision.maxEdge') === 1400, '非法数字回落到默认值', CXAI.Cfg.get('ai.vision.maxEdge'));
+
+    // ⑧ auto 策略下，纯文本 + 视觉模型混编的面板改为先转写（不让纯文本模型瞎投票）
+    CXAI.Cfg.set('ai.providers', [
+      { id: 'j1', label: '文本模型', baseURL: 'https://mock.local/v1', apiKey: 'k1', model: 'm1', enabled: true, weight: 2 },
+      { id: 'j2', label: '视觉模型', baseURL: 'https://mock.local/v1', apiKey: 'k2', model: 'm2', enabled: true, weight: 1, vision: true }
+    ]);
+    CXAI.Cfg.set('ai.judge.panelSize', 2);
+    CXAI.Cfg.set('ai.vision.enabled', true);
+    CXAI.Cfg.set('ai.vision.strategy', 'auto');
+    CXAI.Cfg.set('ai.vision.ocrProviderId', '');
+    const imgQ2 = Object.assign({}, imgQ, { images: ['data:image/png;base64,' + 'A'.repeat(4000)] });
+    const solvedMix = await CXAI.AI.solve(imgQ2);
+    ok(solvedMix.vision && solvedMix.vision.mode === 'ocr', '混合面板自动改用 OCR 转写', solvedMix.vision && solvedMix.vision.mode);
+
+    // ⑨ 全视觉面板仍然走直传
+    CXAI.Cfg.set('ai.providers', [
+      { id: 'v1', label: '视觉一', baseURL: 'https://mock.local/v1', apiKey: 'k1', model: 'm1', enabled: true, weight: 2, vision: true },
+      { id: 'v2', label: '视觉二', baseURL: 'https://mock.local/v1', apiKey: 'k2', model: 'm2', enabled: true, weight: 1, vision: true }
+    ]);
+    CXAI.Cfg.set('ai.judge.panelSize', 2);
+    INLINE_SEEN = false;
+    const solvedAllV = await CXAI.AI.solve(imgQ2);
+    ok(solvedAllV.vision && solvedAllV.vision.mode === 'inline' && INLINE_SEEN === true, '全视觉面板保持直传图片', solvedAllV.vision && solvedAllV.vision.mode);
+  }
+
+  console.log('\n[21] 死角收口（部分写入 / 多选集合 / 连线 / 投票聚类）');
+  {
+    // ① 部分写入不算成功（apply 层，不只是 answerBlank）
+    const n1 = h('input', { type: 'text' }, []);
+    const n2 = h('input', { type: 'text' }, []);
+    const qPart = { root: h('div', {}, [n1, n2]), inputs: [n1, n2], type: 'completion', typeLabel: '填空题', options: [], qid: '9001' };
+    const rPart = await CXAI.Apply.apply(qPart, { answerText: '只有一个', keys: [] });
+    ok(rPart.ok === false && rPart.manual === true && rPart.partial === true && /只写进了/.test(rPart.error || ''), 'apply 层：部分填空报 manual', rPart);
+
+    // ② 连线/匹配：select 形态能写入并回读验收
+    const fakeSel = {
+      isConnected: true,
+      disabled: false,
+      value: '',
+      selectedIndex: 0,
+      options: [
+        { text: '甲项', value: '1', disabled: false },
+        { text: '乙项', value: '2', disabled: false }
+      ],
+      dispatchEvent() {}
+    };
+    const qMatch = { root: { querySelectorAll: () => [fakeSel] }, type: 'match', shell: 'match', options: [], inputs: [], qid: '9002' };
+    const rMatch = await CXAI.Apply.apply(qMatch, { answerText: '乙项', keys: [] });
+    ok(rMatch.ok === true && fakeSel.value === '2', '连线题按下拉框写入并回读', rMatch);
+
+    // ③ 多选最终验收按集合：AC 不能冒充 AB
+    const hidden = h('input', { id: 'answer9003', value: 'AC' }, []);
+    const boxA = h('div', { class: 'answerBg' }, [h('span', { class: 'textDIV' }, [])]);
+    const boxB = h('div', { class: 'answerBg' }, [h('span', { class: 'textDIV' }, [])]);
+    const boxC = h('div', { class: 'answerBg' }, [h('span', { class: 'textDIV' }, [])]);
+    const root3 = h('div', { class: 'questionLi', data: '9003' }, [boxA, boxB, boxC, hidden]);
+    const qMulti = {
+      root: root3,
+      qid: '9003',
+      type: 'multiple',
+      typeLabel: '多选题',
+      stem: '多选集合验收',
+      options: [
+        { key: 'A', text: '甲', el: boxA },
+        { key: 'B', text: '乙', el: boxB },
+        { key: 'C', text: '丙', el: boxC }
+      ],
+      inputs: []
+    };
+    const rMulti = await CXAI.Apply.apply(qMulti, { answerText: 'AB', keys: ['A', 'B'] });
+    ok(rMulti.ok === false, '多选按集合验收（AC ≠ AB）', rMulti);
+
+    // ④ 文本题投票先归一化再聚类：换标点/说法的回答算同一票
+    const t1 = CXAI.AI.tally([
+      { answerText: '首先建立连接，然后传输数据', confidence: 0.8, providerLabel: 'm1' },
+      { answerText: '首先，建立连接；再传输数据', confidence: 0.8, providerLabel: 'm2' },
+      { answerText: '完全不同的另一段回答', confidence: 0.8, providerLabel: 'm3' }
+    ]);
+    ok(t1.winner && t1.winner.count === 2, '相似文本聚成一票', t1);
+    const t2 = CXAI.AI.tally([
+      { answerText: 'AB', confidence: 0.9, providerLabel: 'm1' },
+      { answerText: 'AC', confidence: 0.9, providerLabel: 'm2' }
+    ]);
+    ok(t2.winner && t2.winner.count === 1 && t2.list.length === 2, '选择题不同字母不会被误合并', t2);
+  }
+
+  console.log('\n[20] 主循环：页面已答且与判定一致时不重写（fixWrong）');
+  {
+    // 08-main 需要 UI / 设置中心 / 同步的桩；这里只验证主循环的作答决策
+    CXAI.UI = {
+      mount() {},
+      unmount() {},
+      update() {},
+      addQuestionCard() {},
+      pushQuestion() {},
+      getQList: () => [],
+      saveQList() {},
+      renderQGrid() {},
+      renderQDetail() {},
+      appendLog() {},
+      togglePanel() {},
+      settingsURL: () => '',
+      openSettingsPage() {},
+      openSync() {},
+      closeSync() {},
+      runSync() {},
+      syncOk() {},
+      syncFail() {},
+      state: {}
+    };
+    CXAI.Settings = { isHere: () => false };
+    CXAI.Sync = { savedCode: () => '' };
+
+    CXAI.Cfg.set('ai.providers', [
+      { id: 'p1', label: 'M1', baseURL: 'https://mock.local/v1', apiKey: 'k', model: 'm1', enabled: true }
+    ]);
+    CXAI.Cfg.set('ai.judge.mode', 'single');
+    CXAI.Cfg.set('ai.judge.panelSize', 1);
+    CXAI.Cfg.set('guard.minDelay', 0);
+    CXAI.Cfg.set('guard.maxDelay', 0);
+    CXAI.Cfg.set('guard.longBreakEvery', 0);
+    CXAI.Cfg.set('guard.enabled', false);
+    CXAI.Cfg.set('apply.retries', 0);
+    CXAI.Cfg.set('apply.stopOnFail', false);
+    CXAI.Cfg.set('engine.autoResume', false);
+    CXAI.Cfg.set('engine.prefetch', false);
+    CXAI.Cfg.set('engine.bootstrapPollMs', 200);
+    CXAI.Cfg.set('answer.preferPreview', false);
+
+    const solveCalls = [];
+    CXAI.AI.solve = async (q) => {
+      solveCalls.push(q.stem);
+      return { keys: ['A'], answerText: 'A', confidence: 0.9, stage: 'panel', votes: [], reason: 'test' };
+    };
+    const applyCalls = [];
+    CXAI.Apply.apply = async (q, r) => {
+      applyCalls.push(q.stem);
+      return { ok: true, actual: (r.keys || []).join('') };
+    };
+    CXAI.Apply.saveOne = async () => true;
+
+    // 清干净夹具：所有选项取消选中、文本框清空
+    const qs20 = CXAI.Scraper.collect().questions;
+    qs20.forEach((q) => {
+      (q.options || []).forEach((o) => o.el.classList.remove('check_answer'));
+      (q.inputs || []).forEach((el) => {
+        if (el && el.tagName === 'TEXTAREA') el.value = '';
+      });
+    });
+    const q0 = qs20[0];
+    q0.options[0].el.classList.add('check_answer'); // 页面已答 A，与下面的判定一致
+
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'src', '08-main.js'), 'utf8'), ctx, {
+      filename: '08-main.js'
+    });
+    const Engine = CXAI.Engine;
+    ok(!!Engine && typeof Engine.start === 'function', '主循环模块可加载', '');
+
+    solveCalls.length = 0;
+    applyCalls.length = 0;
+    await Engine.start();
+    ok(solveCalls.indexOf(q0.stem) >= 0, '已答题仍会判定（否则无法知道答得对不对）', solveCalls.length);
+    ok(applyCalls.indexOf(q0.stem) < 0, '判定与页面答案一致时不再重写', applyCalls.includes(q0.stem));
+
+    // 页面答案改成 B（与判定 A 不一致）→ 必须重做
+    q0.options[0].el.classList.remove('check_answer');
+    q0.options[1].el.classList.add('check_answer');
+    applyCalls.length = 0;
+    await Engine.start();
+    ok(applyCalls.indexOf(q0.stem) >= 0, '判定与页面答案不一致时才重写', applyCalls.includes(q0.stem));
+  }
+
   console.log(`\n结果：${pass} 通过 / ${fail} 失败（AI 请求 ${CALLS} 次）`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => {

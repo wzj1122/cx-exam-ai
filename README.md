@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.0-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.3-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,33 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.3（2026-11-19）验收口径与配置收口
+
+- **填空/简答只写一半不再算成功**：所有空都落盘才 `ok`，否则标「需人工」并暂停，不会带着半截答案翻页。
+- **多选按集合验收**：答案 AB、页面留 AC 时判失败（旧实现只看第一个字母）。
+- **点选证据收紧**：只有真选中类名/`checked`/非 hover 类新增才算成功，hover 换类不再掩盖失败。
+- **保存按钮不再点错题**：只在本题题块或按 `saveQuestion(qid)` 精确定位，去掉全页兜底。
+- **连线/匹配/排序题可写**：下拉框形态按下拉框写入并回读验收；拖拽形态明确提示转人工（此前一律「未找到输入框」）。
+- **低置信度不自动落盘**：兜底猜出来的答案只标黄，等人工确认；需要硬写可开 `apply.allowGuess`。
+- **文本题投票聚类**：先归一化再按相似度合并，简答不再因措辞不同每题烧仲裁。
+- **题目图片瘦身**：滤掉头像/二维码/图标，题干容器内的图优先，`maxImages` 截断不再挤掉真题图。
+- **配置三处对齐**：删掉 `answer.humanize/fillText/skipAnswered/autoNext/intervalMs`、`antiDetect.*` 等死开关；补 `apply.settleMs/submit/allowGuess`、`ui.logMax/syncAPI/forcePull` 默认值；设置页新增「已答题答错才重写」「低置信度也写入」「保存后等待」。
+- **云同步不再强制覆盖本地**：进考试页默认只在本机没有模型时才拉云端；要覆盖需开 `ui.forcePull`。
+- **反检测补 toString 伪装**：`document.hidden/visibilityState` 的 getter、`hasFocus/confirm/alert/setInterval` 都返回原生样式的 toString；弹窗白名单收紧到弹窗容器 + 精确文本。
+- 整卷模式按 qid/题干找回题目（DOM 重排不再答错题）；`answerNext` 在 overwrite 模式下依次往下走；交卷后自动确认弹窗。
+
+### v1.11.2（2026-11-19）答题链路小 bug 集中修复
+
+- **加密字体真正接入主链路**：此前 `02-font` 只有导出、从未被调用，`font-cxsecret` 题的题干/选项会把私用区乱码直接送模型。现在抓题前同步还原、判题/预取前异步等解密完成再重新抓题；特征表失败 60 秒后可重试，并校验缓存长度。
+- **已答对不再被重写**：`fixWrong` 以前在还没有判定结果时直接重写页面上已答的题。现在先判定、再与页面答案比对，一致则跳过（新增 `apply.fixWrong` 默认配置项）。
+- **章节/作业页串题**：所有 `.TiMu` 共用全局 `#questionId`，导致缓存、作答记录、`#answer{qid}` 回读全部串题。现在按题块取 qid，取不到时退回"题干+选项+图片"指纹。
+- **暂停不再翻页**：写入失败自动暂停后，单题循环仍会先翻一页。现在暂停期间绝不翻页；「答一题」失败也不再翻页，整卷填空答完补点每题「保存」。
+- **填空/简答落盘**：单空答案里的 `|||` 不再原样写进答题框；中文逗号不再被当成多空分隔符切坏长答案；部分填空会回报 `partial` 并在日志提醒。
+- **选项识别/编辑器**：认 `check_answer_dx` 这类后缀变体；不再对普通 input/textarea 调 `UE.getEditor` 造空壳实例，也不再把答案写进附件/音视频 iframe。
+- **图片/视觉**：纯图片题不再因题干为空被丢弃；`auto` 策略在"纯文本 + 视觉模型"混编面板下改为先 OCR，纯文本模型不再闭眼投票；`fast` 模式温度封顶 1。
+- **入口与清单**：题块晚于 `DOMContentLoaded` 渲染时入口会短暂轮询（不再"有时不出现"）；核对/仲裁提示词补上小题组选项；面板"需人工"格子标红；悬浮球点击阈值放宽，避免手抖被当成拖动。
+- **设置中心**：数字框清空不再写 0；读图开关与 `strategy=off` 联动；异步拉取/测试按 provider id 回写；导入配置按默认类型归一（杜绝设置页 `value=` 属性注入）；卸载时摘掉键盘/日志/resize 监听。
 
 ### v1.11.1（2026-11-19）更正本地网关 403 的成因说明
 

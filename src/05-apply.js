@@ -116,7 +116,7 @@ CXAI.Apply = (function () {
    *   checked / selected / active / chosed / chosen —— 新版与预览页
    * 明确排除 unchecked / unselected 这类反向类名。
    */
-  const SEL_TOKEN = /^(check_?answer|checked|selected|active|chosed|chosen|curSelected)$/i;
+  const SEL_TOKEN = /^(check_?answer\w*|checked|selected|active|chosed|chosen|curSelected)$/i;
 
   function hasSelClass(node) {
     if (!node) return false;
@@ -173,6 +173,28 @@ CXAI.Apply = (function () {
     const inp = inputOf(optionEl);
     parts.push(inp ? String(!!inp.checked) + '@' + (inp.getAttribute('checked') || '') : '-');
     return parts.join('|');
+  }
+
+  /** 选项及其两层父节点的全部类名（去重），用于判断"点击后新增了什么类" */
+  function classChain(optionEl) {
+    const chain = [optionEl, optionEl && optionEl.parentElement, optionEl && optionEl.parentElement && optionEl.parentElement.parentElement].filter(Boolean);
+    const out = [];
+    chain.forEach((n) =>
+      classTokens(n).forEach((t) => {
+        if (out.indexOf(t) < 0) out.push(t);
+      })
+    );
+    return out;
+  }
+
+  /**
+   * 点击后新增的类名，排除纯视觉态（hover / focus / mousedown…）。
+   * 旧实现拿 stateSig 的整串比对，hover 换一个类就当成"选中成功"，
+   * 真正的选中失败被掩盖，只能靠后面的隐藏域验收兜底（没有隐藏域的皮肤直接漏检）。
+   */
+  function addedTokens(optionEl, before) {
+    const now = classChain(optionEl);
+    return now.filter((t) => before.indexOf(t) < 0 && !/hover|focus|mouseover|mouseenter|mousedown|mousemove|pressed|drag/i.test(t));
   }
 
   async function waitChecked(optionEl, timeoutMs, siblings) {
@@ -462,9 +484,10 @@ CXAI.Apply = (function () {
 
     const settleMs = Number(opts.settleMs || 520); // ocsjs: await $.sleep(500)
     const sigBefore = stateSig(opt.el);
+    const tokensBefore = classChain(opt.el);
     const plan = clickPlan(opt);
     const tried = [];
-    let maxSteps = Number(opts.maxSteps || 3);
+    let maxSteps = Number(opts.maxSteps || 5);
 
     for (const step of plan) {
       if (tried.filter((t) => t.indexOf('(跳过)') < 0).length >= maxSteps) break;
@@ -475,9 +498,14 @@ CXAI.Apply = (function () {
       await sleep(settleMs); // 只等一次，不在这里做任何补点
 
       const picked = isChecked(opt.el, sibs);
-      const changed = stateSig(opt.el) !== sigBefore;
-      if (picked || changed) {
-        return { ok: true, clicked: [key], strategy: step.label + (changed && !picked ? '+sig' : '') };
+      // 只有"选中证据"才算成功：真选中类名/aria/checked，或新增了一个非 hover/focus 的类。
+      const added = addedTokens(opt.el, tokensBefore);
+      if (picked || added.length) {
+        return {
+          ok: true,
+          clicked: [key],
+          strategy: step.label + (!picked && added.length ? '+cls:' + added[0] : '')
+        };
       }
       // 完全没有变化 → 说明这一下没打到 handler，才换下一个目标（换的是不同节点）
       await sleep(CXAI.U.randInt(120, 260));
@@ -520,7 +548,8 @@ CXAI.Apply = (function () {
     try {
       const btn =
         (q && q.root && q.root.querySelector('[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]')) ||
-        document.querySelector('[onclick*="saveQuestion"], .saveQuestion');
+        // 兜底只认"本题 qid"的保存按钮，不再全页抓第一个 —— 整卷页面会点到别的题的保存
+        (q && q.qid ? document.querySelector('[onclick*="saveQuestion(' + q.qid + '"]') : null);
       if (btn) {
         await clickOnce(btn);
         saved = true;
@@ -589,28 +618,62 @@ CXAI.Apply = (function () {
 
   function splitBlanks(text, count) {
     const t = String(text || '').trim();
-    if (count <= 1) return [t];
-    // 逐级尝试常见分隔符：显式的 ||| 最可信，其次分号、顿号/逗号、换行。
-    // 以前只试 ||| 和 ；，于是"赋、比、兴"这种顿号分隔的三空题只填进第一个空（2026-11-18 实测）。
-    const res = [/\s*\|\|\|\s*/, /\s*[;；]\s*/, /\s*[、,，]\s*/, /\s*\n+\s*/];
-    for (const re of res) {
-      const parts = t.split(re).map((s) => s.trim()).filter(Boolean);
+    if (!t) return new Array(Math.max(1, count)).fill('');
+    // 只有一个答题框（简答/论述最常见）：模型用 "|||" 分隔多个设问，它只是分隔符，
+    // 不能原样写进答案框。旧实现 count<=1 直接返回原文，页面里就会出现 "1. …|||2. …"。
+    if (count <= 1) {
+      const joined = t
+        .split(/\s*\|\|\|\s*/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join('\n');
+      return [joined || t];
+    }
+
+    const mk = (re) => t.split(re).map((s) => s.trim()).filter(Boolean);
+    // 只把顿号当"多个空"的分隔符。逗号（，/,）在中文句子里太常见，
+    // 拿来切分会把"首先，…，然后，…"这种整段答案拆成半句话分别塞进多个空。
+    const COMMA = /\s*、\s*/;
+    const commaParts = () => t.split(COMMA).map((s) => s.trim()).filter(Boolean);
+    const allShort = (parts) => parts.length > 0 && parts.every((p) => p.length <= 16);
+
+    // 逐级尝试常见分隔符：显式的 ||| 最可信，其次分号、换行、顿号/逗号。
+    const EXPLICIT = [/\s*\|\|\|\s*/, /\s*[;；]\s*/, /\s*\n+\s*/];
+    for (const re of EXPLICIT) {
+      const parts = mk(re);
       if (parts.length === count) return parts;
     }
-    // 拆出来的项比空多：按顺序取前 count 个（多余的是解释性尾巴）
-    for (const re of res) {
-      const parts = t.split(re).map((s) => s.trim()).filter(Boolean);
+    const cparts = commaParts();
+    if (cparts.length === count && allShort(cparts)) return cparts;
+
+    // 拆出来的项比空多：按顺序取前 count 个。
+    // 顿号/逗号只有在每一项都短（是"空"而不是句子）时才允许截断 ——
+    // 否则一段带逗号的简答正文会被误当成多个空，前两个逗号之间的半句话被写进框里。
+    for (const re of EXPLICIT) {
+      const parts = mk(re);
       if (parts.length > count) return parts.slice(0, count);
     }
+    if (cparts.length > count && allShort(cparts)) return cparts.slice(0, count);
+
     // 拆出来比空少：按顺序填，剩下的留空，由上层标成需人工复核
-    for (const re of res) {
-      const parts = t.split(re).map((s) => s.trim()).filter(Boolean);
+    for (const re of EXPLICIT) {
+      const parts = mk(re);
       if (parts.length > 1) {
         const out = new Array(count).fill('');
-        parts.forEach((p, i) => (out[i] = p));
+        parts.forEach((p, i) => {
+          if (i < count) out[i] = p;
+        });
         return out;
       }
     }
+    if (cparts.length > 1 && allShort(cparts)) {
+      const out = new Array(count).fill('');
+      cparts.forEach((p, i) => {
+        if (i < count) out[i] = p;
+      });
+      return out;
+    }
+
     // 真的没法拆：整段塞第一个空（保持旧行为，不把答案丢掉）
     const out = new Array(count).fill('');
     out[0] = t;
@@ -629,32 +692,35 @@ CXAI.Apply = (function () {
     const out = [];
     const api = CXAI.Scraper.ueditorApi ? CXAI.Scraper.ueditorApi() : null;
     if (!api || !q) return out;
-    const qid = q.qid || (CXAI.Scraper.qidOf ? CXAI.Scraper.qidOf(q.root) : '');
+    const inst = (api.instances && typeof api.instances === 'object' ? api.instances : {}) || {};
     // 顺序很重要：先页面上真实存在的 textarea（填空是 answerEditor{qid}N），
-    // 再退到 answer{qid}（简答的编辑器 id）。反过来的话，UE.getEditor('answer{qid}')
+    // 再退到"实例已经存在"的控件。反过来的话，UE.getEditor('answer{qid}')
     // 会为一个不存在的容器造出"空壳实例"（setContent 存在、body 为 null），
     // 写进去的内容会被 submitForm 里的 sync() 用空内容覆盖掉 —— 又变成"填了没交"。
     const ids = [];
+    const add = (id) => {
+      if (id && ids.indexOf(id) < 0) ids.push(id);
+    };
     try {
-      Array.from((q.root || document).querySelectorAll('textarea[id]')).forEach((ta) => {
-        if (ids.indexOf(ta.id) < 0) ids.push(ta.id);
-      });
+      Array.from((q.root || document).querySelectorAll('textarea[id]')).forEach((ta) => add(ta.id));
     } catch (e) {}
-    (q.inputs || []).forEach((el) => {
-      if (!el || !el.id) return;
-      const tag = String(el.tagName || '').toUpperCase();
-      // 只认真正的表单控件。`q.inputs` 里还混着 UEditor 的 iframe（id 形如 ueditor_0），
-      // 它不是编辑器 id —— 拿它去 getEditor 会造出一个"空壳实例"（setContent 有、body 是空壳），
-      // 于是简答题被当成"两个空"，答案按 ||| 拆成两半，只写进去前半段。
-      // 2026-11-17 实测：16 题整卷答案只落进 textarea 前 8 行。
-      if (tag !== 'TEXTAREA' && tag !== 'INPUT') return;
-      if (ids.indexOf(el.id) < 0) ids.push(el.id);
+    // 已经建好的实例（含 textarea 被编辑器替换掉的皮肤）：只读 instances，绝不新建。
+    // 对 input/iframe 的 id 调 getEditor 会凭空造出空壳实例，甚至把正常文本框替换成编辑器。
+    Object.keys(inst).forEach((id) => {
+      if (!id) return;
+      // 只认本题的实例 id，避免把别题的编辑器也写一遍。
+      // 没有 qid 时**绝不**按前缀扫描全页实例：整卷里每个题都会把别人的编辑器算进来。
+      const qid = q.qid || (CXAI.Scraper.qidOf ? CXAI.Scraper.qidOf(q.root) : '');
+      if (qid && (id === 'answer' + qid || id.indexOf('answerEditor' + qid) === 0 || id.indexOf('ueditor_' + qid) === 0)) add(id);
     });
-    // 兜底：页面上一个 textarea 都没抓到，才按惯例试 answer{qid}
-    if (!ids.length && qid) ids.push('answer' + qid);
+    (q.inputs || []).forEach((el) => {
+      if (el && el.id && inst[el.id]) add(el.id);
+    });
     for (const id of ids) {
       try {
-        const ed = api.getEditor(id);
+        let ed = inst[id];
+        // 只有超星编辑器的固定 id 才允许"按需创建"，普通 textarea 绝不能 getEditor
+        if (!ed && /^(answer\d|answerEditor\d|ueditor)/i.test(id)) ed = api.getEditor(id);
         if (ed && typeof ed.setContent === 'function' && ed.body && out.indexOf(ed) < 0) out.push(ed);
       } catch (e) {}
     }
@@ -701,6 +767,18 @@ CXAI.Apply = (function () {
     return !!want && norm(got).indexOf(want) >= 0;
   }
 
+  /** 这个 iframe 是不是富文本编辑器（UEditor / contenteditable），而不是附件或播放器 */
+  function isEditableFrame(el) {
+    if (!el) return false;
+    if (/^ueditor/i.test(String(el.id || ''))) return true;
+    try {
+      const b = el.contentDocument && el.contentDocument.body;
+      return !!(b && (b.isContentEditable || b.getAttribute('contenteditable') === 'true'));
+    } catch (e) {
+      return false;
+    }
+  }
+
   /**
    * 处理填空题 / 简答题。
    * @returns {Promise<{ok:boolean, filled:number, mode?:string, error?:string}>}
@@ -717,18 +795,23 @@ CXAI.Apply = (function () {
         if (setEditorValue(eds[i], val)) filled++;
         await sleep(CXAI.U.randInt(160, 420));
       }
-      if (filled) return { ok: true, filled, total: eds.length, mode: 'ueditor' };
+      // 全部空都写进去才算成功（见下面 native 分支的说明）
+      if (filled) return { ok: filled === eds.length, filled, total: eds.length, partial: filled < eds.length, mode: 'ueditor' };
     }
     const inputs = (q.inputs || []).filter((el) => el && el.isConnected);
     if (!inputs.length) {
-      // 回退：从 root 里现找
-      q.inputs = Array.from(q.root.querySelectorAll('textarea, input[type="text"], iframe')).filter((el) => !el.closest('.mark_answer'));
+      // 回退：从 root 里现找（附件/视频 iframe 不是答题框，别把答案写进去）
+      q.inputs = Array.from(q.root.querySelectorAll('textarea, input[type="text"], iframe')).filter((el) => {
+        if (!el || (el.closest && el.closest('.mark_answer'))) return false;
+        return String(el.tagName).toUpperCase() !== 'IFRAME' || isEditableFrame(el);
+      });
     }
     const list = (q.inputs || []).filter((el) => {
       if (!el || !el.isConnected) return false;
       // 隐藏控件（type=hidden / display:none）不是给考生填的：混进来会把"3 个空"算成 6 个空，
       // 答案被拆散进看不见的元素（2026-11-18 实测填空题 inputs=6）。
       if (String(el.tagName).toUpperCase() === 'INPUT' && String(el.type).toLowerCase() === 'hidden') return false;
+      if (String(el.tagName).toUpperCase() === 'IFRAME' && !isEditableFrame(el)) return false;
       try {
         if (el.offsetParent === null && getComputedStyle(el).display === 'none') return false;
       } catch (e) {}
@@ -761,13 +844,15 @@ CXAI.Apply = (function () {
       }
     }
     if (got) filled = Math.max(filled, got);
-    return { ok: filled > 0, filled, total: list.length, mode: 'native' };
+    // 只有全部空都落盘才算成功。3 个空只写进 1 个就报 ok，主循环会当成"已答"继续翻页，
+    // 剩下的空永远没人补（2026-11-18 真机：一道三空填空只填了第一个）。
+    return { ok: filled === list.length, filled, total: list.length, partial: filled < list.length, mode: 'native' };
   }
 
   /** 这些题型按"写文本"处理（与 04-ai.isTextType 对齐，避免两边漂移） */
   function isTextKind(q) {
     if (!q) return false;
-    return /^(completion|line|reader|fill|match|oral|listening)$/.test(String(q.type || ''));
+    return /^(completion|line|reader|fill|oral|listening)$/.test(String(q.type || ''));
   }
 
   /* ---------------- 统一入口 ---------------- */
@@ -897,6 +982,107 @@ CXAI.Apply = (function () {
     };
   }
 
+  /* ---------------- 连线 / 匹配 / 排序 ---------------- */
+
+  /** 本题上的下拉框（连线题、匹配题、部分排序题都是 select 形态） */
+  function selectList(q) {
+    try {
+      return Array.from(q.root.querySelectorAll('select')).filter((el) => el && el.isConnected && !el.disabled);
+    } catch (e) {
+      return [];
+    }
+  }
+
+  /** 把答案切成"每个下拉框一段"；切不出来就整段复用 */
+  function segmentsOf(text, count) {
+    const t = String(text == null ? '' : text).trim();
+    if (!t) return [];
+    const tries = [/\s*\|\|\|\s*/, /\s*\n+\s*/, /\s*[;；]\s*/, /\s*[、,，]\s*/];
+    for (const re of tries) {
+      const parts = t.split(re).map((s) => s.trim()).filter(Boolean);
+      if (parts.length === count) return parts;
+    }
+    return t
+      .split(/\s*\|\|\|\s*|\s*\n+\s*/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  /** 把一段答案塞进一个 select：先按选项文字匹配，再按字母/序号 */
+  function setSelectValue(sel, seg) {
+    const opts = Array.from(sel.options || []);
+    if (!opts.length || !seg) return false;
+    const strip = (t) => String(t == null ? '' : t).replace(/^[A-Ha-h\d]{1,2}\s*[、.．)）:：\-]\s*/, '');
+    const norm = (t) => CXAI.U.normText(strip(t));
+    const want = norm(seg);
+    let hit = opts.filter((o) => norm(o.text) === want)[0];
+    if (!hit) {
+      hit = opts.filter((o) => {
+        const ot = norm(o.text);
+        return ot && want && (ot.indexOf(want) >= 0 || want.indexOf(ot) >= 0);
+      })[0];
+    }
+    if (!hit) {
+      const m = /^([A-Ha-h]|\d{1,2})/.exec(String(seg).trim());
+      if (m) {
+        const k = m[1].toUpperCase();
+        hit = opts.filter((o) => String(o.value || '').toUpperCase() === k || norm(o.text) === k)[0];
+        if (!hit && /^\d+$/.test(k)) {
+          const idx = Number(k);
+          hit = opts[idx] || opts[idx - 1] || null;
+        }
+      }
+    }
+    if (!hit || hit.disabled) return false;
+    const val = hit.value != null ? hit.value : hit.text;
+    try {
+      sel.value = val;
+      if (sel.selectedIndex < 0) sel.selectedIndex = opts.indexOf(hit);
+      fire(sel, 'input');
+      fire(sel, 'change');
+    } catch (e) {
+      return false;
+    }
+    return String(sel.value) === String(val);
+  }
+
+  /**
+   * 连线 / 匹配 / 排序落盘。
+   * 旧实现把 match 归进文本题型，直接进 answerBlank 找 textarea/input —— 页面上只有 select，
+   * 于是永远"未找到输入框"转人工。这里按下拉框写入并回读验收；拖拽形态明确转人工。
+   */
+  async function answerSelectGrid(q, result, kindLabel) {
+    const sels = selectList(q);
+    if (!sels.length) {
+      return {
+        ok: false,
+        manual: true,
+        mode: kindLabel,
+        error: kindLabel + '题在页面上没有下拉框（这是拖拽/点击形态），答案在面板里（双击小球 → 点这道题的题号格），请手动完成'
+      };
+    }
+    const text = String((result && result.answerText) || '');
+    const segs = segmentsOf(text, sels.length);
+    let filled = 0;
+    for (let i = 0; i < sels.length; i++) {
+      const seg = segs[i] || (segs.length === 1 ? segs[0] : '');
+      if (setSelectValue(sels[i], seg)) filled++;
+      await sleep(CXAI.U.randInt(120, 320));
+    }
+    let got = 0;
+    for (const s of sels) if (String(s.value || '').trim()) got++;
+    const ok = filled === sels.length && got === sels.length;
+    return {
+      ok,
+      manual: !ok,
+      filled,
+      total: sels.length,
+      mode: kindLabel,
+      actual: sels.map((s) => String(s.value || '')).join(','),
+      error: ok ? undefined : '只填了 ' + filled + '/' + sels.length + ' 个下拉框（页面读到 ' + got + ' 个），其余请人工补'
+    };
+  }
+
   async function apply(q, result) {
     if (!q || !result) return { ok: false, error: '参数缺失' };
     const opts = {
@@ -909,12 +1095,15 @@ CXAI.Apply = (function () {
       return {
         ok: false,
         manual: true,
-        error: '这题识别成' + (q.typeLabel || '选择题') + '，但页面上没有可点的选项，答案已显示在题下标注，请手动填写'
+        error: '这题识别成' + (q.typeLabel || '选择题') + '，但页面上没有可点的选项；答案在面板里（双击小球 → 点这道题的题号格），请手动填写'
       };
     }
     // 小题组（完型填空 / 阅读理解）：先按"每空一小题"落盘，别掉进下面的文本分支，
     // 那里没有输入框，只会回报"没找到输入框"→ 整题静默丢弃（2026-11-18 实测 Q8/Q9 全空）。
     if (q.group && q.group.length) return await answerGroup(q, result);
+    // 连线/匹配/排序：走下拉框写入，拖拽形态明确转人工（此前一律"未找到输入框"）
+    if (q.type === 'match' || q.shell === 'match') return await answerSelectGrid(q, result, '连线');
+    if (q.type === 'sort') return await answerSelectGrid(q, result, '排序');
     if (q.type === 'completion' || q.type === 'line' || isTextKind(q) || q.options.length === 0) {
       const r = await answerBlank(q, result.answerText, opts);
       // 文本题但页面没有任何输入框（听力/口语/特殊皮肤/富文本未初始化）：
@@ -923,7 +1112,7 @@ CXAI.Apply = (function () {
         return {
           ok: false,
           manual: true,
-          error: '这题在页面上没有可写入的答题框（' + (q.shellLabel || q.typeLabel || '未知题型') + '），答案见题下标注，请手动填写'
+          error: '这题在页面上没有可写入的答题框（' + (q.shellLabel || q.typeLabel || '未知题型') + '）；答案在面板里（双击小球 → 点这道题的题号格），请手动填写'
         };
       }
       let freshBlank = q;
@@ -932,7 +1121,23 @@ CXAI.Apply = (function () {
         freshBlank = CXAI.Scraper.pickSame(l, q) || q;
       } catch (e) {}
       const liveText = (CXAI.Scraper.pageValue(freshBlank) || {}).value || '';
-      return Object.assign({}, r, { actual: liveText, ok: !!(r && r.filled) || !!liveText });
+      // 验收口径与小题组一致：所有空都写进去才算 ok。只写一半时报 manual + partial，
+      // 让主循环停下来等人补写，而不是在面板上显示"已答"然后翻页走人。
+      const total = Number(r && r.total) || 0;
+      const filled = Number(r && r.filled) || 0;
+      const partial = !!(r && total > 0 && filled < total);
+      const okNow = partial ? false : (r && r.ok) || (!total && !!liveText);
+      return Object.assign({}, r, {
+        actual: liveText,
+        ok: !!okNow,
+        partial: partial,
+        manual: !okNow,
+        filled: filled,
+        total: total,
+        error: okNow
+          ? r && r.error
+          : '只写进了 ' + filled + '/' + (total || '?') + ' 个空（页面读到：' + (liveText || '空') + '），其余请人工补写'
+      });
     }
     if (q.type === 'judgement' && result.keys.length === 0 && q.options.length) {
       // 判断但答案没映射到 key：按文本再试一次
@@ -954,16 +1159,36 @@ CXAI.Apply = (function () {
     } catch (e) {}
     const live = (CXAI.Scraper.pageValue(freshQ) || {}).value || (r && r.actual) || '';
     const want = (result.keys || []).join('');
+    // 最终验收按"集合相等"：want='AB' 而页面留下 AC 必须判失败。
+    // 旧实现只看 live 里有没有第一个字母，配合 retryByText 的"点了几次"式成功判定会漏掉错选项。
+    const liveSet = String(live || '')
+      .toUpperCase()
+      .replace(/[^A-H]/g, '')
+      .split('')
+      .sort()
+      .join('');
+    const wantSet = String(want || '')
+      .toUpperCase()
+      .replace(/[^A-H]/g, '')
+      .split('')
+      .sort()
+      .join('');
     return Object.assign({}, r || {}, {
       actual: live,
-      ok: !!(r && r.ok) && (q.type === 'completion' ? !!live : (!!live && (want ? live.indexOf(want.split('')[0]) >= 0 : true)))
+      ok: !!(r && r.ok) && !!liveSet && liveSet === wantSet
     });
   }
 
   /** 单题保存（部分考试页每题都有保存按钮） */
   async function saveOne(q) {
     const SEL = '[onclick*="saveQuestion"], .saveQuestion, [class*="save_btn"], .savebtndiv, [class*="savebtn"]';
-    let node = (q.root && q.root.querySelector(SEL)) || document.querySelector(SEL);
+    let node = (q.root && q.root.querySelector(SEL)) || null;
+    // 全页兜底只在"按本题 qid 精确定位"时允许：否则整卷页面会点到别的题的「保存」
+    if (!node && q && q.qid) {
+      try {
+        node = document.querySelector('[onclick*="saveQuestion(' + q.qid + '"]');
+      } catch (e) {}
+    }
     if (!node) return false;
     // 命中的常常是外层容器（超星整卷预览是 <div class="savebtndiv"><a onclick="saveQuestion(...)">保存</a></div>），
     // 直接点容器不会触发内部按钮的行为 —— 早先就是这样"点了但没保存"。这里往下找真正可点的那个。
