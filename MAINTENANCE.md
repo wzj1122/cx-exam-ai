@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.0（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.1（`package.json`）
 
 # MAINTENANCE
 
@@ -323,6 +323,12 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.1（2026-11-19）更正本地网关 403 的归因
+
+- **归因更正**：v1.11.0 收尾时把"3 个模型全部网络失败"记成"magpie 需要把 chaoxing 页面加进白名单"。真实环境不成立 —— 脚本请求优先走 `GM_xmlhttpRequest`（`src/04-ai.js:68`），它由油猴扩展后台发出、**不带页面 Origin**，网关正常返回 200。当时是 CDP 调试环境里 `tools/shim.js` 把 `GM_xmlhttpRequest` 实现为页面内 `fetch`（带 `Origin` + `credentials:'include'`），才触发网关 `permission_error`。实测证据：`curl` 带 `Origin` → 403，不带 → 200。
+- **文案修正**：`httpMethod` 的 403 分支保留「去网关白名单」提示（只在网关明确回 permission_error 时出现）；`onerror` 分支改为「请求没发出去（baseURL/网络/代理/浏览器拦截）」并说明 GM_xmlhttpRequest 不受 CORS/Origin 限制，避免把调试环境的现象当成使用前提。
+- **涉及文件**：`src/04-ai.js` `README.md` `MAINTENANCE.md` `src/00-header.js` `package.json` `dist/cx-exam-ai.user.js`
 
 ### v1.11.0（2026-11-18/19）全题型兜底（含小题组）+ 面板详情 + 球单击按同步状态分流
 

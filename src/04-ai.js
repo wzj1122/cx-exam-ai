@@ -83,8 +83,9 @@ CXAI.AI = (function () {
                 (parsed && parsed.error && (parsed.error.message || parsed.error.code)) ||
                 (res.responseText || '').slice(0, 300) ||
                 'HTTP ' + res.status;
-              // magpie 这类本地网关默认只放行白名单页面，被拒时的原文是英文长句，
-              // 落到日志里没人看得懂 —— 换成可执行的中文动作（2026-11-18 实测 403）。
+              // 网关明确回 permission_error 时，原文是英文长句，落到日志里没人看得懂 —— 换成中文动作。
+              // 注意：只有"页面上下文直接 fetch"才会被网关按 Origin 拒；Tampermonkey 的
+              // GM_xmlhttpRequest 走扩展后台、不带页面 Origin，正常环境不会出现这条（2026-11-19 更正）。
               if (/doesn't answer the web page|permission_error/i.test(String(msg))) {
                 const origin = (function () {
                   try {
@@ -104,7 +105,8 @@ CXAI.AI = (function () {
           onerror: () =>
             reject(
               new Error(
-                '网络连接失败（检查 baseURL / 代理）· 本地网关常见原因：没把页面 ' +
+                '请求没发出去（baseURL / 网络 / 代理不可达，或被浏览器拦下）· 若在页面上下文直接 fetch 本地网关，' +
+                  '请求会带 Origin 而被网关拒绝；油猴 GM_xmlhttpRequest 走扩展后台不受此限 · 当前页面 ' +
                   (function () {
                     try {
                       return location.origin;
