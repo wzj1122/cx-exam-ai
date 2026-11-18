@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.7-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.8-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.8（2026-11-19）面板与小题组刷新
+
+- **面板高亮跟题走**：整卷页 `currentIndex()` 读的是 URL `start`（永远是进页那一题），导致蓝色高亮一直停在第 5 题。整卷模式改为按数组位置写 `q.no`，高亮随实际作答移动。
+- **小题组不再用过期快照**：`relive()` 原来只在 `options.length` 非空时才换新题目对象；完型/阅读根级 `options` 本来就是空的，于是进页面时（`.hoverDiv` 还没渲染）那份 `group=0` 的快照被一路用到判题，prompt 里没有选项/小题题干，模型只能回段落。现在 `group` 非空也接受刷新后的对象。
+- **答对显示绿色**：状态 `skip`（已答·与 AI 判定一致）此前渲染成中性色，现与 `ok` 同为绿色，文字仍标「已答·原有」。
 
 ### v1.11.7（2026-11-19）阅读小题题干入 prompt
 

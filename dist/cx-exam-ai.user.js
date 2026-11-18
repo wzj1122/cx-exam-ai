@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.7
+// @version      1.11.8
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.7";
-CXAI.__builtAt = "2026-11-18T19:13:47.318Z";
+CXAI.__version = "1.11.8";
+CXAI.__builtAt = "2026-11-18T19:22:14.528Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -7985,7 +7985,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   }
 
   function clsOf(st) {
-    return st === 'ok' ? 'ok' : st === 'skip' ? 'no' : st === 'wait' ? 'wait' : st === 'fail' || st === 'manual' ? 'err' : 'todo';
+    // skip = 页面上已答、且与 AI 判定一致（fixWrong 认定答对）：这是"对的"，必须显示绿色；
+  // 旧映射把它当中性色，用户看到的就是"答对了还是黄框"。
+  return st === 'ok' || st === 'skip' ? 'ok' : st === 'wait' ? 'wait' : st === 'fail' || st === 'manual' ? 'err' : 'todo';
   }
 
   /** 题号格子：颜色=状态，点击=在下方面板看这题的选项与 AI 作答 */
@@ -8559,7 +8561,12 @@ CXAI.Engine = (function () {
     try {
       const list = (CXAI.Scraper.collect() || {}).questions || [];
       const hit = CXAI.Scraper.pickSame(list, q);
-      if (!hit || !hit.options.length) return q;
+      if (!hit) return q;
+      // 小题组（完型/阅读/共用选项）根级 options 本来就是空的，旧判断会把它们当成
+      // "没抓到题"而继续用过期快照：进页面时 .hoverDiv 还没渲染，group=0 一路传到判题，
+      // 于是 prompt 里既没选项也没小题题干，模型只能回段落（2026-11-19 实测 #8/#9）。
+      const hasOpts = (hit.options && hit.options.length) || (hit.group && hit.group.length);
+      if (!hasOpts) return q;
       hit.index = q.index;
       return hit;
     } catch (e) {
@@ -8929,6 +8936,9 @@ CXAI.Engine = (function () {
         q = CXAI.Scraper.pickSame(fresh, questions[i]) || null;
       } catch (e) {}
       if (!q) q = fresh[i] || questions[i];
+      // 整卷页的 currentIndex() 读的是 URL 的 start（永远是进页时那一题），
+      // 所以题号必须按数组位置写：否则面板的蓝色高亮会一直停在第 5 题。
+      q.no = i + 1;
       if (!q) continue;
       try {
         await handleQuestion(q, page.kind);

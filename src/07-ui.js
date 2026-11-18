@@ -915,7 +915,9 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
   }
 
   function clsOf(st) {
-    return st === 'ok' ? 'ok' : st === 'skip' ? 'no' : st === 'wait' ? 'wait' : st === 'fail' || st === 'manual' ? 'err' : 'todo';
+    // skip = 页面上已答、且与 AI 判定一致（fixWrong 认定答对）：这是"对的"，必须显示绿色；
+  // 旧映射把它当中性色，用户看到的就是"答对了还是黄框"。
+  return st === 'ok' || st === 'skip' ? 'ok' : st === 'wait' ? 'wait' : st === 'fail' || st === 'manual' ? 'err' : 'todo';
   }
 
   /** 题号格子：颜色=状态，点击=在下方面板看这题的选项与 AI 作答 */

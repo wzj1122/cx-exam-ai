@@ -108,7 +108,12 @@ CXAI.Engine = (function () {
     try {
       const list = (CXAI.Scraper.collect() || {}).questions || [];
       const hit = CXAI.Scraper.pickSame(list, q);
-      if (!hit || !hit.options.length) return q;
+      if (!hit) return q;
+      // 小题组（完型/阅读/共用选项）根级 options 本来就是空的，旧判断会把它们当成
+      // "没抓到题"而继续用过期快照：进页面时 .hoverDiv 还没渲染，group=0 一路传到判题，
+      // 于是 prompt 里既没选项也没小题题干，模型只能回段落（2026-11-19 实测 #8/#9）。
+      const hasOpts = (hit.options && hit.options.length) || (hit.group && hit.group.length);
+      if (!hasOpts) return q;
       hit.index = q.index;
       return hit;
     } catch (e) {
@@ -478,6 +483,9 @@ CXAI.Engine = (function () {
         q = CXAI.Scraper.pickSame(fresh, questions[i]) || null;
       } catch (e) {}
       if (!q) q = fresh[i] || questions[i];
+      // 整卷页的 currentIndex() 读的是 URL 的 start（永远是进页时那一题），
+      // 所以题号必须按数组位置写：否则面板的蓝色高亮会一直停在第 5 题。
+      q.no = i + 1;
       if (!q) continue;
       try {
         await handleQuestion(q, page.kind);
