@@ -937,8 +937,11 @@ details.adv[open] > summary, details.more[open] > summary { margin-bottom:6px; }
         const n = Number(it.index) || 0;
         const st = statusOf(it);
         const cls = clsOf(st);
-        const isCur = n && n === cur;
-        const isSel = n && n === sel;
+        // 只允许一个格子高亮：跑批时跟 current，停下来时用你点过的 sel。
+        // 旧实现 cur / sel 各画一个框，面板上会同时亮两题（实测 7 和 9 一起亮）。
+        const active = Number(state.running ? cur : sel || cur) || 0;
+        const isCur = n && n === active;
+        const isSel = false;
         const tip = [`#${n}`, STATUS_WORD[st] || '', it.typeLabel || '', it.answer || it.actual ? '答：' + (it.answer || it.actual) : '', it.stem || '']
           .filter(Boolean)
           .join(' · ');

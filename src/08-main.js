@@ -372,10 +372,25 @@ CXAI.Engine = (function () {
       }
     }
 
+    /**
+     * 小题组的字母答案是可机械验证的：每个空都能对应到页面上的真实选项，
+     * 不像散文答案那样无法核对。这里只要字母齐全就允许落盘，
+     * 否则单模型（少一票导致 confidence 只有 20%）会把整题白白留空。
+     */
+    function groupLettersComplete(qq, rr) {
+      if (!qq || !qq.group || !qq.group.length || !rr) return false;
+      const segs = String(rr.answerText || '')
+        .split(/\s*\|\|\|\s*/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (segs.length < qq.group.length) return false;
+      return segs.slice(0, qq.group.length).every((x) => /^[A-Ha-h]{1,4}$/.test(x));
+    }
+
     // 低置信度 / 本地兜底（stage=heuristic，按首选项猜）不自动落盘：
     // 猜出来的答案写上去比空着更危险，README 承诺的是"标黄复核"。
     // 需要"宁可写错也别空着"的人可以在设置里打开 apply.allowGuess。
-    if (result && result.lowConfidence && !CXAI.Cfg.get('apply.allowGuess', false)) {
+    if (result && result.lowConfidence && !CXAI.Cfg.get('apply.allowGuess', false) && !groupLettersComplete(q, result)) {
       st.failed++;
       CXAI.Log.warn(`#${no} 置信度不足（${Math.round((result.confidence || 0) * 100)}%），不自动写入；答案在面板里，请人工确认`);
       try {

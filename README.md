@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.9-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.10-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,12 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.10（2026-11-19）字母答案放行 + 单一高亮
+
+- **小题组字母答案不再被低置信度拦下**：实测第 8/9 题模型答的是 `B|||D|||A|||B|||C|||D`、`B|||C|||B`，但因为只回了一个模型、confidence 只有 20%/25%，被「低置信度不落盘」挡掉。字母答案每个空都能对应页面真实选项，属于可机械验证，现改为「字母齐全就落盘」。
+- **面板只保留一个高亮框**：之前 `current` 与 `sel` 各画一个蓝框（实测第 7、9 题同时亮），现在跑批时只跟 `current`，停下来只跟 `sel`。
+- 实测落盘：第 8 题 6/6、第 9 题 3/3，页面 JSON 分别写入 `B,D,A,B,C,D` 与 `B,C,B`。
 
 ### v1.11.9（2026-11-19）完型分组修复
 
