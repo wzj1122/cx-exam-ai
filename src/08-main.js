@@ -432,7 +432,10 @@ CXAI.Engine = (function () {
       '';
     if (!applied.ok) {
       st.failed++;
-      if (applied.manual) {
+      if (applied.broken) {
+        // 题目本身残缺（例如选项只有「选项1..4」）：直接说题目有问题，不要让人去手写
+        CXAI.Log.warn(`#${no} 跳过：${applied.error || '题目数据异常'}`);
+      } else if (applied.manual) {
         CXAI.Log.warn(`#${no} 需人工填写：${applied.error || '页面没有可写入的位置'}（AI 答案 ${result.answerText}）`);
       } else {
         CXAI.Log.error(`#${no} 写入失败：${applied.error || '未知'}（答案 ${result.answerText}｜页面 ${live || '空'}）`);

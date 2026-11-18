@@ -954,13 +954,28 @@ CXAI.Apply = (function () {
     // 有些卷子的选项本身是占位文本（实测：完型 A/B/C/D 四个选项内容是「选项1..选项4」，
     // 页面上根本没有 however/adopted 这些词）。这种情况下按文字匹配毫无意义，
     // 只会把模型的猜测硬塞进去；这里只接受模型直接给的字母。
-    const placeholder = blanks.every(function (b) {
+    const placeholder = blanks.length > 0 && blanks.every(function (b) {
       const opts = b.options || [];
       return opts.length > 0 && opts.every(function (o) {
         const t = String(o.text || '').replace(/^[A-Ha-h][\s.、:：)]*/, '').trim();
         return /^选项\s*\d+$/i.test(t);
       });
     });
+    // 选项是占位文本时直接判定"题目有问题"，不要按字母硬点：
+    // 卷子本身没有真实选项内容，点哪都是猜，写进去只会污染作答记录。
+    if (placeholder) {
+      return {
+        ok: false,
+        manual: true,
+        broken: true,
+        filled: 0,
+        total: blanks.length,
+        mode: 'group',
+        actual: '',
+        error: '题目有问题：卷子给的选项是占位文本（选项1/选项2…），没有真实选项内容，无法作答（共 ' + blanks.length + ' 个空）'
+      };
+    }
+
     const picks = [];
     const norm = (t) => String(t == null ? '' : t).replace(/[\s\u00a0]/g, '').toLowerCase();
     const stripKey = (t) => String(t || '').replace(/^[A-H][\s.、:：)]*/, '');
@@ -1063,6 +1078,8 @@ CXAI.Apply = (function () {
     return {
       ok: filled > 0 && miss === 0,
       manual: filled < blanks.length,
+      // 题目本身残缺（选项只有「选项1..4」）：单独标记，日志里直接说题目有问题
+      broken: miss > 0 && placeholder,
       filled: filled,
       total: blanks.length,
       mode: 'group',
@@ -1071,7 +1088,7 @@ CXAI.Apply = (function () {
         filled === blanks.length
           ? undefined
           : placeholder
-            ? '这题的选项是占位文本（选项1/选项2…），页面里没有真实选项内容，脚本无法匹配答案（共 ' + blanks.length + ' 个空，已落 ' + filled + '），请人工作答'
+            ? '题目有问题：卷子给的选项是占位文本（选项1/选项2…），没有真实选项内容，无法作答（共 ' + blanks.length + ' 个空）'
             : '小题组只落了 ' + filled + '/' + blanks.length + ' 个空（判定答案：' + (text.slice(0, 50) || '空') + '），剩下的请人工核对'
     };
   }

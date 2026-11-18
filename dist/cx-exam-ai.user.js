@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         CX 考试 AI 大脑 · 学习通考试自动答题
 // @namespace    https://github.com/wzj1122/cx-exam-ai
-// @version      1.11.12
+// @version      1.11.13
 // @description  超星学习通考试页专用：自动抓题 + 加密字体解密 + 附件题（PDF 题干）逐页转图 + 多模型交叉判定（无需题库）+ 拟人化点选。参考 ocsjs 架构重写。
 // @author       wzj1122
 // @license      MIT
@@ -29,8 +29,8 @@
 
 /* 全局命名空间：所有模块挂载到 CXAI 上，模块之间只依赖它 */
 var CXAI = {};
-CXAI.__version = "1.11.12";
-CXAI.__builtAt = "2026-11-18T19:47:11.884Z";
+CXAI.__version = "1.11.13";
+CXAI.__builtAt = "2026-11-18T19:52:04.129Z";
 
 /* ==================== 01-core.js ==================== */
 /* ---------------- 配置 / 存储 / 工具 ---------------- */
@@ -6584,13 +6584,28 @@ CXAI.Apply = (function () {
     // 有些卷子的选项本身是占位文本（实测：完型 A/B/C/D 四个选项内容是「选项1..选项4」，
     // 页面上根本没有 however/adopted 这些词）。这种情况下按文字匹配毫无意义，
     // 只会把模型的猜测硬塞进去；这里只接受模型直接给的字母。
-    const placeholder = blanks.every(function (b) {
+    const placeholder = blanks.length > 0 && blanks.every(function (b) {
       const opts = b.options || [];
       return opts.length > 0 && opts.every(function (o) {
         const t = String(o.text || '').replace(/^[A-Ha-h][\s.、:：)]*/, '').trim();
         return /^选项\s*\d+$/i.test(t);
       });
     });
+    // 选项是占位文本时直接判定"题目有问题"，不要按字母硬点：
+    // 卷子本身没有真实选项内容，点哪都是猜，写进去只会污染作答记录。
+    if (placeholder) {
+      return {
+        ok: false,
+        manual: true,
+        broken: true,
+        filled: 0,
+        total: blanks.length,
+        mode: 'group',
+        actual: '',
+        error: '题目有问题：卷子给的选项是占位文本（选项1/选项2…），没有真实选项内容，无法作答（共 ' + blanks.length + ' 个空）'
+      };
+    }
+
     const picks = [];
     const norm = (t) => String(t == null ? '' : t).replace(/[\s\u00a0]/g, '').toLowerCase();
     const stripKey = (t) => String(t || '').replace(/^[A-H][\s.、:：)]*/, '');
@@ -6693,6 +6708,8 @@ CXAI.Apply = (function () {
     return {
       ok: filled > 0 && miss === 0,
       manual: filled < blanks.length,
+      // 题目本身残缺（选项只有「选项1..4」）：单独标记，日志里直接说题目有问题
+      broken: miss > 0 && placeholder,
       filled: filled,
       total: blanks.length,
       mode: 'group',
@@ -6701,7 +6718,7 @@ CXAI.Apply = (function () {
         filled === blanks.length
           ? undefined
           : placeholder
-            ? '这题的选项是占位文本（选项1/选项2…），页面里没有真实选项内容，脚本无法匹配答案（共 ' + blanks.length + ' 个空，已落 ' + filled + '），请人工作答'
+            ? '题目有问题：卷子给的选项是占位文本（选项1/选项2…），没有真实选项内容，无法作答（共 ' + blanks.length + ' 个空）'
             : '小题组只落了 ' + filled + '/' + blanks.length + ' 个空（判定答案：' + (text.slice(0, 50) || '空') + '），剩下的请人工核对'
     };
   }
@@ -9006,7 +9023,10 @@ CXAI.Engine = (function () {
       '';
     if (!applied.ok) {
       st.failed++;
-      if (applied.manual) {
+      if (applied.broken) {
+        // 题目本身残缺（例如选项只有「选项1..4」）：直接说题目有问题，不要让人去手写
+        CXAI.Log.warn(`#${no} 跳过：${applied.error || '题目数据异常'}`);
+      } else if (applied.manual) {
         CXAI.Log.warn(`#${no} 需人工填写：${applied.error || '页面没有可写入的位置'}（AI 答案 ${result.answerText}）`);
       } else {
         CXAI.Log.error(`#${no} 写入失败：${applied.error || '未知'}（答案 ${result.answerText}｜页面 ${live || '空'}）`);

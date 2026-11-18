@@ -2,7 +2,7 @@
 
 **超星学习通考试页专用油猴脚本。不用题库** —— 每道题现场交给多个大模型独立作答，再交叉复核、分歧仲裁，最后把结果拟人化地点到页面上。模型、判题强度、读图策略都有**独立设置中心**（<https://cx-exam-ai.pages.dev/settings>），不必先进考试页。
 
-[![version](https://img.shields.io/badge/version-1.11.12-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
+[![version](https://img.shields.io/badge/version-1.11.13-6d8bff)](https://github.com/wzj1122/cx-exam-ai)
 [![license](https://img.shields.io/badge/license-MIT-3ddc97)](LICENSE)
 [![userscript](https://img.shields.io/badge/Tampermonkey-userscript-9d6bff)](dist/cx-exam-ai.user.js)
 [![no-deps](https://img.shields.io/badge/dependencies-0-lightgrey)](package.json)
@@ -239,6 +239,11 @@ cx-exam-ai/
 ```
 
 ## 更新日志
+
+### v1.11.13（2026-11-19）残缺题直接判「题目有问题」
+
+- **占位选项不再按字母硬点**：卷子给的选项是「选项1/选项2…」时，点哪个都是猜，写进去只会污染作答记录。现在直接返回 `broken`，日志写「#8 跳过：题目有问题：卷子给的选项是占位文本…」，面板标红，不再出现「需人工填写」这种误导性提示。
+- 与真正「页面没有答题框」的题区分开：后者仍然是「需人工填写」，前者是题目数据残缺。
 
 ### v1.11.12（2026-11-19）对比口径与共用选项题干
 

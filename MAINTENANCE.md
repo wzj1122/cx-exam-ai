@@ -1,4 +1,4 @@
-> 最后更新：2026-11-19 ｜ 当前版本：1.11.12（`package.json`）
+> 最后更新：2026-11-19 ｜ 当前版本：1.11.13（`package.json`）
 
 # MAINTENANCE
 
@@ -338,6 +338,13 @@ Apply.apply(q, result)
 25. **提交前跑 `git status --short` 自查**：出现 `logs/`、`.cdp-profile/`、`.chrome-profile/`、`.shot-*.png` 说明 `.gitignore` 被绕过（多半是 `git add -f`）。这些目录含考试页面截图、登录态 Cookie、模型 Key，一旦推到公开仓库等于泄露，且从历史里清不掉。
 
 ## 变更记录
+
+### v1.11.13（2026-11-19）残缺题直接判「题目有问题」
+
+| 改动 | 文件 |
+|---|---|
+| 占位选项时 `answerGroup` 早退（`broken:true`，不再点任何选项） | `src/05-apply.js` |
+| `handleQuestion` 区分 `broken`（题目有问题）与 `manual`（需人工填写） | `src/08-main.js` |
 
 ### v1.11.12（2026-11-19）对比口径与共用选项题干
 
