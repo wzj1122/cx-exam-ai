@@ -6,6 +6,7 @@
 
 - 设置中心：<https://cx-exam-ai-app.pages.dev/settings>
 - 油猴脚本：<https://cx-exam-ai-app.pages.dev/dist/cx-exam-ai.user.js>
+- 扩展 zip：<https://cx-exam-ai-app.pages.dev/dist/cx-exam-ai-extension-v2.0.0.zip>
 - 扩展 Release：<https://github.com/wzj1122/cx-exam-ai/releases/tag/v2.0.0>
 
 ## 形态

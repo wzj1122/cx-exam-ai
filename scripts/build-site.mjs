@@ -7,6 +7,7 @@ const out = resolve(root, '.site');
 const site = resolve(root, 'site');
 const userscript = resolve(root, 'apps/userscript/dist/cx-exam-ai.user.js');
 const webSettings = resolve(root, 'apps/web-settings/dist');
+const extensionZip = resolve(root, 'release/cx-exam-ai-extension-v2.0.0.zip');
 
 await rm(out, { recursive: true, force: true });
 await mkdir(resolve(out, 'dist'), { recursive: true });
@@ -18,6 +19,9 @@ if (!existsSync(userscript)) {
   process.exit(1);
 }
 await cp(userscript, resolve(out, 'dist/cx-exam-ai.user.js'));
+if (existsSync(extensionZip)) {
+  await cp(extensionZip, resolve(out, 'dist/cx-exam-ai-extension-v2.0.0.zip'));
+}
 
 const info = await stat(resolve(out, 'dist/cx-exam-ai.user.js'));
 console.log(`.site ready: ${out}`);
