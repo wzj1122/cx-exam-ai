@@ -106,6 +106,9 @@ try {
     const text = document.querySelector('#cx-exam-ai-drawer-host')?.shadowRoot?.textContent || '';
     return text.includes('可填') || text.includes('风险') || text.includes('已校验');
   }, { timeout: 8000 });
+  await page.getByTitle('同步配置').click();
+  await page.getByText('云同步').waitFor({ timeout: 5000 });
+  await page.getByRole('button', { name: '关闭' }).click();
   if (process.env.CX_SHOT) await page.screenshot({ path: process.env.CX_SHOT, fullPage: false });
   await page.getByRole('button', { name: '一键填写' }).click();
   await page.getByRole('button', { name: '确认填写' }).click();

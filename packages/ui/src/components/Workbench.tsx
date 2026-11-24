@@ -9,6 +9,11 @@ export interface WorkbenchProps {
   controller: WorkbenchController;
   onOpenSettings?: () => void;
   onClose?: () => void;
+  syncCode?: string;
+  syncStatus?: string;
+  syncBusy?: boolean;
+  onSyncCodeChange?: (code: string) => void;
+  onSyncPull?: (code: string) => void | Promise<void>;
 }
 
 const STATUS_LABEL: Record<QuestionStatus, string> = {
@@ -58,10 +63,20 @@ function downloadJson(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function Workbench({ controller, onOpenSettings, onClose }: WorkbenchProps) {
+export function Workbench({
+  controller,
+  onOpenSettings,
+  onClose,
+  syncCode = '',
+  syncStatus = '',
+  syncBusy = false,
+  onSyncCodeChange,
+  onSyncPull,
+}: WorkbenchProps) {
   const state = useWorkbenchState(controller);
   const portalContainer = useContext(PortalContainerContext);
   const [fillOpen, setFillOpen] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const paper = state.paper;
   const selected = paper?.questions.find((q) => q.id === state.selectedId) || paper?.questions[0];
   const answer = selected ? state.answers[selected.id] : undefined;
@@ -114,6 +129,11 @@ export function Workbench({ controller, onOpenSettings, onClose }: WorkbenchProp
           {onOpenSettings ? (
             <button className="cxai-x" title="设置" onClick={onOpenSettings}>
               ⚙
+            </button>
+          ) : null}
+          {onSyncPull ? (
+            <button className="cxai-x" title="同步配置" onClick={() => setSyncOpen(true)}>
+              ⇅
             </button>
           ) : null}
           {onClose ? (
@@ -326,6 +346,39 @@ export function Workbench({ controller, onOpenSettings, onClose }: WorkbenchProp
               >
                 确认填写
               </button>
+            </div>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+
+      <Dialog.Root open={syncOpen} onOpenChange={setSyncOpen} modal={false}>
+        <Dialog.Portal container={portalContainer || undefined}>
+          <Dialog.Overlay className="cxai-dialog-overlay" />
+          <Dialog.Content className="cxai-dialog">
+            <Dialog.Title className="cxai-dialog-title">云同步</Dialog.Title>
+            <p className="cxai-dim">
+              在网页设置中心点「生成并上传」，把同步码粘到这里拉取。之后换考试页可重复使用。
+            </p>
+            <div className="cxai-dialog-row" style={{ gap: 6 }}>
+              <input
+                className="cxai-input"
+                placeholder="同步码 abc12345.xyz…"
+                value={syncCode}
+                onChange={(event) => onSyncCodeChange?.(event.target.value)}
+              />
+              <button
+                className="cxai-btn primary"
+                disabled={syncBusy || !syncCode.trim()}
+                onClick={() => void onSyncPull?.(syncCode)}
+              >
+                拉取
+              </button>
+            </div>
+            {syncStatus ? <div className={syncStatus.includes('失败') ? 'cxai-error' : 'cxai-muted'}>{syncStatus}</div> : null}
+            <div className="cxai-dialog-actions">
+              <Dialog.Close asChild>
+                <button className="cxai-btn">关闭</button>
+              </Dialog.Close>
             </div>
           </Dialog.Content>
         </Dialog.Portal>

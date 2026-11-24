@@ -2,6 +2,7 @@ import {
   AnswerEngine,
   ConfigStore,
   createProviderCaller,
+  SyncClient,
   SETTINGS_URL,
   type AppConfig,
   type ExamPaper,
@@ -87,6 +88,7 @@ async function boot() {
       <WorkbenchApp
         controller={controller}
         configStore={configStore}
+        syncClient={new SyncClient(transport)}
         transport={transport}
         onOpenSettings={() => chrome.tabs.create({ url: SETTINGS_URL })}
         onClose={close}

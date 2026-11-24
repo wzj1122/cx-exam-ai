@@ -36,12 +36,16 @@ function buildEngine(config: AppConfig, transport: HttpTransport): AnswerEngine 
 export function WorkbenchApp({
   controller,
   configStore,
+  syncClient,
   transport,
   onOpenSettings,
   onClose,
 }: WorkbenchAppProps) {
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [loaded, setLoaded] = useState(false);
+  const [syncCode, setSyncCode] = useState('');
+  const [syncStatus, setSyncStatus] = useState('');
+  const [syncBusy, setSyncBusy] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -53,6 +57,7 @@ export function WorkbenchApp({
       controller.setEngine?.(buildEngine(next, transport));
       void controller.init();
     });
+    void configStore.getSyncCode().then(setSyncCode);
     return () => {
       alive = false;
       controller.dispose();
@@ -60,6 +65,24 @@ export function WorkbenchApp({
   }, [configStore, controller, transport]);
 
   const rootStyle = useMemo(() => ({ height: 'auto' }), []);
+
+  const pullSync = async (code: string) => {
+    if (!syncClient) return;
+    setSyncBusy(true);
+    try {
+      const result = await syncClient.pull(code);
+      const saved = await configStore.save(result.config);
+      await configStore.setSyncCode(code);
+      setConfig(saved);
+      controller.updateConfig?.(saved);
+      controller.setEngine?.(buildEngine(saved, transport));
+      setSyncStatus('同步成功，模型配置已更新');
+    } catch (error) {
+      setSyncStatus(`同步失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setSyncBusy(false);
+    }
+  };
 
   if (!loaded) {
     return (
@@ -81,6 +104,14 @@ export function WorkbenchApp({
         controller={controller}
         onOpenSettings={onOpenSettings || (() => window.open(SETTINGS_URL, '_blank', 'noopener'))}
         onClose={onClose}
+        syncCode={syncCode}
+        syncStatus={syncStatus}
+        syncBusy={syncBusy}
+        onSyncCodeChange={(code) => {
+          setSyncCode(code);
+          void configStore.setSyncCode(code);
+        }}
+        onSyncPull={pullSync}
       />
     </div>
   );
