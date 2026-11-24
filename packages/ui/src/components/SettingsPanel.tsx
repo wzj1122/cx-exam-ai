@@ -339,6 +339,16 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 />
                 检测到整卷预览时自动进入（3 秒可取消）
               </label>
+              <label className="cxai-dialog-row">
+                <input
+                  type="checkbox"
+                  checked={config.ui.autoStart !== false}
+                  onChange={(e) =>
+                    onChange({ ...config, ui: { ...config.ui, autoStart: e.target.checked } })
+                  }
+                />
+                打开考试页自动预取/缓存答案（不自动点击）
+              </label>
             </div>
           </Tabs.Content>
 

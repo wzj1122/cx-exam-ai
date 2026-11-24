@@ -85,11 +85,25 @@ function emptyState(): WorkbenchState {
 }
 
 const AUTO_RUN_KEY = 'cx-exam-ai:v2:auto-run';
+const PENDING_RUN_KEY = 'cx-exam-ai:v2:pending-run';
+const AUTO_NAV_KEY = 'cx-exam-ai:v2:auto-nav';
+const ANSWER_MEMORY_PREFIX = 'cx-exam-ai:v2:answer-memory:';
 
 interface AutoRunState {
   paperId: string;
   processed: string[];
   at: number;
+}
+
+interface PendingRunState {
+  paperId: string;
+  mode: 'single' | 'all';
+  at: number;
+}
+
+interface CachedAnswer {
+  fingerprint: string;
+  answer: QuestionAnswer;
 }
 
 function readAutoRun(paperId: string): AutoRunState | null {
@@ -116,6 +130,72 @@ function saveAutoRun(value: AutoRunState): void {
 function clearAutoRun(): void {
   try {
     sessionStorage.removeItem(AUTO_RUN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function readPendingRun(paperId: string): PendingRunState | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_RUN_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as PendingRunState;
+    if (!value || value.paperId !== paperId) return null;
+    if (Date.now() - Number(value.at || 0) > 10 * 60_000) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingRun(paperId: string, mode: 'single' | 'all'): void {
+  try {
+    sessionStorage.setItem(PENDING_RUN_KEY, JSON.stringify({ paperId, mode, at: Date.now() }));
+  } catch {
+    // ignore
+  }
+}
+
+function shouldAutoNavigate(paperId: string, targetQid: string): boolean {
+  try {
+    const raw = sessionStorage.getItem(AUTO_NAV_KEY);
+    if (raw) {
+      const value = JSON.parse(raw) as { paperId: string; target: string; at: number };
+      if (value.paperId === paperId && value.target === targetQid && Date.now() - Number(value.at || 0) < 15_000) {
+        return false;
+      }
+    }
+    sessionStorage.setItem(AUTO_NAV_KEY, JSON.stringify({ paperId, target: targetQid, at: Date.now() }));
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+function clearPendingRun(): void {
+  try {
+    sessionStorage.removeItem(PENDING_RUN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+function readAnswerMemory(paperId: string): Record<string, CachedAnswer> {
+  try {
+    const raw = sessionStorage.getItem(ANSWER_MEMORY_PREFIX + paperId);
+    if (!raw) return {};
+    const value = JSON.parse(raw);
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveAnswerMemory(paperId: string, qid: string, fingerprint: string, answer: QuestionAnswer): void {
+  try {
+    const memory = readAnswerMemory(paperId);
+    memory[qid] = { fingerprint, answer };
+    sessionStorage.setItem(ANSWER_MEMORY_PREFIX + paperId, JSON.stringify(memory));
   } catch {
     // ignore
   }
@@ -173,13 +253,28 @@ export class LocalWorkbenchController implements WorkbenchController {
       this.emit({ lastError: '没有抓到题目，请确认页面已加载完成' });
       return;
     }
-    const fillIds = paper.questions.map((q) => q.id);
+    const memory = readAnswerMemory(paper.id);
+    const answers: Record<string, QuestionAnswer> = {};
+    const status: Record<string, QuestionStatus> = {};
+    const fillIds: string[] = [];
+    for (const q of paper.questions) {
+      const cached = memory[q.id];
+      if (cached && cached.fingerprint === q.fingerprint) {
+        answers[q.id] = cached.answer;
+        status[q.id] = 'ready';
+        if (!(cached.answer.risk && this.options.config.ui.riskDefaultExcluded)) fillIds.push(q.id);
+      } else {
+        status[q.id] = 'idle';
+        fillIds.push(q.id);
+      }
+    }
     this.emit({
       ready: true,
       paper,
       selectedId: paper.questions[0].id,
       fillIds,
-      status: Object.fromEntries(paper.questions.map((q) => [q.id, 'idle' as QuestionStatus])),
+      answers,
+      status,
       lastError: '',
     });
     this.startTimer();
@@ -188,6 +283,7 @@ export class LocalWorkbenchController implements WorkbenchController {
       this.startPreviewCountdown();
     }
     const auto = readAutoRun(paper.id);
+    const pending = readPendingRun(paper.id);
     const currentQid = paper.questions[0]?.id || '';
     if (auto) {
       if (auto.processed.includes(currentQid)) {
@@ -198,7 +294,23 @@ export class LocalWorkbenchController implements WorkbenchController {
         void this.runAutoStep(auto);
       }
     } else {
-      void this.solveAll();
+      const first = this.firstUnanswered();
+      const current = paper.questions[0];
+      if (
+        !pending &&
+        this.options.config.ui.autoStart !== false &&
+        first &&
+        current &&
+        first.qid !== current.qid &&
+        shouldAutoNavigate(paper.id, first.qid)
+      ) {
+        this.log(`自动预取：跳到最前面的未答题 第 ${first.number} 题`);
+        void this.jumpToQuestion(first.number, first.qid);
+        return;
+      }
+      // 打开页面先后台预取/缓存当前可见题；不自动点击、不自动翻页。
+      const prefetch = this.options.config.ui.autoStart !== false ? this.solveAll() : Promise.resolve();
+      void prefetch.then(() => this.continuePending(pending));
     }
   }
 
@@ -223,6 +335,29 @@ export class LocalWorkbenchController implements WorkbenchController {
         this.emit({ paper: { ...this.state.paper, timer } });
       }
     }, 1000);
+  }
+
+  private firstUnanswered() {
+    return (this.state.paper?.questionIndex || []).find((item) => !item.answered) || null;
+  }
+
+  private async continuePending(pending: PendingRunState | null): Promise<void> {
+    if (!pending || !this.state.paper) return;
+    const current = this.state.paper.questions[0];
+    const first = this.firstUnanswered();
+    if (!first) {
+      clearPendingRun();
+      this.log('这一页已经全部作答');
+      return;
+    }
+    if (!current || current.qid !== first.qid) {
+      clearPendingRun();
+      this.log('未能停到最前面的未答题，已取消自动运行');
+      return;
+    }
+    clearPendingRun();
+    if (pending.mode === 'all') await this.runAll();
+    else await this.runSingle();
   }
 
   private startPreviewCountdown(): void {
@@ -256,10 +391,15 @@ export class LocalWorkbenchController implements WorkbenchController {
   async solveAll(): Promise<void> {
     if (!this.state.paper) return;
     if (this.state.running) return;
+    const missing = this.state.paper.questions.filter((q) => !this.state.answers[q.id]);
+    if (!missing.length) {
+      this.log('答案已从本页缓存读取，无需重新请求');
+      return;
+    }
     this.emit({ running: true });
-    for (const q of this.state.paper.questions) this.markStatus(q.id, 'solving');
+    for (const q of missing) this.markStatus(q.id, 'solving');
     try {
-      await this.engine.solvePaper(this.state.paper, (answer) => {
+      await this.engine.solvePaper({ ...this.state.paper, questions: missing }, (answer) => {
         this.acceptAnswer(answer);
       });
       this.log('首轮答案已生成，风险题默认不勾选');
@@ -291,6 +431,10 @@ export class LocalWorkbenchController implements WorkbenchController {
   private acceptAnswer(answer: QuestionAnswer): void {
     const risk = answer.risk || !answer.optionIds.length && !answer.answerText.trim();
     const nextAnswer = { ...answer, risk };
+    const q = this.state.paper?.questions.find((item) => item.id === answer.questionId);
+    if (q && this.state.paper) {
+      saveAnswerMemory(this.state.paper.id, q.id, q.fingerprint, nextAnswer);
+    }
     const answers = { ...this.state.answers, [answer.questionId]: nextAnswer };
     const fillIds = this.state.fillIds.includes(answer.questionId)
       ? this.state.fillIds
@@ -344,6 +488,19 @@ export class LocalWorkbenchController implements WorkbenchController {
   }
 
   async runSingle(): Promise<void> {
+    const paper = this.state.paper;
+    const current = paper?.questions[0];
+    const first = this.firstUnanswered();
+    if (paper && !first) {
+      this.log('全部题目都已作答');
+      return;
+    }
+    if (paper && current && first && first.qid !== current.qid) {
+      savePendingRun(paper.id, 'single');
+      this.log(`答一题：先跳到最前面的未答题 第 ${first.number} 题`);
+      await this.jumpToQuestion(first.number, first.qid);
+      return;
+    }
     const q = this.state.paper?.questions.find((item) => item.id === this.state.selectedId) ||
       this.state.paper?.questions[0];
     if (!q) return;
@@ -365,12 +522,23 @@ export class LocalWorkbenchController implements WorkbenchController {
   async runAll(): Promise<void> {
     const paper = this.state.paper;
     if (!paper) return;
+    const current = paper.questions[0];
+    const first = this.firstUnanswered();
+    if (!first) {
+      this.log('全部题目都已作答');
+      return;
+    }
+    if (paper.mode === 'single' && current && first && first.qid !== current.qid) {
+      savePendingRun(paper.id, 'all');
+      this.log(`全部填写：先跳到最前面的未答题 第 ${first.number} 题`);
+      await this.jumpToQuestion(first.number, first.qid);
+      return;
+    }
     if (paper.mode === 'preview') {
       await this.solveAll();
       await this.applyAll();
       return;
     }
-    const current = paper.questions[0];
     if (!current) return;
     const auto = { paperId: paper.id, processed: [], at: Date.now() };
     saveAutoRun(auto);

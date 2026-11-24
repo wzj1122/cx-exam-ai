@@ -26,6 +26,7 @@ export const DEFAULT_CONFIG: AppConfig = {
     theme: 'auto',
     riskDefaultExcluded: true,
     autoEnterPreview: true,
+    autoStart: true,
     showServerKey: true,
   },
   sync: {

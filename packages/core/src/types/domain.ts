@@ -202,6 +202,7 @@ export interface UiConfig {
   theme: 'auto' | 'light' | 'dark';
   riskDefaultExcluded: boolean;
   autoEnterPreview: boolean;
+  autoStart: boolean;
   showServerKey: boolean;
 }
 
