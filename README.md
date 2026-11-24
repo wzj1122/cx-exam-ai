@@ -1,6 +1,12 @@
 # CX 考试 AI 大脑 v2
 
-考试专用、共享核心、双外壳的 AI 答题助手。当前仓库从 `2.0.0` 起，只支持超星学习通考试页；旧版 `cx-exam-ai` 计划归档为 `cx-exam-ai-legacy`。
+考试专用、共享核心、双外壳的 AI 答题助手。当前仓库从 `2.0.0` 起，只支持超星学习通考试页；旧版已归档为 `cx-exam-ai-legacy`。
+
+## 在线地址
+
+- 设置中心：<https://cx-exam-ai-app.pages.dev/settings>
+- 油猴脚本：<https://cx-exam-ai-app.pages.dev/dist/cx-exam-ai.user.js>
+- 扩展 Release：<https://github.com/wzj1122/cx-exam-ai/releases/tag/v2.0.0>
 
 ## 形态
 
