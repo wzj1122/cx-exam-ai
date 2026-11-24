@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CX 考试 AI 大脑 v2</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d1016;
+        --panel: #151922;
+        --line: #2a3140;
+        --text: #e9eef8;
+        --muted: #8f9bb0;
+        --accent: #6d95ff;
+        --accent2: #8b6dff;
+        font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: radial-gradient(circle at 80% 0%, #1b2442 0%, var(--bg) 45%); color: var(--text); }
+      main { max-width: 880px; margin: 0 auto; padding: 72px 24px 96px; }
+      .badge { display: inline-flex; gap: 8px; align-items: center; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 12px; }
+      h1 { font-size: clamp(32px, 6vw, 56px); line-height: 1.1; margin: 20px 0 14px; letter-spacing: -0.03em; }
+      .lead { color: var(--muted); font-size: 16px; line-height: 1.7; max-width: 680px; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 32px 0; }
+      .card { border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 88%, transparent); border-radius: 16px; padding: 18px; }
+      .card h3 { margin: 0 0 8px; font-size: 16px; }
+      .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+      .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+      a.btn { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 0 16px; border-radius: 10px; border: 1px solid var(--line); color: var(--text); text-decoration: none; background: var(--panel); font-size: 14px; }
+      a.btn.primary { border: 0; background: linear-gradient(135deg, var(--accent), var(--accent2)); font-weight: 700; }
+      .muted { color: var(--muted); font-size: 12px; }
+      code { color: #b8c7ff; }
+      footer { margin-top: 56px; color: var(--muted); font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="badge">v2.0.0 · 考试专用 · 半自动填写</span>
+      <h1>先给答案表，<br />确认后再点。</h1>
+      <p class="lead">
+        CX 考试 AI 大脑 v2 只做学习通考试页。它把选项拆成「页面显示字母」和「服务端提交键」两套空间，
+        模型只回答内部 ID，落盘前再映射，避免随机选项下“模型答对、脚本点错”。
+      </p>
+      <div class="grid">
+        <div class="card">
+          <h3>Chrome 扩展</h3>
+          <p>Manifest V3，侧边栏工作台。从 GitHub Release 下载 zip，开发者模式加载。</p>
+        </div>
+        <div class="card">
+          <h3>油猴脚本</h3>
+          <p>单文件用户脚本，Shadow DOM 抽屉。Greasy Fork 条目 605687 更新到 2.0.0。</p>
+        </div>
+        <div class="card">
+          <h3>半自动</h3>
+          <p>整卷预览模式一次确认后串行填写；单题模式逐题确认；风险题默认不填；永不自动交卷。</p>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="btn primary" href="/dist/cx-exam-ai.user.js">安装油猴脚本</a>
+        <a class="btn" href="https://github.com/wzj1122/cx-exam-ai/releases">下载扩展 zip</a>
+        <a class="btn" href="/settings">配置说明</a>
+      </div>
+      <footer>
+        API Key 只保存在本机；云同步在浏览器内加密后上传密文。考试提交不可逆，请自行核对后再交卷。
+      </footer>
+    </main>
+  </body>
+</html>

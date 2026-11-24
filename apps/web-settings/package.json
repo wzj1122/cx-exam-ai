@@ -1,0 +1,12 @@
+{
+  "name": "@cx/web-settings",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cx/core": "2.0.0",
+    "@cx/ui": "2.0.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
+  }
+}

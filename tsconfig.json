@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["chrome", "node"],
+    "paths": {
+      "@cx/core": ["./packages/core/src/index.ts"],
+      "@cx/core/*": ["./packages/core/src/*"],
+      "@cx/chaoxing": ["./packages/chaoxing/src/index.ts"],
+      "@cx/chaoxing/*": ["./packages/chaoxing/src/*"],
+      "@cx/ui/styles.css": ["./packages/ui/src/styles/workbench.css"],
+      "@cx/ui": ["./packages/ui/src/index.ts"],
+      "@cx/ui/*": ["./packages/ui/src/*"]
+    }
+  },
+  "include": [
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
+    "scripts/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist", "**/dist/**"]
+}

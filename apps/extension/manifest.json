@@ -1,0 +1,44 @@
+{
+  "manifest_version": 3,
+  "name": "CX 考试 AI 大脑 v2",
+  "version": "2.0.0",
+  "description": "考试专用 AI 答题助手：答案表复核、半自动填写、随机选项防点错。",
+  "permissions": ["storage", "scripting", "tabs"],
+  "host_permissions": [
+    "https://*.chaoxing.com/*",
+    "http://*.chaoxing.com/*",
+    "https://*.edu.cn/*",
+    "http://*.edu.cn/*",
+    "https://cx-exam-ai-app.pages.dev/*",
+    "https://api.deepseek.com/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://open.bigmodel.cn/*",
+    "https://api.openai.com/*",
+    "https://tokenrhythm.studio/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "src/background/index.ts",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.chaoxing.com/*",
+        "http://*.chaoxing.com/*",
+        "https://*.edu.cn/*",
+        "http://*.edu.cn/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": ["src/content/index.tsx"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "options_page": "src/options/index.html",
+  "action": {
+    "default_title": "CX 考试 AI"
+  }
+}

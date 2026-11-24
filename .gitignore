@@ -1,0 +1,32 @@
+node_modules/
+dist/
+**/dist/
+.site/
+release/
+.wrangler/
+coverage/
+playwright-report/
+test-results/
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.bak
+*~
+
+# Local browser profiles / captures (never commit cookies or exam data)
+.cdp-profile/
+.cdp-main/
+.chrome-profile/
+.chrome-*/
+.shot-*.png
+.shot*.png
+*.mhtml
+*.har
+
+# Local API keys / scratch configs
+.env
+.env.*
+!.env.example
