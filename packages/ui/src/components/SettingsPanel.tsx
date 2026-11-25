@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { AppConfig, ProviderConfig } from '@cx/core';
+import { APP_VERSION, type AppConfig, type ProviderConfig } from '@cx/core';
 
 export interface SettingsPanelProps {
   config: AppConfig;
@@ -239,7 +239,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
       <button className="cxset-btn" onClick={() => void props.onSave()} disabled={props.busy}>
         保存
       </button>
-      <span className="cxset-pill">v2.0.0</span>
+      <span className="cxset-pill">v{APP_VERSION}</span>
     </div>
   );
 

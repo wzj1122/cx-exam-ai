@@ -36,7 +36,7 @@ export const DEFAULT_CONFIG: AppConfig = {
 };
 
 export const APP_NAME = 'CX 考试 AI 大脑';
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '2.0.1';
 export const GREASYFORK_ID = 605687;
 export const SETTINGS_URL = 'https://cx-exam-ai-app.pages.dev/settings';
 export const LEGACY_SYNC_API = 'https://cx-exam-ai.pages.dev/api/sync';

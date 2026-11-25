@@ -1,7 +1,7 @@
 # CX 考试 AI v2 · 维护手册（MAINTENANCE）
 
 > 本文件是本软件唯一的维护入口文档。任何修改前必读，修改完成后必须同步更新。
-> 最后更新：2026-11-25 ｜ 当前版本：2.0.0
+> 最后更新：2026-11-25 ｜ 当前版本：2.0.1
 
 ## 一、软件简介
 
@@ -75,5 +75,5 @@ cx-exam-ai-v2/
 
 | 日期 | 版本 | 改动摘要 | 涉及文件 |
 |---|---|---|---|
-| 2026-11-25 | 2.0.0 | 设置中心改为第一代网页版浅色版式：顶栏（logo / 存储状态 / 模型数 / 生成同步码 / 高级设置 / 保存 / 版本）+ 左侧「配置分类」+ 主卡片 + 三步向导 + 9 个预设卡片；「再加一个」只选预设、填 Key 后才落库，不再生成空 Key 模型；判题强度按当前配置反推并支持点击切换 | `packages/ui/src/components/SettingsPanel.tsx` `packages/ui/src/styles/workbench.css` `packages/ui/src/state/settings-app.tsx` `tests/smoke-extension.mjs` |
+| 2026-11-25 | 2.0.1 | 设置中心改为第一代网页版浅色版式：顶栏（logo / 存储状态 / 模型数 / 生成同步码 / 高级设置 / 保存 / 版本）+ 左侧「配置分类」+ 主卡片 + 三步向导 + 9 个预设卡片；「再加一个」只选预设、填 Key 后才落库，不再生成空 Key 模型；判题强度按当前配置反推并支持点击切换；版本号统一升到 2.0.1（扩展 zip 与油猴脚本可收到更新） | `packages/ui/src/components/SettingsPanel.tsx` `packages/ui/src/styles/workbench.css` `packages/ui/src/state/settings-app.tsx` `tests/smoke-extension.mjs` `apps/extension/manifest.json` `apps/userscript/vite.config.ts` |
 | 2026-11-25 | 2.0.0 | 初始化 v2 + 第一代浅色紧凑卡片 UI（34px 球 / 404px 卡片）；共享核心、双外壳、选项三元组、分层快答、半自动填写、云同步、随机选项/多选/重绘/文本题回归；真机适配 `addChoice` 内层 span、全局 `#type`、单题总题量/当前题号、`#timer`、UEditor 填空/简答；全题号网格、悬浮球单击/长按/双击状态机、网页版设置中心；打开页自动跳到最前未答题并预取缓存（不自动点击） | 全仓库 |

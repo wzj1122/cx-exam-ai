@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CX 考试 AI 大脑 v2",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "考试专用 AI 答题助手：答案表复核、半自动填写、随机选项防点错。",
   "permissions": ["storage", "scripting", "tabs"],
   "host_permissions": [

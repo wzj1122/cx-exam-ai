@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const dist = resolve(root, 'apps/extension/dist');
 const release = resolve(root, 'release');
-const zip = resolve(release, 'cx-exam-ai-extension-v2.0.0.zip');
+const zip = resolve(release, 'cx-exam-ai-extension-v2.0.1.zip');
 
 await mkdir(release, { recursive: true });
 await rm(zip, { force: true });

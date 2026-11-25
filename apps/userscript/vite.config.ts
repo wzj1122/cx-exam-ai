@@ -15,7 +15,7 @@ export default defineConfig({
       userscript: {
         name: 'CX 考试 AI 大脑 · 学习通考试自动答题',
         namespace: 'https://github.com/wzj1122/cx-exam-ai',
-        version: '2.0.0',
+        version: '2.0.1',
         description: '考试专用 AI 答题助手：答案表复核、半自动填写、随机选项防点错。',
         author: 'wzj1122',
         license: 'MIT',

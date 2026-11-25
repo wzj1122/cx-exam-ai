@@ -1,13 +1,13 @@
 # CX 考试 AI 大脑 v2
 
-考试专用、共享核心、双外壳的 AI 答题助手。当前仓库从 `2.0.0` 起，只支持超星学习通考试页；旧版已归档为 `cx-exam-ai-legacy`。
+考试专用、共享核心、双外壳的 AI 答题助手。当前仓库从 `2.0.0` 起（最新 `2.0.1`），只支持超星学习通考试页；旧版已归档为 `cx-exam-ai-legacy`。
 
 ## 在线地址
 
 - 设置中心：<https://cx-exam-ai-app.pages.dev/settings>
 - 油猴脚本：<https://cx-exam-ai-app.pages.dev/dist/cx-exam-ai.user.js>
-- 扩展 zip：<https://cx-exam-ai-app.pages.dev/dist/cx-exam-ai-extension-v2.0.0.zip>
-- 扩展 Release：<https://github.com/wzj1122/cx-exam-ai/releases/tag/v2.0.0>
+- 扩展 zip：<https://cx-exam-ai-app.pages.dev/dist/cx-exam-ai-extension-v2.0.1.zip>
+- 扩展 Release：<https://github.com/wzj1122/cx-exam-ai/releases/tag/v2.0.1>
 
 ## 形态
 
@@ -31,7 +31,7 @@
 - 随机选项下 `displayLabel ≠ serverKey` 的抓题与落盘；关键回归用例已锁死。
 - 整卷预览 / 单题翻页两种考试形态；整卷答案表、单题逐题确认。
 - React 工作台（扩展/油猴共用的页面内紧凑卡片）、扩展选项页。
-- 网页版设置中心：`https://cx-exam-ai-app.pages.dev/settings`，卡片右上角 ⚙ 直接打开。
+- 网页版设置中心（第一代网页版浅色版式：顶栏 + 左侧配置分类 + 主卡片 + 三步向导 + 9 个预设卡片）：`https://cx-exam-ai-app.pages.dev/settings`，卡片右上角 ⚙ 直接打开。
 - OpenAI 兼容 / Anthropic / Gemini 三种模型协议；fast / verify / vision 角色。
 - 批量快答、按需复核、单题超时与失败拆批。
 - 本地配置、JSON 导入导出、AES-GCM 云同步、旧版同步码迁移。
@@ -75,7 +75,7 @@ npm run smoke:extension
 - `apps/extension/dist/`：Chrome 扩展目录（开发者模式加载）。
 - `apps/userscript/dist/cx-exam-ai.user.js`：篡改猴单文件脚本。
 - `.site/`：设置中心与 landing page 的 Pages 发布目录。
-- `release/cx-exam-ai-extension-v2.0.0.zip`：`npm run package:extension` 生成。
+- `release/cx-exam-ai-extension-v2.0.1.zip`：`npm run package:extension` 生成。
 
 ## 配置
 
@@ -86,7 +86,7 @@ npm run smoke:extension
 ## 发布
 
 - 扩展：GitHub Release zip，开发者模式加载；不上 Chrome Web Store。
-- 油猴：Greasy Fork `605687`，脚本名保持不变，版本升到 `2.0.0`。
+- 油猴：Greasy Fork `605687`，脚本名保持不变，版本升到 `2.0.1`。
 - 站点：Cloudflare Pages `cx-exam-ai-app.pages.dev`，KV 绑定 `CFG_KV`。
 
 发布前请在 GitHub/Cloudflare 侧完成仓库改名、新建 Pages 项目与 KV 绑定；本仓库只准备代码和命令，不自动操作外部发布。
