@@ -59,7 +59,7 @@ try {
 
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/src/options/index.html`);
-  await options.waitForSelector('.cxai-settings', { timeout: 8000 });
+  await options.waitForSelector('.cxset-root', { timeout: 8000 });
   await options.evaluate(() =>
     chrome.storage.local.set({
       'cx-exam-ai:v2:config': {

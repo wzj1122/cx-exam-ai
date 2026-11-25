@@ -146,10 +146,7 @@ export function SettingsApp({ configStore, syncClient, transport }: SettingsAppP
   if (!loaded) return <div className="cxai-root" style={{ padding: 24 }}>正在加载配置…</div>;
 
   return (
-    <div
-      className="cxai-root"
-      style={{ height: '100vh', display: 'flex', justifyContent: 'center', padding: '24px 16px', boxSizing: 'border-box' }}
-    >
+    <div className="cxai-root cxai-settings-page">
       <SettingsPanel
         config={config}
         syncStatus={status}
